@@ -65,7 +65,8 @@ export default function AnalysisPage() {
           engine,
           (ply, total) => {
             setProgress(Math.round((ply / total) * 100));
-          }
+          },
+          gameData.playerColor,
         );
 
         engine.quit();

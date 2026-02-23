@@ -4,6 +4,7 @@ import { PlayerProfile } from "@/lib/types";
 
 interface PlayerCardProps {
   profile: PlayerProfile;
+  filteredGames?: number;
 }
 
 function StyleBar({ label, value }: { label: string; value: number }) {
@@ -42,7 +43,8 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
   );
 }
 
-export default function PlayerCard({ profile }: PlayerCardProps) {
+export default function PlayerCard({ profile, filteredGames }: PlayerCardProps) {
+  const displayGames = filteredGames ?? profile.analyzedGames;
   const ratings = Object.entries(profile.ratings)
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => ({ label: k, value: v as number }));
@@ -53,8 +55,8 @@ export default function PlayerCard({ profile }: PlayerCardProps) {
         <div>
           <h2 className="text-2xl font-bold text-white">{profile.username}</h2>
           <p className="text-sm text-zinc-400 mt-1">
-            {profile.analyzedGames.toLocaleString()} standard games analyzed
-            {profile.totalGames !== profile.analyzedGames && (
+            {displayGames.toLocaleString()} standard games analyzed
+            {profile.totalGames !== displayGames && (
               <span className="text-zinc-500">
                 {" "}(of {profile.totalGames.toLocaleString()} total)
               </span>

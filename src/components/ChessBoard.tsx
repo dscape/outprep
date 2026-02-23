@@ -32,7 +32,10 @@ export default function ChessBoard({
   fideEstimate,
   onGameEnd,
 }: ChessBoardProps) {
-  const [game, setGame] = useState(new Chess());
+  // Use a ref for the Chess instance so move history is preserved across renders.
+  // A separate FEN state triggers re-renders for the board display.
+  const gameRef = useRef(new Chess());
+  const [fen, setFen] = useState(gameRef.current.fen());
   const [inBook, setInBook] = useState(true);
   const [engineReady, setEngineReady] = useState(false);
   const [thinking, setThinking] = useState(false);
@@ -77,6 +80,7 @@ export default function ChessBoard({
 
   // Check if it's bot's turn and make a move
   const makeBotMove = useCallback(async () => {
+    const game = gameRef.current;
     if (gameEndedRef.current) return;
     if (game.isGameOver()) return;
 
@@ -118,7 +122,7 @@ export default function ChessBoard({
           });
 
           if (move) {
-            setGame(new Chess(game.fen()));
+            setFen(game.fen());
             setThinking(false);
             checkGameEnd(game);
             return;
@@ -144,7 +148,7 @@ export default function ChessBoard({
 
         const move = game.move({ from, to, promotion });
         if (move) {
-          setGame(new Chess(game.fen()));
+          setFen(game.fen());
           checkGameEnd(game);
         }
       }
@@ -154,7 +158,6 @@ export default function ChessBoard({
       setThinking(false);
     }
   }, [
-    game,
     playerColor,
     openingBook,
     inBook,
@@ -167,6 +170,7 @@ export default function ChessBoard({
   useEffect(() => {
     if (!engineReady) return;
 
+    const game = gameRef.current;
     const isPlayerTurn =
       (playerColor === "white" && game.turn() === "w") ||
       (playerColor === "black" && game.turn() === "b");
@@ -175,7 +179,7 @@ export default function ChessBoard({
       const timeout = setTimeout(makeBotMove, 500);
       return () => clearTimeout(timeout);
     }
-  }, [game, playerColor, engineReady, makeBotMove]);
+  }, [fen, playerColor, engineReady, makeBotMove]);
 
   function onDrop({
     sourceSquare,
@@ -185,6 +189,7 @@ export default function ChessBoard({
     sourceSquare: string;
     targetSquare: string | null;
   }): boolean {
+    const game = gameRef.current;
     if (gameEndedRef.current) return false;
     if (!targetSquare) return false;
 
@@ -203,7 +208,7 @@ export default function ChessBoard({
 
       if (!move) return false;
 
-      setGame(new Chess(game.fen()));
+      setFen(game.fen());
       checkGameEnd(game);
       return true;
     } catch {
@@ -215,7 +220,7 @@ export default function ChessBoard({
     if (gameEndedRef.current) return;
     gameEndedRef.current = true;
     const result = playerColor === "white" ? "0-1" : "1-0";
-    onGameEnd(game.pgn(), result);
+    onGameEnd(gameRef.current.pgn(), result);
   }
 
   return (
@@ -247,7 +252,7 @@ export default function ChessBoard({
       <div className="w-full max-w-[min(90vw,560px)] aspect-square">
         <Chessboard
           options={{
-            position: game.fen(),
+            position: fen,
             onPieceDrop: onDrop,
             boardOrientation: playerColor,
             boardStyle: {

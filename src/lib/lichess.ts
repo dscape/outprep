@@ -18,6 +18,7 @@ export async function fetchLichessGames(
 ): Promise<LichessGame[]> {
   const params = new URLSearchParams({
     max: String(max),
+    rated: "true",
     pgnInJson: "true",
     clocks: "true",
     evals: "true",

@@ -3,6 +3,7 @@ import {
   LichessUser,
   LichessGame,
   PlayerProfile,
+  SpeedProfile,
   StyleMetrics,
   Weakness,
   OpeningStats,
@@ -20,15 +21,36 @@ export function buildProfile(
 
   const ratings = extractRatings(user);
   const fideEstimate = estimateFIDE(user);
-  const style = analyzeStyle(games, user.username);
-  const openings = analyzeOpenings(games, user.username);
-  const weaknesses = detectWeaknesses(games, user.username, style, openings, analyzedGames);
+  // Aggregate analysis (all speeds combined)
+  const style = analyzeStyle(standardGames, user.username);
+  const openings = analyzeOpenings(standardGames, user.username);
+  const weaknesses = detectWeaknesses(standardGames, user.username, style, openings, analyzedGames);
   const prepTips = generatePrepTips(weaknesses, openings, style);
+
+  // Per-speed breakdowns
+  const bySpeed: Record<string, SpeedProfile> = {};
+  const speedGroups = new Map<string, LichessGame[]>();
+  for (const g of standardGames) {
+    const arr = speedGroups.get(g.speed) || [];
+    arr.push(g);
+    speedGroups.set(g.speed, arr);
+  }
+  for (const [speed, speedGames] of speedGroups) {
+    const speedStyle = analyzeStyle(speedGames, user.username);
+    const speedOpenings = analyzeOpenings(speedGames, user.username);
+    const speedWeaknesses = detectWeaknesses(speedGames, user.username, speedStyle, speedOpenings, speedGames.length);
+    bySpeed[speed] = {
+      games: speedGames.length,
+      style: speedStyle,
+      openings: speedOpenings,
+      weaknesses: speedWeaknesses,
+    };
+  }
 
   return {
     username: user.username,
     platform: "lichess",
-    totalGames: user.count?.all ?? games.length,
+    totalGames: user.count?.rated ?? user.count?.all ?? games.length,
     analyzedGames,
     ratings,
     fideEstimate,
@@ -36,6 +58,7 @@ export function buildProfile(
     weaknesses,
     openings,
     prepTips,
+    bySpeed,
     lastComputed: Date.now(),
   };
 }
@@ -49,7 +72,7 @@ function extractRatings(user: LichessUser): PlayerRatings {
   return ratings;
 }
 
-function analyzeStyle(games: LichessGame[], username: string): StyleMetrics {
+export function analyzeStyle(games: LichessGame[], username: string): StyleMetrics {
   let aggression = 50;
   let tactical = 50;
   let positional = 50;
@@ -182,24 +205,33 @@ function countMaterial(chess: Chess): { white: number; black: number } {
   return { white, black };
 }
 
-function analyzeOpenings(
+interface OpeningAccumulator {
+  ecoMap: Map<string, number>;
+  name: string;
+  wins: number;
+  draws: number;
+  losses: number;
+  total: number;
+}
+
+export function analyzeOpenings(
   games: LichessGame[],
   username: string
 ): { white: OpeningStats[]; black: OpeningStats[] } {
-  const whiteMap = new Map<string, { eco: string; name: string; wins: number; draws: number; losses: number; total: number }>();
-  const blackMap = new Map<string, { eco: string; name: string; wins: number; draws: number; losses: number; total: number }>();
+  const whiteMap = new Map<string, OpeningAccumulator>();
+  const blackMap = new Map<string, OpeningAccumulator>();
 
   for (const game of games) {
     if (!game.opening || game.variant !== "standard") continue;
 
     const isWhite = game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
     const map = isWhite ? whiteMap : blackMap;
-    const key = game.opening.name;
+    const key = openingFamily(game.opening.name);
 
     if (!map.has(key)) {
       map.set(key, {
-        eco: game.opening.eco,
-        name: game.opening.name,
+        ecoMap: new Map<string, number>(),
+        name: key,
         wins: 0,
         draws: 0,
         losses: 0,
@@ -209,6 +241,7 @@ function analyzeOpenings(
 
     const entry = map.get(key)!;
     entry.total++;
+    entry.ecoMap.set(game.opening.eco, (entry.ecoMap.get(game.opening.eco) || 0) + 1);
 
     if (!game.winner) {
       entry.draws++;
@@ -219,21 +252,32 @@ function analyzeOpenings(
     }
   }
 
-  const toStats = (map: Map<string, { eco: string; name: string; wins: number; draws: number; losses: number; total: number }>): OpeningStats[] => {
+  const toStats = (map: Map<string, OpeningAccumulator>): OpeningStats[] => {
     const totalGames = Array.from(map.values()).reduce((sum, e) => sum + e.total, 0);
     return Array.from(map.values())
       .filter((e) => e.total >= 2)
       .sort((a, b) => b.total - a.total)
       .slice(0, 15)
-      .map((e) => ({
-        eco: e.eco,
-        name: e.name,
-        games: e.total,
-        pct: totalGames > 0 ? Math.round((e.total / totalGames) * 100) : 0,
-        winRate: Math.round((e.wins / e.total) * 100),
-        drawRate: Math.round((e.draws / e.total) * 100),
-        lossRate: Math.round((e.losses / e.total) * 100),
-      }));
+      .map((e) => {
+        // Resolve to the most frequent ECO code in the group
+        let bestEco = "";
+        let bestCount = 0;
+        for (const [eco, count] of e.ecoMap) {
+          if (count > bestCount) {
+            bestEco = eco;
+            bestCount = count;
+          }
+        }
+        return {
+          eco: bestEco,
+          name: e.name,
+          games: e.total,
+          pct: totalGames > 0 ? Math.round((e.total / totalGames) * 100) : 0,
+          winRate: Math.round((e.wins / e.total) * 100),
+          drawRate: Math.round((e.draws / e.total) * 100),
+          lossRate: Math.round((e.losses / e.total) * 100),
+        };
+      });
   };
 
   return {
@@ -242,7 +286,14 @@ function analyzeOpenings(
   };
 }
 
-function detectWeaknesses(
+/** Extract opening family name (before first colon).
+ *  e.g. "Italian Game: Giuoco Piano" → "Italian Game" */
+function openingFamily(name: string): string {
+  const idx = name.indexOf(":");
+  return idx > 0 ? name.substring(0, idx).trim() : name.trim();
+}
+
+export function detectWeaknesses(
   games: LichessGame[],
   username: string,
   style: StyleMetrics,

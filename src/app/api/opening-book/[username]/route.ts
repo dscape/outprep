@@ -11,7 +11,9 @@ export async function GET(
   { params }: { params: Promise<{ username: string }> }
 ) {
   const { username } = await params;
-  const cacheKey = `book:${username.toLowerCase()}`;
+  const speedsParam = _request.nextUrl.searchParams.get("speeds");
+  const speeds = speedsParam ? speedsParam.split(",").filter(Boolean) : [];
+  const cacheKey = `book:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}`;
 
   try {
     const cachedEntry = cache.get(cacheKey);
@@ -25,8 +27,12 @@ export async function GET(
       });
     }
 
-    const games = await fetchLichessGames(username, 200);
-    const book = generateOpeningBook(games, username);
+    const games = await fetchLichessGames(username, 500);
+    let filtered = games.filter((g) => g.variant === "standard");
+    if (speeds.length > 0) {
+      filtered = filtered.filter((g) => speeds.includes(g.speed));
+    }
+    const book = generateOpeningBook(filtered, username);
 
     cache.set(cacheKey, { data: book, expires: Date.now() + TTL });
 

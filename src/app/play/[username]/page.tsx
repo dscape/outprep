@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 import { PlayerProfile } from "@/lib/types";
 import ChessBoard from "@/components/ChessBoard";
@@ -9,7 +9,9 @@ import ChessBoard from "@/components/ChessBoard";
 export default function PlayPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const username = params.username as string;
+  const speeds = searchParams.get("speeds") || "";
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [openingBook, setOpeningBook] = useState<Uint8Array | null>(null);
@@ -21,9 +23,10 @@ export default function PlayPage() {
     async function load() {
       try {
         // Fetch profile and opening book in parallel
+        const bookQuery = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
         const [profileRes, bookRes] = await Promise.all([
           fetch(`/api/profile/${encodeURIComponent(username)}`),
-          fetch(`/api/opening-book/${encodeURIComponent(username)}`),
+          fetch(`/api/opening-book/${encodeURIComponent(username)}${bookQuery}`),
         ]);
 
         if (!profileRes.ok) {

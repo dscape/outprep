@@ -7,20 +7,65 @@ interface TimeControlData {
   provisional: boolean;
 }
 
-const COEFFICIENTS: Record<string, { slope: number; intercept: number; weight: number }> = {
-  bullet: { slope: 0.80, intercept: 20, weight: 1 },
-  blitz: { slope: 0.83, intercept: -52, weight: 1 },
-  rapid: { slope: 0.85, intercept: 12, weight: 2 },
-  classical: { slope: 0.87, intercept: 45, weight: 2 },
+// Lichess-to-FIDE conversion table based on ChessGoals community survey data.
+// Linear interpolation between anchor points. Captures the nonlinear relationship:
+// Lichess is deflated at lower levels and slightly inflated at higher levels.
+const CONVERSION_TABLE: { lichess: number; fide: number }[] = [
+  { lichess: 600,  fide: 750 },
+  { lichess: 800,  fide: 1000 },
+  { lichess: 1000, fide: 1250 },
+  { lichess: 1200, fide: 1420 },
+  { lichess: 1500, fide: 1575 },
+  { lichess: 1800, fide: 1750 },
+  { lichess: 2000, fide: 1900 },
+  { lichess: 2200, fide: 2100 },
+  { lichess: 2500, fide: 2400 },
+];
+
+// Time control config: offsets and weights for FIDE estimation.
+// Bullet excluded — too unreliable for predicting OTB strength.
+// Rapid/classical weighted higher as they're closest to OTB conditions.
+const TC_CONFIG: Record<string, { offset: number; weight: number }> = {
+  blitz:     { offset: 0,   weight: 1.5 },
+  rapid:     { offset: 30,  weight: 2.5 },
+  classical: { offset: 50,  weight: 3 },
 };
 
 const MIN_GAMES = 20;
+
+/** Convert a Lichess rating to estimated FIDE via table interpolation */
+function lichessToFide(lichessRating: number): number {
+  const table = CONVERSION_TABLE;
+
+  // Clamp below minimum
+  if (lichessRating <= table[0].lichess) {
+    return table[0].fide;
+  }
+
+  // Clamp above maximum
+  if (lichessRating >= table[table.length - 1].lichess) {
+    return table[table.length - 1].fide;
+  }
+
+  // Find bracketing points and linearly interpolate
+  for (let i = 0; i < table.length - 1; i++) {
+    const lo = table[i];
+    const hi = table[i + 1];
+    if (lichessRating >= lo.lichess && lichessRating <= hi.lichess) {
+      const t = (lichessRating - lo.lichess) / (hi.lichess - lo.lichess);
+      return Math.round(lo.fide + t * (hi.fide - lo.fide));
+    }
+  }
+
+  // Fallback (should not reach here)
+  return lichessRating;
+}
 
 export function estimateFIDE(user: LichessUser): FIDEEstimate {
   const timeControls: Record<string, TimeControlData> = {};
 
   for (const [tc, perf] of Object.entries(user.perfs || {})) {
-    if (COEFFICIENTS[tc] && perf) {
+    if (TC_CONFIG[tc] && perf) {
       timeControls[tc] = {
         rating: perf.rating,
         games: perf.games,
@@ -35,17 +80,15 @@ export function estimateFIDE(user: LichessUser): FIDEEstimate {
   let totalGames = 0;
   let avgRD = 0;
   let rdCount = 0;
-  let maxLichessRating = 0;
 
   for (const [tc, data] of Object.entries(timeControls)) {
     if (data.provisional || data.games < MIN_GAMES) continue;
 
-    if (data.rating > maxLichessRating) maxLichessRating = data.rating;
-
-    const coeff = COEFFICIENTS[tc];
-    const estimated = coeff.slope * data.rating + coeff.intercept;
+    const config = TC_CONFIG[tc];
+    const baseFide = lichessToFide(data.rating);
+    const estimated = baseFide + config.offset;
     const gameWeight = Math.min(data.games / 100, 1);
-    const weight = coeff.weight * gameWeight;
+    const weight = config.weight * gameWeight;
 
     weightedSum += estimated * weight;
     totalWeight += weight;
@@ -57,12 +100,11 @@ export function estimateFIDE(user: LichessUser): FIDEEstimate {
   if (totalWeight === 0) {
     // Fallback: use any available rating even if provisional
     for (const [tc, data] of Object.entries(timeControls)) {
-      if (data.rating > maxLichessRating) maxLichessRating = data.rating;
-
-      const coeff = COEFFICIENTS[tc];
-      const estimated = coeff.slope * data.rating + coeff.intercept;
+      const config = TC_CONFIG[tc];
+      const baseFide = lichessToFide(data.rating);
+      const estimated = baseFide + config.offset;
       const gameWeight = Math.min(data.games / 100, 1);
-      const weight = coeff.weight * gameWeight;
+      const weight = config.weight * gameWeight;
       weightedSum += estimated * weight;
       totalWeight += weight;
       totalGames += data.games;
@@ -75,12 +117,7 @@ export function estimateFIDE(user: LichessUser): FIDEEstimate {
     return { rating: 1200, confidence: 0 };
   }
 
-  // Floor: never estimate more than 100 below the strongest qualifying Lichess rating
-  // This prevents single-TC intercept bias (e.g. blitz intercept -52 dragging estimate too low)
-  const rawRating = Math.round(weightedSum / totalWeight);
-  const rating = maxLichessRating > 0
-    ? Math.max(rawRating, maxLichessRating - 100)
-    : rawRating;
+  const rating = Math.round(weightedSum / totalWeight);
   avgRD = rdCount > 0 ? avgRD / rdCount : 150;
 
   // Confidence based on games played and rating deviation

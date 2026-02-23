@@ -30,7 +30,7 @@ export async function GET(
 
     const [user, games] = await Promise.all([
       fetchLichessUser(username),
-      fetchLichessGames(username, 200),
+      fetchLichessGames(username, 500),
     ]);
 
     const profile = buildProfile(user, games);

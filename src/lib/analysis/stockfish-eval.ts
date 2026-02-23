@@ -11,6 +11,7 @@ export async function evaluateGame(
   pgn: string,
   engine: StockfishEngine,
   onProgress?: (ply: number, total: number) => void,
+  playerColor?: "white" | "black",
 ): Promise<{ moves: MoveEval[]; summary: AnalysisSummary }> {
   const chess = new Chess();
   chess.loadPgn(pgn);
@@ -31,22 +32,38 @@ export async function evaluateGame(
     const fen = chess.fen();
     const isWhiteTurn = chess.turn() === "w";
 
-    // Evaluate position before the move
-    const result = await engine.evaluate(fen, ANALYSIS_DEPTH);
-    const evalFromWhite = result.eval;
+    // Evaluate position before the move (from white's perspective)
+    const beforeResult = await engine.evaluate(fen, ANALYSIS_DEPTH);
+    const evalBeforeWhite = beforeResult.eval;
+
+    // Convert best move from UCI to SAN for display
+    let bestMoveSan = beforeResult.bestMove;
+    try {
+      const tempChess = new Chess(fen);
+      const from = beforeResult.bestMove.substring(0, 2);
+      const to = beforeResult.bestMove.substring(2, 4);
+      const promo = beforeResult.bestMove.length > 4 ? beforeResult.bestMove[4] : undefined;
+      const bestMoveObj = tempChess.move({ from, to, promotion: promo as "q" | "r" | "b" | "n" | undefined });
+      if (bestMoveObj) bestMoveSan = bestMoveObj.san;
+    } catch {
+      // Keep UCI notation as fallback
+    }
 
     // Make the move
     const move = chess.move(history[i]);
     if (!move) break;
 
-    // Evaluate position after the move
+    // Evaluate position after the move (from white's perspective)
+    // IMPORTANT: After the move, it's the OTHER side's turn. Stockfish evaluates
+    // from the perspective of the side to move, so we negate to get white's perspective.
     const afterResult = await engine.evaluate(chess.fen(), ANALYSIS_DEPTH);
-    const afterEval = afterResult.eval;
+    const evalAfterWhite = -afterResult.eval;
 
-    // Calculate eval delta (from the moving side's perspective)
-    const evalBefore = isWhiteTurn ? evalFromWhite : -evalFromWhite;
-    const evalAfter = isWhiteTurn ? afterEval : -afterEval;
-    const evalDelta = evalBefore - evalAfter;
+    // Calculate eval delta FROM THE MOVING SIDE'S PERSPECTIVE
+    // Positive delta = the move made things worse for the mover
+    const evalBeforeForMover = isWhiteTurn ? evalBeforeWhite : -evalBeforeWhite;
+    const evalAfterForMover = isWhiteTurn ? evalAfterWhite : -evalAfterWhite;
+    const evalDelta = evalBeforeForMover - evalAfterForMover;
 
     // Classify the move
     let classification: MoveEval["classification"] = "normal";
@@ -65,8 +82,10 @@ export async function evaluateGame(
     moves.push({
       ply: i + 1,
       san: history[i],
-      eval: evalFromWhite,
-      bestMove: result.bestMove,
+      fen,
+      eval: evalBeforeWhite,
+      bestMove: beforeResult.bestMove,
+      bestMoveSan,
       evalDelta,
       classification,
     });
@@ -74,12 +93,16 @@ export async function evaluateGame(
     onProgress?.(i + 1, history.length);
   }
 
-  const summary = computeSummary(moves);
+  const summary = computeSummary(moves, playerColor);
 
   return { moves, summary };
 }
 
-function computeSummary(moves: MoveEval[]): AnalysisSummary {
+/**
+ * Compute summary stats for the PLAYER only (not both sides).
+ * Odd plies (1, 3, 5...) are white's moves; even plies (2, 4, 6...) are black's.
+ */
+function computeSummary(moves: MoveEval[], playerColor?: "white" | "black"): AnalysisSummary {
   let totalCPL = 0;
   let blunders = 0;
   let mistakes = 0;
@@ -87,6 +110,15 @@ function computeSummary(moves: MoveEval[]): AnalysisSummary {
   let moveCount = 0;
 
   for (const move of moves) {
+    // Only count the player's own moves for summary stats
+    if (playerColor) {
+      const isWhiteMove = move.ply % 2 === 1;
+      const isPlayerMove =
+        (playerColor === "white" && isWhiteMove) ||
+        (playerColor === "black" && !isWhiteMove);
+      if (!isPlayerMove) continue;
+    }
+
     if (move.evalDelta > 0) {
       totalCPL += move.evalDelta;
     }

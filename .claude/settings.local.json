@@ -6,7 +6,13 @@
       "Bash(npm install:*)",
       "Bash(npm search:*)",
       "Bash(npm run build:*)",
-      "WebFetch(domain:lichess.org)"
+      "WebFetch(domain:lichess.org)",
+      "Bash(lsof:*)",
+      "Bash(xargs:*)",
+      "WebFetch(domain:chessgoals.com)",
+      "WebFetch(domain:mathtuition88.com)",
+      "WebFetch(domain:www.chessmonitor.com)",
+      "Bash(git diff:*)"
     ]
   }
 }

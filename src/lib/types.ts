@@ -49,6 +49,13 @@ export interface FIDEEstimate {
   confidence: number;
 }
 
+export interface SpeedProfile {
+  games: number;
+  style: StyleMetrics;
+  openings: { white: OpeningStats[]; black: OpeningStats[] };
+  weaknesses: Weakness[];
+}
+
 export interface PlayerProfile {
   username: string;
   platform: "lichess";
@@ -63,6 +70,7 @@ export interface PlayerProfile {
     black: OpeningStats[];
   };
   prepTips: PrepTip[];
+  bySpeed: Record<string, SpeedProfile>;
   lastComputed: number;
 }
 
@@ -102,8 +110,10 @@ export interface LichessGame {
 export interface MoveEval {
   ply: number;
   san: string;
+  fen: string; // position BEFORE this move was played
   eval: number;
   bestMove: string;
+  bestMoveSan: string;
   evalDelta: number;
   classification: "great" | "good" | "inaccuracy" | "mistake" | "blunder" | "normal";
 }
@@ -124,6 +134,26 @@ export interface KeyMoment {
   tag: MomentTag;
   eval: number;
   evalDelta: number;
+}
+
+export interface OTBGame {
+  white: string;
+  black: string;
+  result: string; // "1-0" | "0-1" | "1/2-1/2"
+  date?: string;
+  event?: string;
+  eco?: string;
+  opening?: string;
+  moves: string; // space-separated SAN
+  pgn: string; // raw PGN text
+}
+
+export interface OTBProfile {
+  games: OTBGame[];
+  totalGames: number;
+  style: StyleMetrics;
+  openings: { white: OpeningStats[]; black: OpeningStats[] };
+  weaknesses: Weakness[];
 }
 
 export interface GameAnalysis {
