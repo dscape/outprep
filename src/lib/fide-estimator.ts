@@ -14,7 +14,7 @@ const COEFFICIENTS: Record<string, { slope: number; intercept: number; weight: n
   classical: { slope: 0.87, intercept: 45, weight: 2 },
 };
 
-const MIN_GAMES = 50;
+const MIN_GAMES = 20;
 
 export function estimateFIDE(user: LichessUser): FIDEEstimate {
   const timeControls: Record<string, TimeControlData> = {};
@@ -35,9 +35,12 @@ export function estimateFIDE(user: LichessUser): FIDEEstimate {
   let totalGames = 0;
   let avgRD = 0;
   let rdCount = 0;
+  let maxLichessRating = 0;
 
   for (const [tc, data] of Object.entries(timeControls)) {
     if (data.provisional || data.games < MIN_GAMES) continue;
+
+    if (data.rating > maxLichessRating) maxLichessRating = data.rating;
 
     const coeff = COEFFICIENTS[tc];
     const estimated = coeff.slope * data.rating + coeff.intercept;
@@ -54,10 +57,14 @@ export function estimateFIDE(user: LichessUser): FIDEEstimate {
   if (totalWeight === 0) {
     // Fallback: use any available rating even if provisional
     for (const [tc, data] of Object.entries(timeControls)) {
+      if (data.rating > maxLichessRating) maxLichessRating = data.rating;
+
       const coeff = COEFFICIENTS[tc];
       const estimated = coeff.slope * data.rating + coeff.intercept;
-      weightedSum += estimated * coeff.weight;
-      totalWeight += coeff.weight;
+      const gameWeight = Math.min(data.games / 100, 1);
+      const weight = coeff.weight * gameWeight;
+      weightedSum += estimated * weight;
+      totalWeight += weight;
       totalGames += data.games;
       avgRD += data.rd;
       rdCount++;
@@ -68,7 +75,12 @@ export function estimateFIDE(user: LichessUser): FIDEEstimate {
     return { rating: 1200, confidence: 0 };
   }
 
-  const rating = Math.round(weightedSum / totalWeight);
+  // Floor: never estimate more than 100 below the strongest qualifying Lichess rating
+  // This prevents single-TC intercept bias (e.g. blitz intercept -52 dragging estimate too low)
+  const rawRating = Math.round(weightedSum / totalWeight);
+  const rating = maxLichessRating > 0
+    ? Math.max(rawRating, maxLichessRating - 100)
+    : rawRating;
   avgRD = rdCount > 0 ? avgRD / rdCount : 150;
 
   // Confidence based on games played and rating deviation

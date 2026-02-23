@@ -53,7 +53,12 @@ export default function PlayerCard({ profile }: PlayerCardProps) {
         <div>
           <h2 className="text-2xl font-bold text-white">{profile.username}</h2>
           <p className="text-sm text-zinc-400 mt-1">
-            {profile.totalGames.toLocaleString()} games on Lichess
+            {profile.analyzedGames.toLocaleString()} standard games analyzed
+            {profile.totalGames !== profile.analyzedGames && (
+              <span className="text-zinc-500">
+                {" "}(of {profile.totalGames.toLocaleString()} total)
+              </span>
+            )}
           </p>
         </div>
         <div className="text-right">
@@ -82,9 +87,16 @@ export default function PlayerCard({ profile }: PlayerCardProps) {
       )}
 
       <div className="mt-6 space-y-3">
-        <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide">
-          Playing Style
-        </h3>
+        <div className="flex items-baseline justify-between">
+          <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide">
+            Playing Style
+          </h3>
+          {profile.style.sampleSize < 30 && (
+            <span className="text-xs text-zinc-500">
+              Based on {profile.style.sampleSize} games — estimates may shift with more data
+            </span>
+          )}
+        </div>
         <StyleBar label="Aggression" value={profile.style.aggression} />
         <StyleBar label="Tactical" value={profile.style.tactical} />
         <StyleBar label="Positional" value={profile.style.positional} />

@@ -43,6 +43,11 @@ export default function WeaknessesTab({ weaknesses }: WeaknessesTabProps) {
               <div className="flex items-center gap-2 mb-1">
                 <h4 className="font-medium text-white">{w.area}</h4>
                 <SeverityBadge severity={w.severity} />
+                {w.confidence === "low" && (
+                  <span className="inline-block rounded-full border border-zinc-600/50 bg-zinc-700/30 px-2 py-0.5 text-xs text-zinc-500">
+                    low data
+                  </span>
+                )}
               </div>
               <p className="text-sm text-zinc-400 leading-relaxed">
                 {w.description}

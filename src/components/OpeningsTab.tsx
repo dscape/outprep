@@ -63,7 +63,7 @@ export default function OpeningsTab({ white, black }: OpeningsTabProps) {
             </thead>
             <tbody>
               {openings.map((op) => (
-                <tr key={op.eco} className="border-b border-zinc-800 text-zinc-300">
+                <tr key={`${op.eco}-${op.name}`} className="border-b border-zinc-800 text-zinc-300">
                   <td className="py-2 pr-4 font-mono text-green-400">{op.eco}</td>
                   <td className="py-2 pr-4 max-w-[200px] truncate">{op.name}</td>
                   <td className="py-2 pr-4 text-right font-mono">{op.games}</td>

@@ -18,6 +18,7 @@ export interface StyleMetrics {
   tactical: number;
   positional: number;
   endgame: number;
+  sampleSize: number;
 }
 
 export interface Weakness {
@@ -25,6 +26,7 @@ export interface Weakness {
   severity: "critical" | "moderate" | "minor";
   description: string;
   stat: string;
+  confidence?: "low" | "medium" | "high";
 }
 
 export interface OpeningStats {
@@ -51,6 +53,7 @@ export interface PlayerProfile {
   username: string;
   platform: "lichess";
   totalGames: number;
+  analyzedGames: number;
   ratings: PlayerRatings;
   fideEstimate: FIDEEstimate;
   style: StyleMetrics;
@@ -74,6 +77,7 @@ export interface LichessUser {
   };
   count?: {
     all: number;
+    rated: number;
   };
 }
 

@@ -44,16 +44,20 @@ export default function SearchInput() {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="w-full max-w-md">
+    <form onSubmit={handleSubmit} className="w-full max-w-md" autoComplete="off">
       <div className="relative">
         <input
-          type="text"
+          type="search"
           value={username}
           onChange={(e) => {
             setUsername(e.target.value);
             setError("");
           }}
           placeholder="Enter Lichess username..."
+          autoComplete="off"
+          data-1p-ignore
+          data-lpignore="true"
+          data-form-type="other"
           className="w-full rounded-lg border border-zinc-700 bg-zinc-800/50 px-4 py-3 pr-28 text-white placeholder-zinc-500 outline-none transition-colors focus:border-green-500 focus:ring-1 focus:ring-green-500"
           disabled={loading}
           autoFocus
