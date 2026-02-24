@@ -16,7 +16,9 @@
       "Bash(ls:*)",
       "Bash(file:*)",
       "Bash(node:*)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(curl:*)",
+      "Bash(python3:*)"
     ]
   }
 }

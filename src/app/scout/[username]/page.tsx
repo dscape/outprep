@@ -578,7 +578,7 @@ export default function ScoutPage() {
         </button>
 
         {/* Speed Filter */}
-        {availableSpeeds.length > 1 && (
+        {availableSpeeds.length >= 1 && (
           <div className="mb-4 flex items-center gap-2">
             <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
               Time Control
