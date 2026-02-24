@@ -11,7 +11,7 @@ import {
   PlayerRatings,
 } from "./types";
 import { estimateFIDE } from "./fide-estimator";
-import { buildErrorProfile } from "./engine/error-profile";
+import { buildErrorProfileFromLichess } from "./lichess-adapters";
 
 export function buildProfile(
   user: LichessUser,
@@ -27,7 +27,7 @@ export function buildProfile(
   const openings = analyzeOpenings(standardGames, user.username);
   const weaknesses = detectWeaknesses(standardGames, user.username, style, openings, analyzedGames);
   const prepTips = generatePrepTips(weaknesses, openings, style);
-  const errorProfile = buildErrorProfile(standardGames, user.username);
+  const errorProfile = buildErrorProfileFromLichess(standardGames, user.username);
 
   // Per-speed breakdowns
   const bySpeed: Record<string, SpeedProfile> = {};
@@ -41,7 +41,7 @@ export function buildProfile(
     const speedStyle = analyzeStyle(speedGames, user.username);
     const speedOpenings = analyzeOpenings(speedGames, user.username);
     const speedWeaknesses = detectWeaknesses(speedGames, user.username, speedStyle, speedOpenings, speedGames.length);
-    const speedErrorProfile = buildErrorProfile(speedGames, user.username);
+    const speedErrorProfile = buildErrorProfileFromLichess(speedGames, user.username);
     bySpeed[speed] = {
       games: speedGames.length,
       style: speedStyle,

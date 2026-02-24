@@ -1,23 +1,23 @@
-import { ErrorProfile } from "../types";
-import { GamePhase } from "./phase-detector";
+import type { ErrorProfile, CandidateMove, GamePhase, BotConfig } from "./types";
+import { DEFAULT_CONFIG } from "./config";
 
 /**
- * A candidate move returned by Stockfish MultiPV.
+ * Convert an approximate FIDE Elo to Stockfish Skill Level.
+ * Linear mapping: eloMin → skillMin, eloMax → skillMax.
  */
-export interface CandidateMove {
-  uci: string;
-  score: number; // centipawns from side-to-move's perspective
-  depth: number;
-  pv: string;
-}
-
-/**
- * Convert an approximate FIDE Elo to Stockfish Skill Level (0-20).
- * Linear mapping: 1100 → 0, 2800 → 20.
- */
-export function eloToSkillLevel(elo: number): number {
-  const skill = ((elo - 1100) / (2800 - 1100)) * 20;
-  return Math.max(0, Math.min(20, Math.round(skill)));
+export function eloToSkillLevel(
+  elo: number,
+  config: Pick<BotConfig, "elo" | "skill"> = DEFAULT_CONFIG
+): number {
+  const { elo: eloRange, skill: skillRange } = config;
+  const skill =
+    ((elo - eloRange.min) / (eloRange.max - eloRange.min)) *
+    (skillRange.max - skillRange.min) +
+    skillRange.min;
+  return Math.max(
+    skillRange.min,
+    Math.min(skillRange.max, Math.round(skill))
+  );
 }
 
 /**
@@ -29,22 +29,24 @@ export function eloToSkillLevel(elo: number): number {
  *
  * Formula:
  *   ratio = phaseErrorRate / overallErrorRate
- *   adjustment = round(-3 * log2(ratio))
- *   dynamicSkill = clamp(baseSkill + adjustment, 0, 20)
+ *   adjustment = round(scale * log2(ratio))
+ *   dynamicSkill = clamp(baseSkill + adjustment, skillMin, skillMax)
  */
 export function dynamicSkillLevel(
   baseSkill: number,
   errorProfile: ErrorProfile,
-  phase: GamePhase
+  phase: GamePhase,
+  config: Pick<BotConfig, "dynamicSkill" | "skill"> = DEFAULT_CONFIG
 ): number {
+  const { dynamicSkill: ds, skill: skillRange } = config;
   const phaseErrors = errorProfile[phase];
   const overallErrors = errorProfile.overall;
 
   // Need meaningful data to adjust
   if (
     overallErrors.errorRate === 0 ||
-    overallErrors.totalMoves < 50 ||
-    phaseErrors.totalMoves < 10
+    overallErrors.totalMoves < ds.minOverallMoves ||
+    phaseErrors.totalMoves < ds.minPhaseMoves
   ) {
     return baseSkill;
   }
@@ -52,16 +54,18 @@ export function dynamicSkillLevel(
   const ratio = phaseErrors.errorRate / overallErrors.errorRate;
 
   // Avoid log(0) — if ratio is effectively 0, player is perfect in this phase
-  if (ratio < 0.01) return Math.min(20, baseSkill + 6);
+  if (ratio < 0.01)
+    return Math.min(skillRange.max, baseSkill + ds.perfectPhaseBonus);
 
-  const adjustment = Math.round(-3 * Math.log2(ratio));
-  return Math.max(0, Math.min(20, baseSkill + adjustment));
+  const adjustment = Math.round(ds.scale * Math.log2(ratio));
+  return Math.max(
+    skillRange.min,
+    Math.min(skillRange.max, baseSkill + adjustment)
+  );
 }
 
 /**
  * Boltzmann (softmax) selection from MultiPV candidates.
- *
- * temperature = max(0.1, (20 - dynamicSkill) * 15)
  *
  * At high skill (low temperature): nearly always picks the best move.
  * At low skill (high temperature): frequently picks 2nd, 3rd, 4th best moves.
@@ -72,14 +76,19 @@ export function dynamicSkillLevel(
  */
 export function boltzmannSelect(
   candidates: CandidateMove[],
-  skill: number
+  skill: number,
+  config: Pick<BotConfig, "boltzmann" | "skill"> = DEFAULT_CONFIG
 ): CandidateMove {
   if (candidates.length === 0) {
     throw new Error("No candidate moves to select from");
   }
   if (candidates.length === 1) return candidates[0];
 
-  const temperature = Math.max(0.1, (20 - skill) * 15);
+  const { boltzmann, skill: skillRange } = config;
+  const temperature = Math.max(
+    boltzmann.temperatureFloor,
+    (skillRange.max - skill) * boltzmann.temperatureScale
+  );
   const maxScore = Math.max(...candidates.map((c) => c.score));
 
   // Compute weights using softmax
@@ -96,4 +105,19 @@ export function boltzmannSelect(
   }
 
   return candidates[0];
+}
+
+/**
+ * Convenience: compute temperature for a given skill level.
+ * Useful for harness introspection.
+ */
+export function temperatureFromSkill(
+  skill: number,
+  config: Pick<BotConfig, "boltzmann" | "skill"> = DEFAULT_CONFIG
+): number {
+  const { boltzmann, skill: skillRange } = config;
+  return Math.max(
+    boltzmann.temperatureFloor,
+    (skillRange.max - skill) * boltzmann.temperatureScale
+  );
 }

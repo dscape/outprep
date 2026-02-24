@@ -173,28 +173,17 @@ export interface OTBProfile {
   weaknesses: Weakness[];
 }
 
-export interface PhaseErrors {
-  totalMoves: number;
-  mistakes: number;       // 100-300cp loss
-  blunders: number;       // 300+cp loss
-  avgCPL: number;
-  errorRate: number;      // (mistakes + blunders) / totalMoves
-  blunderRate: number;    // blunders / totalMoves
-}
+// Import + re-export shared types from the engine package (single source of truth).
+// The import makes them available within this file; the export makes them available to consumers.
+import type {
+  PhaseErrors as _PhaseErrors,
+  ErrorProfile as _ErrorProfile,
+  GameEvalData as _GameEvalData,
+} from "@outprep/engine";
 
-export interface ErrorProfile {
-  opening: PhaseErrors;
-  middlegame: PhaseErrors;
-  endgame: PhaseErrors;
-  overall: PhaseErrors;
-  gamesAnalyzed: number;
-}
-
-export interface GameEvalData {
-  moves: string;
-  playerColor: "white" | "black";
-  evals: number[]; // evals[i] = centipawns from white's perspective after ply i (NaN if not evaluated)
-}
+export type PhaseErrors = _PhaseErrors;
+export type ErrorProfile = _ErrorProfile;
+export type GameEvalData = _GameEvalData;
 
 export interface GameAnalysis {
   gameId: string;

@@ -1,0 +1,21 @@
+{
+  "name": "@outprep/harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "harness": "tsx src/cli.ts",
+    "build": "echo 'harness uses tsx, no build step'",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@outprep/engine": "*",
+    "chess.js": "^1.4.0",
+    "commander": "^12.0.0",
+    "stockfish": "^18.0.5"
+  },
+  "devDependencies": {
+    "tsx": "^4.0.0",
+    "typescript": "^5"
+  }
+}

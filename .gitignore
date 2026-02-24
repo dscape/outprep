@@ -37,6 +37,10 @@ yarn-error.log*
 public/stockfish.js
 public/stockfish.wasm
 
+# harness data (created at runtime)
+packages/harness/datasets/
+packages/harness/results/
+
 # vercel
 .vercel
 

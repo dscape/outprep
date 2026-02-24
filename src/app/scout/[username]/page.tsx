@@ -8,16 +8,16 @@ import {
   StyleMetrics,
   OpeningStats,
   Weakness,
-  ErrorProfile,
   PhaseErrors,
   GameEvalData,
 } from "@/lib/types";
+import type { ErrorProfile } from "@outprep/engine";
+import { buildErrorProfileFromEvals } from "@outprep/engine";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import {
   EvalMode,
   batchEvaluateGames,
 } from "@/lib/engine/batch-eval";
-import { buildErrorProfileFromEvals } from "@/lib/engine/error-profile";
 import PlayerCard from "@/components/PlayerCard";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";

@@ -2,12 +2,18 @@
   "name": "chess",
   "version": "0.1.0",
   "private": true,
+  "workspaces": ["packages/*"],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "postinstall": "node scripts/setup-stockfish.mjs"
+    "postinstall": "node scripts/setup-stockfish.mjs",
+    "harness": "npm run --workspace=packages/harness harness --",
+    "harness:create": "npm run harness -- create-dataset",
+    "harness:run": "npm run harness -- run",
+    "harness:compare": "npm run harness -- compare",
+    "dashboard": "npm run --workspace=packages/dashboard dev"
   },
   "dependencies": {
     "@types/uuid": "^11.0.0",

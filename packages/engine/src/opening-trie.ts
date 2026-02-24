@@ -1,25 +1,6 @@
 import { Chess } from "chess.js";
-import { LichessGame } from "../types";
-
-/**
- * JSON move trie for opponent opening book.
- * Keyed by normalized FEN (board + side + castling + en passant, dropping clocks).
- */
-export interface TrieNode {
-  moves: TrieMove[];
-  totalGames: number;
-}
-
-export interface TrieMove {
-  uci: string;
-  san: string;
-  count: number;
-  winRate: number; // 0-1, from the player's perspective
-}
-
-export interface OpeningTrie {
-  [fenKey: string]: TrieNode;
-}
+import type { OpeningTrie, TrieNode, TrieMove, GameRecord, BotConfig } from "./types";
+import { DEFAULT_CONFIG } from "./config";
 
 /**
  * Normalize a FEN by dropping halfmove and fullmove clocks.
@@ -32,18 +13,22 @@ function normalizeFen(fen: string): string {
 }
 
 /**
- * Build an opening trie from the opponent's games for a specific color.
+ * Build an opening trie from game records for the profiled player's color.
  *
- * Walks the opponent's games, records what they played at each position.
+ * Walks the games, records what the player played at each position.
  * Only includes positions with minGames+ games. Stops after maxPly plies.
+ *
+ * @param games - Generic game records (app maps LichessGame → GameRecord)
+ * @param color - Which color to profile ("white" or "black")
+ * @param config - Trie parameters (maxPly, minGames)
  */
 export function buildOpeningTrie(
-  games: LichessGame[],
-  username: string,
+  games: GameRecord[],
   color: "white" | "black",
-  maxPly = 40, // 20 moves = 40 plies
-  minGames = 3
+  config: Pick<BotConfig, "trie"> = DEFAULT_CONFIG
 ): OpeningTrie {
+  const { maxPly, minGames } = config.trie;
+
   // Accumulate: fenKey → moveUCI → { count, wins, draws }
   const positions = new Map<
     string,
@@ -51,29 +36,31 @@ export function buildOpeningTrie(
   >();
 
   for (const game of games) {
-    if (!game.moves || game.variant !== "standard") continue;
+    if (!game.moves) continue;
 
-    const isWhite =
-      game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
+    const isWhite = game.playerColor === "white";
 
-    // Only use games where the opponent played the requested color
-    if ((color === "white" && !isWhite) || (color === "black" && isWhite)) continue;
+    // Only use games where the player played the requested color
+    if (
+      (color === "white" && !isWhite) ||
+      (color === "black" && isWhite)
+    ) continue;
 
     const moves = game.moves.split(" ");
     const chess = new Chess();
 
-    // Determine if the opponent won/drew from their perspective
-    const opponentWon =
-      (isWhite && game.winner === "white") ||
-      (!isWhite && game.winner === "black");
-    const isDraw = !game.winner;
+    // Determine if the player won/drew from their perspective
+    const playerWon =
+      (isWhite && game.result === "white") ||
+      (!isWhite && game.result === "black");
+    const isDraw = game.result === "draw";
 
     for (let ply = 0; ply < Math.min(moves.length, maxPly); ply++) {
       const isWhiteMove = ply % 2 === 0;
       const isPlayerMove =
         (isWhite && isWhiteMove) || (!isWhite && !isWhiteMove);
 
-      // Only record moves made by the target player (opponent)
+      // Only record moves made by the profiled player
       if (isPlayerMove) {
         const fenKey = normalizeFen(chess.fen());
 
@@ -104,7 +91,7 @@ export function buildOpeningTrie(
             draws: 0,
           };
           entry.count++;
-          if (opponentWon) entry.wins++;
+          if (playerWon) entry.wins++;
           if (isDraw) entry.draws++;
           moveMap.set(uci, entry);
 
@@ -137,7 +124,7 @@ export function buildOpeningTrie(
 
     const trieMoves: TrieMove[] = [];
     for (const [uci, entry] of moveMap) {
-      if (entry.count < 1) continue; // Include all moves for positions that meet threshold
+      if (entry.count < 1) continue;
       trieMoves.push({
         uci,
         san: entry.san,

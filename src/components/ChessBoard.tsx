@@ -4,9 +4,9 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Chessboard } from "react-chessboard";
 import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
-import { ErrorProfile } from "@/lib/types";
-import { OpeningTrie } from "@/lib/engine/opening-trie";
-import { BotController, BotMoveResult } from "@/lib/engine/bot-controller";
+import { WasmStockfishAdapter } from "@/lib/stockfish-adapter";
+import type { ErrorProfile, OpeningTrie, BotMoveResult } from "@outprep/engine";
+import { BotController, createBot } from "@outprep/engine";
 import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
 
 interface ChessBoardProps {
@@ -140,9 +140,9 @@ export default function ChessBoard({
           setFen(game.fen());
         }
 
-        const bot = new BotController({
-          engine,
-          fideEstimate,
+        const adapter = new WasmStockfishAdapter(engine);
+        const bot = createBot(adapter, {
+          elo: fideEstimate,
           errorProfile,
           openingTrie,
           botColor,
@@ -154,9 +154,9 @@ export default function ChessBoard({
         console.error("Failed to init engines:", err);
         // Still try to use bot engine even if analyzer fails
         engine.init().then(() => {
-          const bot = new BotController({
-            engine,
-            fideEstimate,
+          const adapter = new WasmStockfishAdapter(engine);
+          const bot = createBot(adapter, {
+            elo: fideEstimate,
             errorProfile,
             openingTrie,
             botColor,

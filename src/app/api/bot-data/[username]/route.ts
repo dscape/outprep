@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessGames } from "@/lib/lichess";
-import { buildErrorProfile } from "@/lib/engine/error-profile";
-import { buildOpeningTrie, OpeningTrie } from "@/lib/engine/opening-trie";
-import { ErrorProfile } from "@/lib/types";
+import type { OpeningTrie, ErrorProfile } from "@outprep/engine";
+import { buildOpeningTrie } from "@outprep/engine";
+import { buildErrorProfileFromLichess, lichessGameToGameRecord } from "@/lib/lichess-adapters";
 
 /**
  * Returns the bot data needed to play against an opponent:
@@ -41,9 +41,10 @@ export async function GET(
       filtered = filtered.filter((g) => speeds.includes(g.speed));
     }
 
-    const errorProfile = buildErrorProfile(filtered, username);
-    const whiteTrie = buildOpeningTrie(filtered, username, "white");
-    const blackTrie = buildOpeningTrie(filtered, username, "black");
+    const errorProfile = buildErrorProfileFromLichess(filtered, username);
+    const gameRecords = filtered.map((g) => lichessGameToGameRecord(g, username));
+    const whiteTrie = buildOpeningTrie(gameRecords, "white");
+    const blackTrie = buildOpeningTrie(gameRecords, "black");
 
     // Extract game moves for client-side batch eval
     // playerColor = the profiled player's color (the opponent we're mimicking)

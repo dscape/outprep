@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
-
-export type GamePhase = "opening" | "middlegame" | "endgame";
+import type { GamePhase, BotConfig } from "./types";
+import { DEFAULT_CONFIG } from "./config";
 
 /**
  * Count non-pawn, non-king pieces on the board (both sides combined).
@@ -24,16 +24,16 @@ export function countMinorMajorPieces(fen: string): number {
 
 /**
  * Detect game phase from a FEN position using material counting.
- * - Opening: >10 minor/major pieces remaining
- * - Middlegame: 7-10 pieces remaining
- * - Endgame: ≤6 pieces remaining (matches Lichess's threshold)
  */
-export function detectPhase(fen: string): GamePhase {
+export function detectPhase(
+  fen: string,
+  config: Pick<BotConfig, "phase"> = DEFAULT_CONFIG
+): GamePhase {
   const pieces = countMinorMajorPieces(fen);
 
-  if (pieces > 10) return "opening";
-  if (pieces >= 7) return "middlegame";
-  return "endgame";
+  if (pieces > config.phase.openingAbove) return "opening";
+  if (pieces <= config.phase.endgameAtOrBelow) return "endgame";
+  return "middlegame";
 }
 
 /**
@@ -48,7 +48,10 @@ export function materialScore(fen: string): number {
 /**
  * Detect phase from a chess.js Chess instance (avoids re-parsing FEN).
  */
-export function detectPhaseFromBoard(chess: Chess): GamePhase {
+export function detectPhaseFromBoard(
+  chess: Chess,
+  config: Pick<BotConfig, "phase"> = DEFAULT_CONFIG
+): GamePhase {
   const board = chess.board();
   let count = 0;
 
@@ -60,7 +63,7 @@ export function detectPhaseFromBoard(chess: Chess): GamePhase {
     }
   }
 
-  if (count > 10) return "opening";
-  if (count >= 7) return "middlegame";
-  return "endgame";
+  if (count > config.phase.openingAbove) return "opening";
+  if (count <= config.phase.endgameAtOrBelow) return "endgame";
+  return "middlegame";
 }

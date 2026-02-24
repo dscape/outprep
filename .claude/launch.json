@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd packages/dashboard && npx vite --port 5180 --host 127.0.0.1"],
+      "port": 5180
+    }
+  ]
+}

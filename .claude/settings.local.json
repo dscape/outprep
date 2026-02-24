@@ -22,7 +22,11 @@
       "Bash(npx next build:*)",
       "Bash(grep:*)",
       "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch:*)",
-      "Bash(git stash:*)"
+      "Bash(git stash:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npm run:*)",
+      "Bash(npx:*)",
+      "mcp__Claude_Preview__preview_start"
     ]
   }
 }

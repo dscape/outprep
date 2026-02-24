@@ -3,8 +3,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { ErrorProfile, MoveEval, AnalysisSummary } from "@/lib/types";
-import { OpeningTrie } from "@/lib/engine/opening-trie";
+import { MoveEval, AnalysisSummary } from "@/lib/types";
+import type { ErrorProfile, OpeningTrie } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
 
