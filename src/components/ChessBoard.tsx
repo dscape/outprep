@@ -44,6 +44,10 @@ export default function ChessBoard({
   } | null>(null);
   const [legalMoveSquares, setLegalMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const [finalizingAnalysis, setFinalizingAnalysis] = useState(false);
+  const [finalizingProgress, setFinalizingProgress] = useState<{
+    evaluated: number;
+    total: number;
+  } | null>(null);
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
@@ -74,8 +78,15 @@ export default function ChessBoard({
           const totalPlies = chess.history().length;
           if (!analyzer.isComplete(totalPlies)) {
             setFinalizingAnalysis(true);
-            await analyzer.waitForCompletion(totalPlies, 10000);
+            await analyzer.waitForCompletion(
+              totalPlies,
+              30000,
+              (evaluated, total) => {
+                setFinalizingProgress({ evaluated, total });
+              },
+            );
             setFinalizingAnalysis(false);
+            setFinalizingProgress(null);
           }
           const analysis = analyzer.buildAnalysis(chess.history(), playerColor);
           if (analysis) {
@@ -103,6 +114,9 @@ export default function ChessBoard({
       analyzer.init(),
     ])
       .then(() => {
+        // Record starting position (ply 0) — always needed for analysis
+        analyzer.recordPosition(0, gameRef.current.fen());
+
         // Pre-play opening moves if starting from a specific position
         if (startingMoves && startingMoves.length > 0) {
           const game = gameRef.current;
@@ -135,11 +149,6 @@ export default function ChessBoard({
         });
         botRef.current = bot;
         setEngineReady(true);
-
-        // Record starting position (ply 0) if no opening pre-played
-        if (!startingMoves || startingMoves.length === 0) {
-          analyzer.recordPosition(0, gameRef.current.fen());
-        }
       })
       .catch((err) => {
         console.error("Failed to init engines:", err);
@@ -334,8 +343,15 @@ export default function ChessBoard({
       const totalPlies = game.history().length;
       if (!analyzer.isComplete(totalPlies)) {
         setFinalizingAnalysis(true);
-        await analyzer.waitForCompletion(totalPlies, 10000);
+        await analyzer.waitForCompletion(
+          totalPlies,
+          30000,
+          (evaluated, total) => {
+            setFinalizingProgress({ evaluated, total });
+          },
+        );
         setFinalizingAnalysis(false);
+        setFinalizingProgress(null);
       }
       const history = game.history();
       const analysis = analyzer.buildAnalysis(history, playerColor);
@@ -391,9 +407,14 @@ export default function ChessBoard({
         />
         {finalizingAnalysis && (
           <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-lg">
-            <div className="flex items-center gap-2 text-white text-sm">
+            <div className="flex flex-col items-center gap-2 text-white text-sm">
               <div className="h-4 w-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
               Finalizing analysis...
+              {finalizingProgress && (
+                <span className="text-xs text-zinc-400">
+                  {finalizingProgress.evaluated}/{finalizingProgress.total} positions
+                </span>
+              )}
             </div>
           </div>
         )}

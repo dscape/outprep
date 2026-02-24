@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { PlayerProfile, ErrorProfile, MoveEval, AnalysisSummary } from "@/lib/types";
+import { ErrorProfile, MoveEval, AnalysisSummary } from "@/lib/types";
 import { OpeningTrie } from "@/lib/engine/opening-trie";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
@@ -15,6 +15,12 @@ interface BotData {
   gameMoves: Array<{ moves: string; playerColor: "white" | "black"; hasEvals: boolean }>;
 }
 
+/** Minimal profile info needed for the play page */
+interface PlayProfile {
+  username: string;
+  fideEstimate: { rating: number };
+}
+
 export default function PlayPage() {
   const params = useParams();
   const router = useRouter();
@@ -24,10 +30,11 @@ export default function PlayPage() {
   const eco = searchParams.get("eco") || "";
   const openingName = searchParams.get("openingName") || "";
 
-  const [profile, setProfile] = useState<PlayerProfile | null>(null);
+  const [profile, setProfile] = useState<PlayProfile | null>(null);
   const [botData, setBotData] = useState<BotData | null>(null);
   const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [profileReady, setProfileReady] = useState(false);
+  const [botDataReady, setBotDataReady] = useState(false);
   const [error, setError] = useState("");
   const [enhancedErrorProfile, setEnhancedErrorProfile] = useState<ErrorProfile | null>(null);
   const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
@@ -44,49 +51,66 @@ export default function PlayPage() {
       // Ignore
     }
 
+    // Try cached profile from sessionStorage (stored by scout page) for instant display
+    let profileFromCache = false;
+    try {
+      const cached = sessionStorage.getItem(`play-profile:${username}`);
+      if (cached) {
+        const data = JSON.parse(cached);
+        setProfile(data);
+        setProfileReady(true);
+        profileFromCache = true;
+      }
+    } catch {
+      // Ignore
+    }
+
     async function load() {
       try {
         const query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
-        const [profileRes, botRes] = await Promise.all([
-          fetch(`/api/profile/${encodeURIComponent(username)}`),
-          fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`),
-        ]);
 
-        if (!profileRes.ok) {
-          const data = await profileRes.json();
-          setError(data.error || "Failed to load profile");
-          setLoading(false);
-          return;
+        // Start bot-data fetch immediately (likely cache-hit from scout pre-warm)
+        const botFetch = fetch(
+          `/api/bot-data/${encodeURIComponent(username)}${query}`
+        );
+
+        // Only fetch profile API if not in sessionStorage
+        if (!profileFromCache) {
+          const profileRes = await fetch(
+            `/api/profile/${encodeURIComponent(username)}`
+          );
+          if (!profileRes.ok) {
+            const data = await profileRes.json();
+            setError(data.error || "Failed to load profile");
+            return;
+          }
+          const profileData = await profileRes.json();
+          setProfile(profileData);
+          setProfileReady(true);
         }
 
-        const profileData = await profileRes.json();
-        setProfile(profileData);
-
+        // Await bot-data (user is picking color while this loads)
+        const botRes = await botFetch;
         if (botRes.ok) {
           const data: BotData = await botRes.json();
           setBotData(data);
         }
-
-        // Load opening moves if ECO param is present
-        if (eco) {
-          setLoadingOpening(true);
-          try {
-            const moves = await getOpeningMoves(eco);
-            setStartingMoves(moves.length > 0 ? moves : null);
-          } catch {
-            // Non-fatal — game starts from beginning
-          } finally {
-            setLoadingOpening(false);
-          }
-        }
+        setBotDataReady(true);
       } catch {
         setError("Failed to load game data.");
-      } finally {
-        setLoading(false);
       }
     }
 
     load();
+
+    // Load opening moves if ECO param is present
+    if (eco) {
+      setLoadingOpening(true);
+      getOpeningMoves(eco)
+        .then((moves) => setStartingMoves(moves.length > 0 ? moves : null))
+        .catch(() => {})
+        .finally(() => setLoadingOpening(false));
+    }
   }, [username, speeds, eco]);
 
   const handleGameEnd = useCallback((
@@ -122,14 +146,13 @@ export default function PlayPage() {
     ? `Bot enhanced with Stockfish analysis`
     : `Bot based on Lichess game history`;
 
-  if (loading || loadingOpening) {
+  // Only block on profile — show color selection ASAP
+  if (!profileReady && !error) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
           <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
-          <p className="text-zinc-400">
-            {loadingOpening ? "Loading opening position..." : "Loading opponent data..."}
-          </p>
+          <p className="text-zinc-400">Loading...</p>
         </div>
       </div>
     );
@@ -152,7 +175,7 @@ export default function PlayPage() {
     );
   }
 
-  // Color selection screen
+  // Color selection screen — shows immediately when profile is cached
   if (!playerColor) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
@@ -195,6 +218,20 @@ export default function PlayPage() {
               </span>
             </button>
           </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Wait for bot data + opening before starting game
+  if (!botDataReady || loadingOpening) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
+          <p className="text-zinc-400">
+            {loadingOpening ? "Loading opening position..." : "Preparing bot..."}
+          </p>
         </div>
       </div>
     );

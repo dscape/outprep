@@ -40,13 +40,24 @@ function getSeedMoves(eco: string): string[] {
  * @returns UCI moves array, or empty array if not found
  */
 export async function getOpeningMoves(eco: string): Promise<string[]> {
+  // Check sessionStorage cache first
+  try {
+    const cached = sessionStorage.getItem(`eco-moves:${eco}`);
+    if (cached) return JSON.parse(cached);
+  } catch {
+    // Ignore — SSR or storage unavailable
+  }
+
   try {
     const moves = getSeedMoves(eco);
     if (moves.length === 0) return [];
 
     // Check if the seed moves already match
     const initial = await queryExplorer(moves);
-    if (initial?.opening?.eco === eco) return moves;
+    if (initial?.opening?.eco === eco) {
+      cacheEcoMoves(eco, moves);
+      return moves;
+    }
 
     // Iteratively follow the most popular moves
     for (let depth = 0; depth < 12; depth++) {
@@ -54,7 +65,10 @@ export async function getOpeningMoves(eco: string): Promise<string[]> {
       if (!data) break;
 
       // Check if we've reached the target ECO
-      if (data.opening?.eco === eco) return moves;
+      if (data.opening?.eco === eco) {
+        cacheEcoMoves(eco, moves);
+        return moves;
+      }
 
       // Follow the most popular next move
       if (!data.moves || data.moves.length === 0) break;
@@ -66,6 +80,7 @@ export async function getOpeningMoves(eco: string): Promise<string[]> {
         const testData = await queryExplorer(testMoves);
         if (testData?.opening?.eco === eco) {
           moves.push(candidate.uci);
+          cacheEcoMoves(eco, moves);
           return moves;
         }
         // If the ECO letter matches, this might be on the right path
@@ -88,12 +103,25 @@ export async function getOpeningMoves(eco: string): Promise<string[]> {
 
     // Final check
     const finalData = await queryExplorer(moves);
-    if (finalData?.opening?.eco === eco) return moves;
+    if (finalData?.opening?.eco === eco) {
+      cacheEcoMoves(eco, moves);
+      return moves;
+    }
 
     // Return whatever moves we have — they're likely close to the target
+    cacheEcoMoves(eco, moves);
     return moves;
   } catch {
     return [];
+  }
+}
+
+/** Cache ECO → moves mapping in sessionStorage */
+function cacheEcoMoves(eco: string, moves: string[]): void {
+  try {
+    sessionStorage.setItem(`eco-moves:${eco}`, JSON.stringify(moves));
+  } catch {
+    // Storage full or SSR — non-fatal
   }
 }
 

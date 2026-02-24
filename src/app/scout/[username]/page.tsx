@@ -286,6 +286,31 @@ export default function ScoutPage() {
     };
   }, []);
 
+  // Cache profile in sessionStorage for instant play page loading
+  useEffect(() => {
+    if (!profile) return;
+    try {
+      sessionStorage.setItem(
+        `play-profile:${username}`,
+        JSON.stringify({
+          username: profile.username,
+          fideEstimate: profile.fideEstimate,
+        })
+      );
+    } catch {
+      // Storage full — non-fatal
+    }
+  }, [profile, username]);
+
+  // Pre-warm bot-data server cache for the play page
+  useEffect(() => {
+    if (!profile || selectedSpeeds.length === 0) return;
+    const query = `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`;
+    fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`).catch(
+      () => {}
+    );
+  }, [profile, selectedSpeeds, username]);
+
   const toggleSpeed = useCallback((speed: string) => {
     setSelectedSpeeds((prev) => {
       if (prev.includes(speed)) {

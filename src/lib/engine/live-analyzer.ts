@@ -158,14 +158,33 @@ export class LiveGameAnalyzer {
   }
 
   /**
+   * Count how many positions from 0 to totalPlies have been evaluated.
+   */
+  countEvaluated(totalPlies: number): number {
+    let count = 0;
+    for (let i = 0; i <= totalPlies; i++) {
+      if (this.positionEvals.has(i)) count++;
+    }
+    return count;
+  }
+
+  /**
    * Wait for all positions up to totalPlies to be evaluated.
    * Returns true if complete, false if timed out.
    */
-  async waitForCompletion(totalPlies: number, timeoutMs = 10000): Promise<boolean> {
+  async waitForCompletion(
+    totalPlies: number,
+    timeoutMs = 30000,
+    onProgress?: (evaluated: number, total: number) => void,
+  ): Promise<boolean> {
+    const total = totalPlies + 1; // plies 0 through totalPlies
     const start = Date.now();
     while (!this.isComplete(totalPlies) && !this.stopped) {
       if (Date.now() - start > timeoutMs) return false;
-      await new Promise((r) => setTimeout(r, 100));
+      if (onProgress) {
+        onProgress(this.countEvaluated(totalPlies), total);
+      }
+      await new Promise((r) => setTimeout(r, 200));
     }
     return this.isComplete(totalPlies);
   }

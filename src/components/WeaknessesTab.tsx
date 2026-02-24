@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { Weakness } from "@/lib/types";
+import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 
 interface WeaknessesTabProps {
   weaknesses: Weakness[];
@@ -66,6 +67,9 @@ export default function WeaknessesTab({ weaknesses, username, speeds }: Weakness
             {w.eco && (
               <button
                 onClick={() => {
+                  // Pre-fetch ECO moves (fire-and-forget — caches in sessionStorage)
+                  getOpeningMoves(w.eco!).catch(() => {});
+
                   const params = new URLSearchParams();
                   if (speeds) params.set("speeds", speeds);
                   params.set("eco", w.eco!);
