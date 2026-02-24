@@ -33,6 +33,10 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# stockfish WASM (copied from node_modules by postinstall)
+public/stockfish.js
+public/stockfish.wasm
+
 # vercel
 .vercel
 

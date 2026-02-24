@@ -20,7 +20,9 @@
       "Bash(curl:*)",
       "Bash(python3:*)",
       "Bash(npx next build:*)",
-      "Bash(grep:*)"
+      "Bash(grep:*)",
+      "Bash(FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch:*)",
+      "Bash(git stash:*)"
     ]
   }
 }
