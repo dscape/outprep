@@ -1,0 +1,63 @@
+import { NextRequest, NextResponse } from "next/server";
+import { fetchLichessGames } from "@/lib/lichess";
+import { buildErrorProfile } from "@/lib/engine/error-profile";
+import { buildOpeningTrie, OpeningTrie } from "@/lib/engine/opening-trie";
+import { ErrorProfile } from "@/lib/types";
+
+/**
+ * Returns the bot data needed to play against an opponent:
+ * - Error profile (per-phase mistake rates from Lichess evals)
+ * - Opening tries (one per color, JSON move trie)
+ */
+
+interface BotData {
+  errorProfile: ErrorProfile;
+  whiteTrie: OpeningTrie;
+  blackTrie: OpeningTrie;
+}
+
+const cache = new Map<string, { data: BotData; expires: number }>();
+const TTL = 24 * 60 * 60 * 1000;
+
+export async function GET(
+  request: NextRequest,
+  { params }: { params: Promise<{ username: string }> }
+) {
+  const { username } = await params;
+  const speedsParam = request.nextUrl.searchParams.get("speeds");
+  const speeds = speedsParam ? speedsParam.split(",").filter(Boolean) : [];
+  const cacheKey = `bot:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}`;
+
+  try {
+    const cached = cache.get(cacheKey);
+    if (cached && cached.expires > Date.now()) {
+      return NextResponse.json(cached.data);
+    }
+
+    const games = await fetchLichessGames(username, 500);
+    let filtered = games.filter((g) => g.variant === "standard");
+    if (speeds.length > 0) {
+      filtered = filtered.filter((g) => speeds.includes(g.speed));
+    }
+
+    const errorProfile = buildErrorProfile(filtered, username);
+    const whiteTrie = buildOpeningTrie(filtered, username, "white");
+    const blackTrie = buildOpeningTrie(filtered, username, "black");
+
+    const data: BotData = { errorProfile, whiteTrie, blackTrie };
+    cache.set(cacheKey, { data, expires: Date.now() + TTL });
+
+    return NextResponse.json(data);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    if (message.includes("not found")) {
+      return NextResponse.json({ error: message }, { status: 404 });
+    }
+    if (message.includes("Rate limited")) {
+      return NextResponse.json({ error: message }, { status: 429 });
+    }
+
+    return NextResponse.json({ error: message }, { status: 500 });
+  }
+}

@@ -3,8 +3,15 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { PlayerProfile } from "@/lib/types";
+import { PlayerProfile, ErrorProfile } from "@/lib/types";
+import { OpeningTrie } from "@/lib/engine/opening-trie";
 import ChessBoard from "@/components/ChessBoard";
+
+interface BotData {
+  errorProfile: ErrorProfile;
+  whiteTrie: OpeningTrie;
+  blackTrie: OpeningTrie;
+}
 
 export default function PlayPage() {
   const params = useParams();
@@ -14,7 +21,7 @@ export default function PlayPage() {
   const speeds = searchParams.get("speeds") || "";
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
-  const [openingBook, setOpeningBook] = useState<Uint8Array | null>(null);
+  const [botData, setBotData] = useState<BotData | null>(null);
   const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -22,11 +29,10 @@ export default function PlayPage() {
   useEffect(() => {
     async function load() {
       try {
-        // Fetch profile and opening book in parallel
-        const bookQuery = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
-        const [profileRes, bookRes] = await Promise.all([
+        const query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
+        const [profileRes, botRes] = await Promise.all([
           fetch(`/api/profile/${encodeURIComponent(username)}`),
-          fetch(`/api/opening-book/${encodeURIComponent(username)}${bookQuery}`),
+          fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`),
         ]);
 
         if (!profileRes.ok) {
@@ -39,9 +45,9 @@ export default function PlayPage() {
         const profileData = await profileRes.json();
         setProfile(profileData);
 
-        if (bookRes.ok) {
-          const bookBuffer = await bookRes.arrayBuffer();
-          setOpeningBook(new Uint8Array(bookBuffer));
+        if (botRes.ok) {
+          const data: BotData = await botRes.json();
+          setBotData(data);
         }
       } catch {
         setError("Failed to load game data.");
@@ -51,12 +57,11 @@ export default function PlayPage() {
     }
 
     load();
-  }, [username]);
+  }, [username, speeds]);
 
   const handleGameEnd = useCallback((pgn: string, result: string) => {
     const gameId = uuidv4();
 
-    // Store game data in sessionStorage for the analysis page
     sessionStorage.setItem(
       `game:${gameId}`,
       JSON.stringify({
@@ -138,6 +143,9 @@ export default function PlayPage() {
     );
   }
 
+  // Bot color is opposite of player color
+  const botColor = playerColor === "white" ? "black" : "white";
+
   return (
     <div className="min-h-screen px-4 py-8">
       <div className="mx-auto max-w-2xl">
@@ -156,8 +164,11 @@ export default function PlayPage() {
         <ChessBoard
           playerColor={playerColor}
           opponentUsername={profile?.username || username}
-          openingBook={openingBook}
           fideEstimate={profile?.fideEstimate.rating || 1500}
+          errorProfile={botData?.errorProfile || null}
+          openingTrie={
+            botColor === "white" ? botData?.whiteTrie || null : botData?.blackTrie || null
+          }
           onGameEnd={handleGameEnd}
         />
       </div>

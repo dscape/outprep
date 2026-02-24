@@ -127,6 +127,91 @@ export class StockfishEngine {
     return result.bestMove;
   }
 
+  /**
+   * Run MultiPV analysis to get the top N candidate moves with scores.
+   * Returns candidates sorted best-to-worst from side-to-move's perspective.
+   */
+  async evaluateMultiPV(
+    fen: string,
+    depth: number,
+    numPV: number
+  ): Promise<StockfishEvalResult[]> {
+    await this.isReady();
+    this.send("ucinewgame");
+    await this.isReady();
+    this.send(`setoption name MultiPV value ${numPV}`);
+    await this.isReady();
+    this.send(`position fen ${fen}`);
+
+    return new Promise<StockfishEvalResult[]>((resolve) => {
+      // Track the best info line for each PV index at the target depth
+      const pvResults = new Map<
+        number,
+        { eval: number; depth: number; pv: string; move: string }
+      >();
+
+      const handler = (msg: string) => {
+        if (msg.startsWith("info") && msg.includes("score")) {
+          const depthMatch = msg.match(/depth (\d+)/);
+          const multipvMatch = msg.match(/multipv (\d+)/);
+          const scoreMatch = msg.match(/score (cp|mate) (-?\d+)/);
+          const pvMatch = msg.match(/pv (.+)/);
+
+          if (!depthMatch || !scoreMatch || !pvMatch) return;
+
+          const d = parseInt(depthMatch[1]);
+          const pvIdx = multipvMatch ? parseInt(multipvMatch[1]) : 1;
+
+          let evalScore: number;
+          if (scoreMatch[1] === "cp") {
+            evalScore = parseInt(scoreMatch[2]);
+          } else {
+            const mateIn = parseInt(scoreMatch[2]);
+            evalScore = mateIn > 0 ? 30000 - mateIn : -30000 - mateIn;
+          }
+
+          const pvLine = pvMatch[1];
+          const firstMove = pvLine.split(" ")[0] || "";
+
+          // Only keep the highest depth for each PV line
+          const existing = pvResults.get(pvIdx);
+          if (!existing || d >= existing.depth) {
+            pvResults.set(pvIdx, {
+              eval: evalScore,
+              depth: d,
+              pv: pvLine,
+              move: firstMove,
+            });
+          }
+        }
+
+        if (msg.startsWith("bestmove")) {
+          this.removeHandler(handler);
+
+          // Reset MultiPV to 1 for subsequent calls
+          this.send("setoption name MultiPV value 1");
+
+          // Build results sorted by eval (best first)
+          const results: StockfishEvalResult[] = Array.from(
+            pvResults.values()
+          )
+            .map((r) => ({
+              bestMove: r.move,
+              eval: r.eval,
+              depth: r.depth,
+              pv: r.pv,
+            }))
+            .sort((a, b) => b.eval - a.eval);
+
+          resolve(results);
+        }
+      };
+
+      this.messageQueue.push(handler);
+      this.send(`go depth ${depth}`);
+    });
+  }
+
   setOption(name: string, value: string | number): void {
     this.send(`setoption name ${name} value ${value}`);
   }

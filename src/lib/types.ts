@@ -54,6 +54,7 @@ export interface SpeedProfile {
   style: StyleMetrics;
   openings: { white: OpeningStats[]; black: OpeningStats[] };
   weaknesses: Weakness[];
+  errorProfile?: ErrorProfile;
 }
 
 export interface PlayerProfile {
@@ -71,6 +72,7 @@ export interface PlayerProfile {
   };
   prepTips: PrepTip[];
   bySpeed: Record<string, SpeedProfile>;
+  errorProfile?: ErrorProfile;
   lastComputed: number;
 }
 
@@ -89,6 +91,11 @@ export interface LichessUser {
   };
 }
 
+export interface LichessEvalAnnotation {
+  eval?: number; // centipawns from white's perspective
+  mate?: number; // mate in N (positive = white mates)
+}
+
 export interface LichessGame {
   id: string;
   rated: boolean;
@@ -105,6 +112,7 @@ export interface LichessGame {
   moves: string;
   pgn?: string;
   clock?: { initial: number; increment: number };
+  analysis?: LichessEvalAnnotation[];
 }
 
 export interface MoveEval {
@@ -154,6 +162,24 @@ export interface OTBProfile {
   style: StyleMetrics;
   openings: { white: OpeningStats[]; black: OpeningStats[] };
   weaknesses: Weakness[];
+}
+
+export interface PhaseErrors {
+  totalMoves: number;
+  inaccuracies: number;   // 50-100cp loss
+  mistakes: number;       // 100-300cp loss
+  blunders: number;       // 300+cp loss
+  avgCPL: number;
+  errorRate: number;      // (inaccuracies + mistakes + blunders) / totalMoves
+  blunderRate: number;    // blunders / totalMoves
+}
+
+export interface ErrorProfile {
+  opening: PhaseErrors;
+  middlegame: PhaseErrors;
+  endgame: PhaseErrors;
+  overall: PhaseErrors;
+  gamesAnalyzed: number;
 }
 
 export interface GameAnalysis {

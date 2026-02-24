@@ -4,44 +4,41 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { Chessboard } from "react-chessboard";
 import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
-import { lookupPosition } from "@/lib/opening-book";
+import { ErrorProfile } from "@/lib/types";
+import { OpeningTrie } from "@/lib/engine/opening-trie";
+import { BotController, BotMoveResult } from "@/lib/engine/bot-controller";
 
 interface ChessBoardProps {
   playerColor: "white" | "black";
   opponentUsername: string;
-  openingBook: Uint8Array | null;
   fideEstimate: number;
+  errorProfile: ErrorProfile | null;
+  openingTrie: OpeningTrie | null;
   onGameEnd: (pgn: string, result: string) => void;
-}
-
-function getDepthForRating(fideEstimate: number): number {
-  if (fideEstimate <= 1200) return 5;
-  if (fideEstimate <= 1400) return 7;
-  if (fideEstimate <= 1600) return 10;
-  if (fideEstimate <= 1800) return 12;
-  if (fideEstimate <= 2000) return 15;
-  if (fideEstimate <= 2200) return 17;
-  if (fideEstimate <= 2400) return 20;
-  return 22;
 }
 
 export default function ChessBoard({
   playerColor,
   opponentUsername,
-  openingBook,
   fideEstimate,
+  errorProfile,
+  openingTrie,
   onGameEnd,
 }: ChessBoardProps) {
-  // Use a ref for the Chess instance so move history is preserved across renders.
-  // A separate FEN state triggers re-renders for the board display.
   const gameRef = useRef(new Chess());
   const [fen, setFen] = useState(gameRef.current.fen());
-  const [inBook, setInBook] = useState(true);
+  const [moveSource, setMoveSource] = useState<"book" | "engine" | null>(null);
   const [engineReady, setEngineReady] = useState(false);
   const [thinking, setThinking] = useState(false);
+  const [lastMoveInfo, setLastMoveInfo] = useState<{
+    phase: string;
+    skill: number;
+  } | null>(null);
   const engineRef = useRef<StockfishEngine | null>(null);
+  const botRef = useRef<BotController | null>(null);
   const gameEndedRef = useRef(false);
-  const depth = getDepthForRating(fideEstimate);
+
+  const botColor = playerColor === "white" ? "black" : "white";
 
   const checkGameEnd = useCallback(
     (chess: Chess) => {
@@ -59,7 +56,7 @@ export default function ChessBoard({
     [onGameEnd],
   );
 
-  // Initialize Stockfish engine
+  // Initialize Stockfish engine + BotController
   useEffect(() => {
     const engine = new StockfishEngine();
     engineRef.current = engine;
@@ -67,6 +64,14 @@ export default function ChessBoard({
     engine
       .init()
       .then(() => {
+        const bot = new BotController({
+          engine,
+          fideEstimate,
+          errorProfile,
+          openingTrie,
+          botColor,
+        });
+        botRef.current = bot;
         setEngineReady(true);
       })
       .catch((err) => {
@@ -76,9 +81,9 @@ export default function ChessBoard({
     return () => {
       engine.quit();
     };
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Check if it's bot's turn and make a move
+  // Bot move using BotController
   const makeBotMove = useCallback(async () => {
     const game = gameRef.current;
     if (gameEndedRef.current) return;
@@ -90,81 +95,46 @@ export default function ChessBoard({
 
     if (isPlayerTurn) return;
 
+    const bot = botRef.current;
+    if (!bot) return;
+
     setThinking(true);
 
     try {
-      // Try opening book first
-      if (openingBook && inBook) {
-        const bookMoves = lookupPosition(openingBook, game.fen());
-        if (bookMoves.length > 0) {
-          // Weighted random selection based on frequency
-          const totalWeight = bookMoves.reduce((s, m) => s + m.weight, 0);
-          let rand = Math.random() * totalWeight;
-          let selectedMove = bookMoves[0];
+      const result: BotMoveResult = await bot.getMove(game.fen());
+      if (gameEndedRef.current) return;
 
-          for (const bm of bookMoves) {
-            rand -= bm.weight;
-            if (rand <= 0) {
-              selectedMove = bm;
-              break;
-            }
-          }
-
-          const move = game.move({
-            from: selectedMove.from as Square,
-            to: selectedMove.to as Square,
-            promotion: selectedMove.promotion as
-              | "q"
-              | "r"
-              | "b"
-              | "n"
-              | undefined,
-          });
-
-          if (move) {
-            setFen(game.fen());
-            setThinking(false);
-            checkGameEnd(game);
-            return;
-          }
-        }
-
-        // Out of book
-        setInBook(false);
+      // Validate UCI before proceeding
+      if (!result.uci || result.uci.length < 4) {
+        console.error("Invalid UCI from bot:", result.uci);
+        return;
       }
 
-      // Use Stockfish
-      if (engineRef.current && engineReady) {
-        const result = await engineRef.current.evaluate(game.fen(), depth);
-        if (gameEndedRef.current) return;
+      // Apply think time delay
+      await new Promise((resolve) => setTimeout(resolve, result.thinkTimeMs));
+      if (gameEndedRef.current) return;
 
-        // Convert UCI move to chess.js format
-        const from = result.bestMove.substring(0, 2) as Square;
-        const to = result.bestMove.substring(2, 4) as Square;
-        const promotion =
-          result.bestMove.length > 4
-            ? (result.bestMove[4] as "q" | "r" | "b" | "n")
-            : undefined;
+      // Apply the move
+      const from = result.uci.substring(0, 2) as Square;
+      const to = result.uci.substring(2, 4) as Square;
+      const promotion =
+        result.uci.length > 4
+          ? (result.uci[4] as "q" | "r" | "b" | "n")
+          : undefined;
 
-        const move = game.move({ from, to, promotion });
-        if (move) {
-          setFen(game.fen());
-          checkGameEnd(game);
-        }
+      const move = game.move({ from, to, promotion });
+      if (move) {
+        setFen(game.fen());
+        setMoveSource(result.source);
+        setLastMoveInfo({ phase: result.phase, skill: result.dynamicSkill });
+        checkGameEnd(game);
       }
     } catch (err) {
       console.error("Bot move error:", err);
     } finally {
       setThinking(false);
     }
-  }, [
-    playerColor,
-    openingBook,
-    inBook,
-    engineReady,
-    depth,
-    checkGameEnd,
-  ]);
+  }, [playerColor, checkGameEnd]);
 
   // Trigger bot move when it's their turn
   useEffect(() => {
@@ -176,7 +146,8 @@ export default function ChessBoard({
       (playerColor === "black" && game.turn() === "b");
 
     if (!isPlayerTurn && !game.isGameOver()) {
-      const timeout = setTimeout(makeBotMove, 500);
+      // Small initial delay so the board renders first
+      const timeout = setTimeout(makeBotMove, 100);
       return () => clearTimeout(timeout);
     }
   }, [fen, playerColor, engineReady, makeBotMove]);
@@ -203,7 +174,7 @@ export default function ChessBoard({
       const move = game.move({
         from: sourceSquare as Square,
         to: targetSquare as Square,
-        promotion: "q", // auto-promote to queen
+        promotion: "q",
       });
 
       if (!move) return false;
@@ -226,13 +197,13 @@ export default function ChessBoard({
   return (
     <div className="flex flex-col items-center gap-4">
       {/* Status bar */}
-      <div className="flex items-center gap-3 text-sm">
-        {inBook && (
+      <div className="flex items-center gap-3 text-sm flex-wrap justify-center">
+        {moveSource === "book" && (
           <span className="rounded-full bg-green-600/20 border border-green-500/30 px-3 py-1 text-green-400">
             Following {opponentUsername}&apos;s repertoire
           </span>
         )}
-        {!inBook && (
+        {moveSource === "engine" && (
           <span className="rounded-full bg-zinc-700/50 border border-zinc-600/30 px-3 py-1 text-zinc-400">
             Out of book
           </span>
@@ -268,7 +239,12 @@ export default function ChessBoard({
       {/* Game info */}
       <div className="flex items-center gap-4">
         <div className="text-sm text-zinc-400">
-          Depth: {depth} (~{fideEstimate} FIDE)
+          ~{fideEstimate} FIDE
+          {lastMoveInfo && (
+            <span className="ml-2 text-zinc-600">
+              {lastMoveInfo.phase} / skill {lastMoveInfo.skill}
+            </span>
+          )}
         </div>
         <button
           onClick={handleResign}

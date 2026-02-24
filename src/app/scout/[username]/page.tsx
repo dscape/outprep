@@ -2,13 +2,14 @@
 
 import { useEffect, useState, useMemo, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { PlayerProfile, OTBProfile, StyleMetrics, OpeningStats, Weakness } from "@/lib/types";
+import { PlayerProfile, OTBProfile, StyleMetrics, OpeningStats, Weakness, ErrorProfile, PhaseErrors } from "@/lib/types";
 import PlayerCard from "@/components/PlayerCard";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
 import PrepTipsTab from "@/components/PrepTipsTab";
 import OTBUploader from "@/components/OTBUploader";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
+import ErrorProfileCard from "@/components/ErrorProfileCard";
 import LoadingStages from "@/components/LoadingStages";
 
 type Tab = "openings" | "weaknesses" | "prep" | "otb";
@@ -17,6 +18,7 @@ interface FilteredData {
   style: StyleMetrics;
   openings: { white: OpeningStats[]; black: OpeningStats[] };
   weaknesses: Weakness[];
+  errorProfile?: ErrorProfile;
   games: number;
 }
 
@@ -107,7 +109,46 @@ function mergeSpeedProfiles(profile: PlayerProfile, speeds: string[]): FilteredD
     }
   }
 
-  return { style, openings, weaknesses, games: totalGames };
+  // Merge error profiles across speeds
+  const errorProfiles = speeds
+    .map((s) => profile.bySpeed[s]?.errorProfile)
+    .filter((e): e is ErrorProfile => !!e && e.gamesAnalyzed > 0);
+  const errorProfile = errorProfiles.length > 0
+    ? mergeErrorProfiles(errorProfiles)
+    : undefined;
+
+  return { style, openings, weaknesses, errorProfile, games: totalGames };
+}
+
+function mergePhaseErrors(phases: PhaseErrors[]): PhaseErrors {
+  let totalMoves = 0, inaccuracies = 0, mistakes = 0, blunders = 0, totalCPL = 0;
+  for (const p of phases) {
+    totalMoves += p.totalMoves;
+    inaccuracies += p.inaccuracies;
+    mistakes += p.mistakes;
+    blunders += p.blunders;
+    totalCPL += p.avgCPL * p.totalMoves;
+  }
+  const totalErrors = inaccuracies + mistakes + blunders;
+  return {
+    totalMoves,
+    inaccuracies,
+    mistakes,
+    blunders,
+    avgCPL: totalMoves > 0 ? Math.round(totalCPL / totalMoves) : 0,
+    errorRate: totalMoves > 0 ? totalErrors / totalMoves : 0,
+    blunderRate: totalMoves > 0 ? blunders / totalMoves : 0,
+  };
+}
+
+function mergeErrorProfiles(profiles: ErrorProfile[]): ErrorProfile {
+  return {
+    opening: mergePhaseErrors(profiles.map((p) => p.opening)),
+    middlegame: mergePhaseErrors(profiles.map((p) => p.middlegame)),
+    endgame: mergePhaseErrors(profiles.map((p) => p.endgame)),
+    overall: mergePhaseErrors(profiles.map((p) => p.overall)),
+    gamesAnalyzed: profiles.reduce((sum, p) => sum + p.gamesAnalyzed, 0),
+  };
 }
 
 const SPEED_ORDER = ["bullet", "blitz", "rapid", "classical"];
@@ -215,6 +256,7 @@ export default function ScoutPage() {
         style: profile.style,
         openings: profile.openings,
         weaknesses: profile.weaknesses,
+        errorProfile: profile.errorProfile,
         games: profile.analyzedGames,
       };
     }
@@ -316,6 +358,13 @@ export default function ScoutPage() {
 
         {/* Player Card */}
         <PlayerCard profile={profile} filteredGames={filteredData.games} />
+
+        {/* Error Profile */}
+        {filteredData.errorProfile && filteredData.errorProfile.gamesAnalyzed > 0 && (
+          <div className="mt-4">
+            <ErrorProfileCard errorProfile={filteredData.errorProfile} />
+          </div>
+        )}
 
         {/* OTB PGN Upload */}
         <OTBUploader
