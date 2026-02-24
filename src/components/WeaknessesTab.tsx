@@ -1,9 +1,12 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { Weakness } from "@/lib/types";
 
 interface WeaknessesTabProps {
   weaknesses: Weakness[];
+  username: string;
+  speeds?: string;
 }
 
 function SeverityBadge({ severity }: { severity: Weakness["severity"] }) {
@@ -22,7 +25,9 @@ function SeverityBadge({ severity }: { severity: Weakness["severity"] }) {
   );
 }
 
-export default function WeaknessesTab({ weaknesses }: WeaknessesTabProps) {
+export default function WeaknessesTab({ weaknesses, username, speeds }: WeaknessesTabProps) {
+  const router = useRouter();
+
   if (weaknesses.length === 0) {
     return (
       <p className="text-sm text-zinc-500">
@@ -54,8 +59,26 @@ export default function WeaknessesTab({ weaknesses }: WeaknessesTabProps) {
               </p>
             </div>
           </div>
-          <div className="mt-2 inline-block rounded bg-zinc-900 px-2 py-1 text-xs font-mono text-zinc-400">
-            {w.stat}
+          <div className="mt-2 flex items-center gap-3">
+            <div className="inline-block rounded bg-zinc-900 px-2 py-1 text-xs font-mono text-zinc-400">
+              {w.stat}
+            </div>
+            {w.eco && (
+              <button
+                onClick={() => {
+                  const params = new URLSearchParams();
+                  if (speeds) params.set("speeds", speeds);
+                  params.set("eco", w.eco!);
+                  if (w.openingName) params.set("openingName", w.openingName);
+                  router.push(
+                    `/play/${encodeURIComponent(username)}?${params.toString()}`
+                  );
+                }}
+                className="rounded-md border border-green-600/40 bg-green-600/10 px-2.5 py-1 text-xs font-medium text-green-400 transition-colors hover:bg-green-600/20 hover:border-green-500/50"
+              >
+                Practice this line
+              </button>
+            )}
           </div>
         </div>
       ))}

@@ -27,6 +27,8 @@ export interface Weakness {
   description: string;
   stat: string;
   confidence?: "low" | "medium" | "high";
+  eco?: string;           // ECO code, e.g. "A07"
+  openingName?: string;   // Opening family name, e.g. "King's Indian Attack"
 }
 
 export interface OpeningStats {

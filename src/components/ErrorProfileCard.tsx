@@ -61,7 +61,6 @@ function PhaseBar({
     totalErrors > 0 ? (phase.mistakes / totalErrors) * filledPct : 0;
   const inaccuracyShare =
     totalErrors > 0 ? (phase.inaccuracies / totalErrors) * filledPct : 0;
-  const cleanShare = 100 - filledPct;
 
   return (
     <div className="space-y-1.5">
@@ -111,8 +110,6 @@ function PhaseBar({
             )}
           </div>
         )}
-        {/* Clean portion (gray) */}
-        {cleanShare > 0 && <div className="bg-green-500/10 flex-1" />}
       </div>
     </div>
   );
@@ -285,6 +282,16 @@ export default function ErrorProfileCard({
                 {formatTime(estimateTime(unevaluatedCount, "comprehensive"))}
               </span>
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Initializing state (before progress starts) */}
+      {isUpgrading && !upgradeProgress && (
+        <div className="mt-4 border-t border-zinc-700/50 pt-4">
+          <div className="flex items-center gap-2 text-xs text-zinc-400">
+            <div className="h-3 w-3 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
+            Initializing engine...
           </div>
         </div>
       )}

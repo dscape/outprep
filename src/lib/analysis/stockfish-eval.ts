@@ -32,9 +32,10 @@ export async function evaluateGame(
     const fen = chess.fen();
     const isWhiteTurn = chess.turn() === "w";
 
-    // Evaluate position before the move (from white's perspective)
+    // Evaluate position before the move
+    // Engine returns eval from side-to-move's perspective; convert to white's
     const beforeResult = await engine.evaluate(fen, ANALYSIS_DEPTH);
-    const evalBeforeWhite = beforeResult.eval;
+    const evalBeforeWhite = isWhiteTurn ? beforeResult.eval : -beforeResult.eval;
 
     // Convert best move from UCI to SAN for display
     let bestMoveSan = beforeResult.bestMove;
@@ -54,10 +55,11 @@ export async function evaluateGame(
     if (!move) break;
 
     // Evaluate position after the move (from white's perspective)
-    // IMPORTANT: After the move, it's the OTHER side's turn. Stockfish evaluates
-    // from the perspective of the side to move, so we negate to get white's perspective.
+    // After the move, the side to move has flipped. Convert to white's perspective:
+    // If white just moved → now black's turn → negate to get white's
+    // If black just moved → now white's turn → already from white's
     const afterResult = await engine.evaluate(chess.fen(), ANALYSIS_DEPTH);
-    const evalAfterWhite = -afterResult.eval;
+    const evalAfterWhite = isWhiteTurn ? -afterResult.eval : afterResult.eval;
 
     // Calculate eval delta FROM THE MOVING SIDE'S PERSPECTIVE
     // Positive delta = the move made things worse for the mover

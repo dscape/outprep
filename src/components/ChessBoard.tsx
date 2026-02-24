@@ -19,6 +19,8 @@ interface ChessBoardProps {
     moves: import("@/lib/types").MoveEval[];
     summary: import("@/lib/types").AnalysisSummary;
   }) => void;
+  startingMoves?: string[];
+  botDataLabel?: string;
 }
 
 export default function ChessBoard({
@@ -28,6 +30,8 @@ export default function ChessBoard({
   errorProfile,
   openingTrie,
   onGameEnd,
+  startingMoves,
+  botDataLabel,
 }: ChessBoardProps) {
   const gameRef = useRef(new Chess());
   const [fen, setFen] = useState(gameRef.current.fen());
@@ -39,6 +43,7 @@ export default function ChessBoard({
     skill: number;
   } | null>(null);
   const [legalMoveSquares, setLegalMoveSquares] = useState<Record<string, React.CSSProperties>>({});
+  const [finalizingAnalysis, setFinalizingAnalysis] = useState(false);
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
@@ -48,7 +53,7 @@ export default function ChessBoard({
   const botColor = playerColor === "white" ? "black" : "white";
 
   const checkGameEnd = useCallback(
-    (chess: Chess) => {
+    async (chess: Chess) => {
       if (gameEndedRef.current) return;
 
       if (chess.isGameOver()) {
@@ -58,7 +63,7 @@ export default function ChessBoard({
           result = chess.turn() === "w" ? "0-1" : "1-0";
         }
 
-        // Try to get pre-computed analysis from live analyzer
+        // Wait for live analyzer to finish, then build pre-computed analysis
         const analyzer = analyzerRef.current;
         let precomputed: {
           moves: import("@/lib/types").MoveEval[];
@@ -66,8 +71,13 @@ export default function ChessBoard({
         } | undefined;
 
         if (analyzer) {
-          const history = chess.history();
-          const analysis = analyzer.buildAnalysis(history, playerColor);
+          const totalPlies = chess.history().length;
+          if (!analyzer.isComplete(totalPlies)) {
+            setFinalizingAnalysis(true);
+            await analyzer.waitForCompletion(totalPlies, 10000);
+            setFinalizingAnalysis(false);
+          }
+          const analysis = analyzer.buildAnalysis(chess.history(), playerColor);
           if (analysis) {
             precomputed = analysis;
           }
@@ -93,6 +103,29 @@ export default function ChessBoard({
       analyzer.init(),
     ])
       .then(() => {
+        // Pre-play opening moves if starting from a specific position
+        if (startingMoves && startingMoves.length > 0) {
+          const game = gameRef.current;
+          for (const uci of startingMoves) {
+            try {
+              const from = uci.substring(0, 2) as Square;
+              const to = uci.substring(2, 4) as Square;
+              const promotion =
+                uci.length > 4 ? (uci[4] as "q" | "r" | "b" | "n") : undefined;
+              const move = game.move({ from, to, promotion });
+              if (move) {
+                plyRef.current++;
+                analyzer.recordPosition(plyRef.current, game.fen());
+              } else {
+                break; // Invalid move — stop pre-playing
+              }
+            } catch {
+              break;
+            }
+          }
+          setFen(game.fen());
+        }
+
         const bot = new BotController({
           engine,
           fideEstimate,
@@ -103,8 +136,10 @@ export default function ChessBoard({
         botRef.current = bot;
         setEngineReady(true);
 
-        // Record starting position (ply 0)
-        analyzer.recordPosition(0, gameRef.current.fen());
+        // Record starting position (ply 0) if no opening pre-played
+        if (!startingMoves || startingMoves.length === 0) {
+          analyzer.recordPosition(0, gameRef.current.fen());
+        }
       })
       .catch((err) => {
         console.error("Failed to init engines:", err);
@@ -281,14 +316,14 @@ export default function ChessBoard({
     }
   }
 
-  function handleResign() {
+  async function handleResign() {
     if (gameEndedRef.current) return;
     gameEndedRef.current = true;
 
     const game = gameRef.current;
     const result = playerColor === "white" ? "0-1" : "1-0";
 
-    // Try to get pre-computed analysis
+    // Wait for live analyzer to finish, then build pre-computed analysis
     const analyzer = analyzerRef.current;
     let precomputed: {
       moves: import("@/lib/types").MoveEval[];
@@ -296,6 +331,12 @@ export default function ChessBoard({
     } | undefined;
 
     if (analyzer) {
+      const totalPlies = game.history().length;
+      if (!analyzer.isComplete(totalPlies)) {
+        setFinalizingAnalysis(true);
+        await analyzer.waitForCompletion(totalPlies, 10000);
+        setFinalizingAnalysis(false);
+      }
       const history = game.history();
       const analysis = analyzer.buildAnalysis(history, playerColor);
       if (analysis) {
@@ -332,7 +373,7 @@ export default function ChessBoard({
       </div>
 
       {/* Board */}
-      <div className="w-full max-w-[min(90vw,560px)] aspect-square">
+      <div className="w-full max-w-[min(90vw,560px)] aspect-square relative">
         <Chessboard
           options={{
             position: fen,
@@ -348,24 +389,37 @@ export default function ChessBoard({
             lightSquareStyle: { backgroundColor: "#edeed1" },
           }}
         />
+        {finalizingAnalysis && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 rounded-lg">
+            <div className="flex items-center gap-2 text-white text-sm">
+              <div className="h-4 w-4 border-2 border-green-500 border-t-transparent rounded-full animate-spin" />
+              Finalizing analysis...
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Game info */}
-      <div className="flex items-center gap-4">
-        <div className="text-sm text-zinc-400">
-          ~{fideEstimate} FIDE
-          {lastMoveInfo && (
-            <span className="ml-2 text-zinc-600">
-              {lastMoveInfo.phase} / skill {lastMoveInfo.skill}
-            </span>
-          )}
+      <div className="flex flex-col items-center gap-1">
+        <div className="flex items-center gap-4">
+          <div className="text-sm text-zinc-400">
+            ~{fideEstimate} FIDE
+            {lastMoveInfo && (
+              <span className="ml-2 text-zinc-600">
+                {lastMoveInfo.phase} / skill {lastMoveInfo.skill}
+              </span>
+            )}
+          </div>
+          <button
+            onClick={handleResign}
+            className="rounded-md bg-red-600/20 border border-red-500/30 px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-600/30"
+          >
+            Resign
+          </button>
         </div>
-        <button
-          onClick={handleResign}
-          className="rounded-md bg-red-600/20 border border-red-500/30 px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-600/30"
-        >
-          Resign
-        </button>
+        {botDataLabel && (
+          <span className="text-xs text-zinc-600">{botDataLabel}</span>
+        )}
       </div>
     </div>
   );

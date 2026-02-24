@@ -5,7 +5,7 @@
 
 export interface StockfishEvalResult {
   bestMove: string;
-  eval: number; // centipawns from white's perspective
+  eval: number; // centipawns from side-to-move's perspective
   depth: number;
   pv: string;
 }

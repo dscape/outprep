@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 import { PlayerProfile, ErrorProfile, MoveEval, AnalysisSummary } from "@/lib/types";
 import { OpeningTrie } from "@/lib/engine/opening-trie";
+import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
 
 interface BotData {
@@ -20,6 +21,8 @@ export default function PlayPage() {
   const searchParams = useSearchParams();
   const username = params.username as string;
   const speeds = searchParams.get("speeds") || "";
+  const eco = searchParams.get("eco") || "";
+  const openingName = searchParams.get("openingName") || "";
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [botData, setBotData] = useState<BotData | null>(null);
@@ -27,6 +30,8 @@ export default function PlayPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [enhancedErrorProfile, setEnhancedErrorProfile] = useState<ErrorProfile | null>(null);
+  const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
+  const [loadingOpening, setLoadingOpening] = useState(false);
 
   useEffect(() => {
     // Load enhanced profile from sessionStorage (computed on scout page)
@@ -61,6 +66,19 @@ export default function PlayPage() {
           const data: BotData = await botRes.json();
           setBotData(data);
         }
+
+        // Load opening moves if ECO param is present
+        if (eco) {
+          setLoadingOpening(true);
+          try {
+            const moves = await getOpeningMoves(eco);
+            setStartingMoves(moves.length > 0 ? moves : null);
+          } catch {
+            // Non-fatal — game starts from beginning
+          } finally {
+            setLoadingOpening(false);
+          }
+        }
       } catch {
         setError("Failed to load game data.");
       } finally {
@@ -69,7 +87,7 @@ export default function PlayPage() {
     }
 
     load();
-  }, [username, speeds]);
+  }, [username, speeds, eco]);
 
   const handleGameEnd = useCallback((
     pgn: string,
@@ -99,12 +117,19 @@ export default function PlayPage() {
   // Use enhanced profile if available, otherwise fall back to bot-data profile
   const activeErrorProfile = enhancedErrorProfile || botData?.errorProfile || null;
 
-  if (loading) {
+  // Bot data label for display
+  const botDataLabel = enhancedErrorProfile
+    ? `Bot enhanced with Stockfish analysis`
+    : `Bot based on Lichess game history`;
+
+  if (loading || loadingOpening) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         <div className="text-center">
           <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
-          <p className="text-zinc-400">Loading opponent data...</p>
+          <p className="text-zinc-400">
+            {loadingOpening ? "Loading opening position..." : "Loading opponent data..."}
+          </p>
         </div>
       </div>
     );
@@ -135,9 +160,18 @@ export default function PlayPage() {
           <h2 className="text-2xl font-bold text-white mb-2">
             Play against {profile?.username}
           </h2>
-          <p className="text-zinc-400 mb-8">
+          <p className="text-zinc-400 mb-2">
             ~{profile?.fideEstimate.rating} FIDE estimated
           </p>
+          <p className="text-xs text-zinc-600 mb-4">
+            {botDataLabel}
+          </p>
+          {openingName && (
+            <p className="text-sm text-green-400 mb-6">
+              Practicing: {openingName}
+              {eco && <span className="text-zinc-500 ml-1">({eco})</span>}
+            </p>
+          )}
 
           <p className="text-sm text-zinc-500 mb-4">Choose your color</p>
 
@@ -181,6 +215,11 @@ export default function PlayPage() {
           </button>
           <h1 className="text-lg font-medium text-white">
             vs {profile?.username}
+            {openingName && (
+              <span className="text-sm text-zinc-500 ml-2">
+                {openingName}
+              </span>
+            )}
           </h1>
         </div>
 
@@ -193,6 +232,8 @@ export default function PlayPage() {
             botColor === "white" ? botData?.whiteTrie || null : botData?.blackTrie || null
           }
           onGameEnd={handleGameEnd}
+          startingMoves={startingMoves || undefined}
+          botDataLabel={botDataLabel}
         />
       </div>
     </div>

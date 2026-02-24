@@ -355,6 +355,8 @@ export function detectWeaknesses(
         description: `Poor results with ${op.name} (${op.eco}). Consider studying this line or switching to a different opening.`,
         stat: `${op.lossRate}% loss rate in ${op.games} games`,
         confidence: conf,
+        eco: op.eco,
+        openingName: op.name,
       });
     }
   }

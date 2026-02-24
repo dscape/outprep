@@ -206,6 +206,7 @@ export default function ScoutPage() {
   const [otbProfile, setOtbProfile] = useState<OTBProfile | null>(null);
 
   // Upgrade state
+  const [showPlayConfirm, setShowPlayConfirm] = useState(false);
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [upgradeProgress, setUpgradeProgress] = useState<{
     gamesComplete: number;
@@ -388,17 +389,36 @@ export default function ScoutPage() {
         const unevaluated = allGameMoves.filter((g) => !g.hasEvals);
 
         if (unevaluated.length === 0) {
-          // All games already have evals
+          // All games already have evals — show brief completion
+          setUpgradeProgress({
+            gamesComplete: allGameMoves.length,
+            totalGames: allGameMoves.length,
+            pct: 100,
+          });
           setUpgradeComplete(true);
           setIsUpgrading(false);
           return;
         }
 
+        // Set initial progress immediately so the UI shows feedback
+        setUpgradeProgress({
+          gamesComplete: 0,
+          totalGames: unevaluated.length,
+          pct: 0,
+        });
+
         // Initialize Stockfish engine if needed
         if (!evalEngineRef.current) {
-          const engine = new StockfishEngine();
-          await engine.init();
-          evalEngineRef.current = engine;
+          try {
+            const engine = new StockfishEngine();
+            await engine.init();
+            evalEngineRef.current = engine;
+          } catch (err) {
+            console.error("Engine init failed:", err);
+            setUpgradeProgress(null);
+            setIsUpgrading(false);
+            return;
+          }
         }
 
         if (abort.signal.aborted) return;
@@ -615,7 +635,11 @@ export default function ScoutPage() {
               />
             )}
             {activeTab === "weaknesses" && (
-              <WeaknessesTab weaknesses={filteredData.weaknesses} />
+              <WeaknessesTab
+                weaknesses={filteredData.weaknesses}
+                username={username}
+                speeds={selectedSpeeds.join(",")}
+              />
             )}
             {activeTab === "prep" && <PrepTipsTab tips={profile.prepTips} />}
             {activeTab === "otb" && otbProfile && (
@@ -625,9 +649,13 @@ export default function ScoutPage() {
         </div>
 
         {/* Practice button */}
-        <div className="mt-8 flex justify-center">
+        <div className="mt-8 flex flex-col items-center gap-3">
           <button
             onClick={() => {
+              if (isUpgrading) {
+                setShowPlayConfirm(true);
+                return;
+              }
               // Store enhanced profile for play page if available
               if (enhancedErrorProfile) {
                 try {
@@ -647,6 +675,44 @@ export default function ScoutPage() {
           >
             Practice against {profile.username}
           </button>
+
+          {showPlayConfirm && isUpgrading && (
+            <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/80 p-4 text-center max-w-md animate-in fade-in duration-200">
+              <p className="text-sm text-zinc-300 mb-3">
+                Analysis is {upgradeProgress?.pct ?? 0}% complete. The bot won&apos;t
+                include the new data until analysis finishes.
+              </p>
+              <div className="flex gap-2 justify-center">
+                <button
+                  onClick={() => {
+                    setShowPlayConfirm(false);
+                    if (enhancedErrorProfile) {
+                      try {
+                        sessionStorage.setItem(
+                          `enhanced-profile:${username}`,
+                          JSON.stringify(enhancedErrorProfile)
+                        );
+                      } catch {
+                        // Storage full — non-fatal
+                      }
+                    }
+                    router.push(
+                      `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`
+                    );
+                  }}
+                  className="rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50"
+                >
+                  Play now with current data
+                </button>
+                <button
+                  onClick={() => setShowPlayConfirm(false)}
+                  className="rounded-lg border border-green-600/40 bg-green-600/10 px-4 py-2 text-sm font-medium text-green-400 transition-colors hover:bg-green-600/20"
+                >
+                  Wait for analysis
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>
