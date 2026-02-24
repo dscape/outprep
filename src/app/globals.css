@@ -18,7 +18,8 @@ body {
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
 }
 
-button {
+button:not(:disabled),
+[role="button"]:not(:disabled) {
   cursor: pointer;
 }
 

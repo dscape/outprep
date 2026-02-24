@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Chess Doppelganger - Practice Against Any Lichess Player",
+  title: "overprep - Practice Against Any Lichess Player",
   description: "Scout any Lichess player, study their openings and weaknesses, then practice against a bot that plays like them.",
 };
 

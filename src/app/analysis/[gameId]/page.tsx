@@ -197,10 +197,12 @@ export default function AnalysisPage() {
       <div className="mx-auto max-w-3xl">
         <div className="mb-6 flex items-center justify-between">
           <button
-            onClick={() => router.push("/")}
+            onClick={() =>
+              router.push(`/scout/${encodeURIComponent(analysis.opponentUsername)}`)
+            }
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            &larr; New search
+            &larr; Back to {analysis.opponentUsername}
           </button>
           <button
             onClick={() =>
