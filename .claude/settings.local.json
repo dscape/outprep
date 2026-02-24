@@ -12,7 +12,11 @@
       "WebFetch(domain:chessgoals.com)",
       "WebFetch(domain:mathtuition88.com)",
       "WebFetch(domain:www.chessmonitor.com)",
-      "Bash(git diff:*)"
+      "Bash(git diff:*)",
+      "Bash(ls:*)",
+      "Bash(file:*)",
+      "Bash(node:*)",
+      "Bash(npx tsc:*)"
     ]
   }
 }

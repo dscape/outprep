@@ -124,6 +124,8 @@ export interface MoveEval {
   bestMoveSan: string;
   evalDelta: number;
   classification: "great" | "good" | "inaccuracy" | "mistake" | "blunder" | "normal";
+  exploitMove?: string; // UCI — opponent's best response after this move (how they punish mistakes)
+  description?: string; // English description of what went wrong
 }
 
 export interface AnalysisSummary {
@@ -134,14 +136,18 @@ export interface AnalysisSummary {
   inaccuracies: number;
 }
 
-export type MomentTag = "EXPECTED" | "PREP HIT" | "YOUR ERROR" | "EXPLOITED" | "PREDICTED";
+export type MomentTag = "EXPECTED" | "PREP HIT" | "YOUR ERROR" | "INACCURACY" | "EXPLOITED" | "PREDICTED";
 
 export interface KeyMoment {
   moveNum: number;
+  ply: number;
+  san: string;
+  bestMoveSan?: string;
   description: string;
   tag: MomentTag;
   eval: number;
   evalDelta: number;
+  weaknessContext?: string;
 }
 
 export interface OTBGame {
@@ -180,6 +186,12 @@ export interface ErrorProfile {
   endgame: PhaseErrors;
   overall: PhaseErrors;
   gamesAnalyzed: number;
+}
+
+export interface GameEvalData {
+  moves: string;
+  playerColor: "white" | "black";
+  evals: number[]; // evals[i] = centipawns from white's perspective after ply i (NaN if not evaluated)
 }
 
 export interface GameAnalysis {

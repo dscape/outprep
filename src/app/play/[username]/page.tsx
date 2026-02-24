@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { PlayerProfile, ErrorProfile } from "@/lib/types";
+import { PlayerProfile, ErrorProfile, MoveEval, AnalysisSummary } from "@/lib/types";
 import { OpeningTrie } from "@/lib/engine/opening-trie";
 import ChessBoard from "@/components/ChessBoard";
 
@@ -11,6 +11,7 @@ interface BotData {
   errorProfile: ErrorProfile;
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
+  gameMoves: Array<{ moves: string; playerColor: "white" | "black"; hasEvals: boolean }>;
 }
 
 export default function PlayPage() {
@@ -25,8 +26,19 @@ export default function PlayPage() {
   const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [enhancedErrorProfile, setEnhancedErrorProfile] = useState<ErrorProfile | null>(null);
 
   useEffect(() => {
+    // Load enhanced profile from sessionStorage (computed on scout page)
+    try {
+      const cached = sessionStorage.getItem(`enhanced-profile:${username}`);
+      if (cached) {
+        setEnhancedErrorProfile(JSON.parse(cached));
+      }
+    } catch {
+      // Ignore
+    }
+
     async function load() {
       try {
         const query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
@@ -59,7 +71,11 @@ export default function PlayPage() {
     load();
   }, [username, speeds]);
 
-  const handleGameEnd = useCallback((pgn: string, result: string) => {
+  const handleGameEnd = useCallback((
+    pgn: string,
+    result: string,
+    precomputedAnalysis?: { moves: MoveEval[]; summary: AnalysisSummary }
+  ) => {
     const gameId = uuidv4();
 
     sessionStorage.setItem(
@@ -70,11 +86,18 @@ export default function PlayPage() {
         playerColor,
         opponentUsername: username,
         opponentFideEstimate: profile?.fideEstimate.rating,
+        ...(precomputedAnalysis ? {
+          precomputedMoves: precomputedAnalysis.moves,
+          precomputedSummary: precomputedAnalysis.summary,
+        } : {}),
       })
     );
 
     router.push(`/analysis/${gameId}`);
   }, [playerColor, username, profile, router]);
+
+  // Use enhanced profile if available, otherwise fall back to bot-data profile
+  const activeErrorProfile = enhancedErrorProfile || botData?.errorProfile || null;
 
   if (loading) {
     return (
@@ -165,7 +188,7 @@ export default function PlayPage() {
           playerColor={playerColor}
           opponentUsername={profile?.username || username}
           fideEstimate={profile?.fideEstimate.rating || 1500}
-          errorProfile={botData?.errorProfile || null}
+          errorProfile={activeErrorProfile}
           openingTrie={
             botColor === "white" ? botData?.whiteTrie || null : botData?.blackTrie || null
           }

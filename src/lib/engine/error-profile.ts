@@ -1,5 +1,5 @@
 import { Chess } from "chess.js";
-import { LichessGame, ErrorProfile, PhaseErrors, LichessEvalAnnotation } from "../types";
+import { LichessGame, ErrorProfile, PhaseErrors, LichessEvalAnnotation, GameEvalData } from "../types";
 import { detectPhaseFromBoard, GamePhase } from "./phase-detector";
 
 /**
@@ -155,4 +155,96 @@ function evalToCp(annotation: LichessEvalAnnotation): number {
     return annotation.mate > 0 ? 10000 : -10000;
   }
   return 0;
+}
+
+/**
+ * Build an error profile from generic eval data (source-agnostic).
+ *
+ * Works with evals from batch-eval.ts (client-side Stockfish), Lichess annotations,
+ * or any other source that provides per-ply centipawn evaluations.
+ *
+ * evals[i] = centipawns from white's perspective after ply i.
+ * NaN values are skipped (positions that weren't evaluated).
+ */
+export function buildErrorProfileFromEvals(
+  evalData: GameEvalData[]
+): ErrorProfile {
+  const accumulators: Record<GamePhase | "overall", PhaseAccumulator> = {
+    opening: createAccumulator(),
+    middlegame: createAccumulator(),
+    endgame: createAccumulator(),
+    overall: createAccumulator(),
+  };
+
+  let gamesAnalyzed = 0;
+
+  for (const game of evalData) {
+    if (!game.moves || game.evals.length === 0) continue;
+
+    const isWhite = game.playerColor === "white";
+    const moveSans = game.moves.split(" ");
+    let hasEvalData = false;
+
+    const chess = new Chess();
+
+    for (let ply = 0; ply < moveSans.length; ply++) {
+      const isWhiteMove = ply % 2 === 0;
+      const isPlayerMove =
+        (isWhite && isWhiteMove) || (!isWhite && !isWhiteMove);
+
+      if (!isPlayerMove) {
+        try {
+          chess.move(moveSans[ply]);
+        } catch {
+          break;
+        }
+        continue;
+      }
+
+      // Need eval before and after this move
+      // evals[ply-1] = eval after previous ply (= eval before this move)
+      // evals[ply] = eval after this ply (= eval after this move)
+      const cpBefore = ply > 0 ? game.evals[ply - 1] : 15; // starting position ~+15cp
+      const cpAfter = game.evals[ply];
+
+      // Skip if either eval is missing (NaN from un-evaluated positions)
+      if ((ply > 0 && isNaN(cpBefore)) || isNaN(cpAfter)) {
+        try {
+          chess.move(moveSans[ply]);
+        } catch {
+          break;
+        }
+        continue;
+      }
+
+      hasEvalData = true;
+
+      // Detect phase BEFORE the move
+      const phase = detectPhaseFromBoard(chess);
+
+      // CPL from the perspective of the moving side
+      const cpLoss = isWhiteMove
+        ? Math.max(0, cpBefore - cpAfter)
+        : Math.max(0, cpAfter - cpBefore);
+
+      addMove(accumulators[phase], cpLoss);
+      addMove(accumulators.overall, cpLoss);
+
+      try {
+        chess.move(moveSans[ply]);
+      } catch {
+        break;
+      }
+    }
+
+    if (hasEvalData) gamesAnalyzed++;
+  }
+
+  return {
+    opening: finalizePhase(accumulators.opening),
+    middlegame: finalizePhase(accumulators.middlegame),
+    endgame: finalizePhase(accumulators.endgame),
+    overall: finalizePhase(accumulators.overall),
+    gamesAnalyzed,
+  };
 }

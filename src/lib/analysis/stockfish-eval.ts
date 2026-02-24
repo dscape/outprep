@@ -88,6 +88,7 @@ export async function evaluateGame(
       bestMoveSan,
       evalDelta,
       classification,
+      exploitMove: afterResult.bestMove, // opponent's best response after this move
     });
 
     onProgress?.(i + 1, history.length);

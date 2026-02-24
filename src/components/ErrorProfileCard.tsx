@@ -1,9 +1,19 @@
 "use client";
 
 import { ErrorProfile, PhaseErrors } from "@/lib/types";
+import { EvalMode, estimateTime } from "@/lib/engine/batch-eval";
 
 interface ErrorProfileCardProps {
   errorProfile: ErrorProfile;
+  totalGames?: number;
+  onUpgrade?: (mode: EvalMode) => void;
+  upgradeProgress?: {
+    gamesComplete: number;
+    totalGames: number;
+    pct: number;
+  } | null;
+  isUpgrading?: boolean;
+  upgradeComplete?: boolean;
 }
 
 /**
@@ -39,16 +49,18 @@ function PhaseBar({
   }
 
   // Total width of the colored portion (relative to worst phase)
-  const filledPct = maxErrorRate > 0
-    ? (phase.errorRate / maxErrorRate) * 100
-    : 0;
+  const filledPct =
+    maxErrorRate > 0 ? (phase.errorRate / maxErrorRate) * 100 : 0;
 
   const totalErrors = phase.inaccuracies + phase.mistakes + phase.blunders;
 
   // Each segment's share of the colored portion
-  const blunderShare = totalErrors > 0 ? (phase.blunders / totalErrors) * filledPct : 0;
-  const mistakeShare = totalErrors > 0 ? (phase.mistakes / totalErrors) * filledPct : 0;
-  const inaccuracyShare = totalErrors > 0 ? (phase.inaccuracies / totalErrors) * filledPct : 0;
+  const blunderShare =
+    totalErrors > 0 ? (phase.blunders / totalErrors) * filledPct : 0;
+  const mistakeShare =
+    totalErrors > 0 ? (phase.mistakes / totalErrors) * filledPct : 0;
+  const inaccuracyShare =
+    totalErrors > 0 ? (phase.inaccuracies / totalErrors) * filledPct : 0;
   const cleanShare = 100 - filledPct;
 
   return (
@@ -67,7 +79,9 @@ function PhaseBar({
             style={{ width: `${blunderShare}%`, minWidth: "3px" }}
           >
             {phase.blunders >= 2 && blunderShare > 6 && (
-              <span className="text-[10px] text-white font-medium">{phase.blunders}</span>
+              <span className="text-[10px] text-white font-medium">
+                {phase.blunders}
+              </span>
             )}
           </div>
         )}
@@ -78,7 +92,9 @@ function PhaseBar({
             style={{ width: `${mistakeShare}%`, minWidth: "3px" }}
           >
             {phase.mistakes >= 2 && mistakeShare > 6 && (
-              <span className="text-[10px] text-zinc-900 font-medium">{phase.mistakes}</span>
+              <span className="text-[10px] text-zinc-900 font-medium">
+                {phase.mistakes}
+              </span>
             )}
           </div>
         )}
@@ -89,14 +105,14 @@ function PhaseBar({
             style={{ width: `${inaccuracyShare}%`, minWidth: "3px" }}
           >
             {phase.inaccuracies >= 2 && inaccuracyShare > 6 && (
-              <span className="text-[10px] text-white font-medium">{phase.inaccuracies}</span>
+              <span className="text-[10px] text-white font-medium">
+                {phase.inaccuracies}
+              </span>
             )}
           </div>
         )}
         {/* Clean portion (gray) */}
-        {cleanShare > 0 && (
-          <div className="bg-green-500/10 flex-1" />
-        )}
+        {cleanShare > 0 && <div className="bg-green-500/10 flex-1" />}
       </div>
     </div>
   );
@@ -115,7 +131,8 @@ function generateInsight(profile: ErrorProfile): string | null {
   const weakest = phases[0];
   const strongest = phases[phases.length - 1];
 
-  if (strongest.errors.errorRate === 0 || weakest.errors.errorRate === 0) return null;
+  if (strongest.errors.errorRate === 0 || weakest.errors.errorRate === 0)
+    return null;
 
   const ratio = weakest.errors.errorRate / strongest.errors.errorRate;
 
@@ -130,8 +147,23 @@ function generateInsight(profile: ErrorProfile): string | null {
   return `Weakest phase: ${weakest.name} (${(weakest.errors.errorRate * 100).toFixed(1)}% error rate).`;
 }
 
-export default function ErrorProfileCard({ errorProfile }: ErrorProfileCardProps) {
-  if (errorProfile.gamesAnalyzed === 0) {
+function formatTime(seconds: number): string {
+  if (seconds < 60) return `~${seconds}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = seconds % 60;
+  if (secs === 0) return `~${mins} min`;
+  return `~${mins}m ${secs}s`;
+}
+
+export default function ErrorProfileCard({
+  errorProfile,
+  totalGames,
+  onUpgrade,
+  upgradeProgress,
+  isUpgrading = false,
+  upgradeComplete = false,
+}: ErrorProfileCardProps) {
+  if (errorProfile.gamesAnalyzed === 0 && !isUpgrading) {
     return null;
   }
 
@@ -144,6 +176,12 @@ export default function ErrorProfileCard({ errorProfile }: ErrorProfileCardProps
 
   const insight = generateInsight(errorProfile);
 
+  const hasUnevaluatedGames =
+    totalGames !== undefined && totalGames > errorProfile.gamesAnalyzed;
+  const unevaluatedCount = hasUnevaluatedGames
+    ? totalGames - errorProfile.gamesAnalyzed
+    : 0;
+
   return (
     <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
       <div className="flex items-center justify-between mb-4">
@@ -151,26 +189,43 @@ export default function ErrorProfileCard({ errorProfile }: ErrorProfileCardProps
           Error Profile
         </h3>
         <span className="text-xs text-zinc-600">
-          {errorProfile.gamesAnalyzed} games with evals
+          {upgradeComplete && totalGames
+            ? `${totalGames} games analyzed`
+            : `${errorProfile.gamesAnalyzed} games with evals`}
         </span>
       </div>
 
       <div className="space-y-3">
-        <PhaseBar label="Opening" phase={errorProfile.opening} maxErrorRate={maxErrorRate} />
-        <PhaseBar label="Middlegame" phase={errorProfile.middlegame} maxErrorRate={maxErrorRate} />
-        <PhaseBar label="Endgame" phase={errorProfile.endgame} maxErrorRate={maxErrorRate} />
+        <PhaseBar
+          label="Opening"
+          phase={errorProfile.opening}
+          maxErrorRate={maxErrorRate}
+        />
+        <PhaseBar
+          label="Middlegame"
+          phase={errorProfile.middlegame}
+          maxErrorRate={maxErrorRate}
+        />
+        <PhaseBar
+          label="Endgame"
+          phase={errorProfile.endgame}
+          maxErrorRate={maxErrorRate}
+        />
       </div>
 
       {/* Legend */}
       <div className="flex gap-4 mt-3 text-[10px] text-zinc-500">
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-sm bg-red-500/80" /> Blunders
+          <span className="inline-block w-2 h-2 rounded-sm bg-red-500/80" />{" "}
+          Blunders
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-sm bg-yellow-500/80" /> Mistakes
+          <span className="inline-block w-2 h-2 rounded-sm bg-yellow-500/80" />{" "}
+          Mistakes
         </span>
         <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-sm bg-orange-500/60" /> Inaccuracies
+          <span className="inline-block w-2 h-2 rounded-sm bg-orange-500/60" />{" "}
+          Inaccuracies
         </span>
       </div>
 
@@ -202,6 +257,78 @@ export default function ErrorProfileCard({ errorProfile }: ErrorProfileCardProps
           <div className="text-[10px] text-zinc-500">Blunder Rate</div>
         </div>
       </div>
+
+      {/* Upgrade section */}
+      {hasUnevaluatedGames && !isUpgrading && !upgradeComplete && onUpgrade && (
+        <div className="mt-4 border-t border-zinc-700/50 pt-4">
+          <p className="text-xs text-zinc-500 mb-3">
+            Based on {errorProfile.gamesAnalyzed} of {totalGames} games.
+            Analyze the remaining {unevaluatedCount} for a more accurate
+            profile.
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => onUpgrade("sampling")}
+              className="flex-1 rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:border-zinc-500/50"
+            >
+              Quick scan{" "}
+              <span className="text-zinc-500">
+                {formatTime(estimateTime(unevaluatedCount, "sampling"))}
+              </span>
+            </button>
+            <button
+              onClick={() => onUpgrade("comprehensive")}
+              className="flex-1 rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:border-zinc-500/50"
+            >
+              Deep analysis{" "}
+              <span className="text-zinc-500">
+                {formatTime(estimateTime(unevaluatedCount, "comprehensive"))}
+              </span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Progress bar */}
+      {isUpgrading && upgradeProgress && (
+        <div className="mt-4 border-t border-zinc-700/50 pt-4">
+          <div className="flex items-center justify-between text-xs text-zinc-400 mb-2">
+            <span>
+              Analyzing... {upgradeProgress.gamesComplete}/
+              {upgradeProgress.totalGames} games
+            </span>
+            <span>{upgradeProgress.pct}%</span>
+          </div>
+          <div className="h-1.5 w-full rounded-full bg-zinc-700/50 overflow-hidden">
+            <div
+              className="h-full rounded-full bg-green-500 transition-all duration-500"
+              style={{ width: `${upgradeProgress.pct}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Upgrade complete */}
+      {upgradeComplete && totalGames && (
+        <div className="mt-4 border-t border-zinc-700/50 pt-3">
+          <p className="text-xs text-green-400 flex items-center gap-1.5">
+            <svg
+              className="h-3.5 w-3.5"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M5 13l4 4L19 7"
+              />
+            </svg>
+            Full analysis — {totalGames} games
+          </p>
+        </div>
+      )}
     </div>
   );
 }

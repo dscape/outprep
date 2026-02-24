@@ -29,6 +29,7 @@ export function tagMoments(
 
     let tag: MomentTag;
     let description: string;
+    let weaknessContext: string | undefined;
 
     if (!isPlayerMove) {
       // Opponent's move
@@ -39,10 +40,20 @@ export function tagMoments(
         const matchedWeakness = matchWeakness(context, profile, weaknessAreas);
         if (matchedWeakness) {
           tag = "PREDICTED";
-          description = `Opponent made a ${move.classification} consistent with their ${matchedWeakness} weakness.`;
+          description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+          weaknessContext = `Consistent with their ${matchedWeakness} weakness`;
+        } else if (context?.tacticalMotifs && context.tacticalMotifs.length > 0) {
+          tag = "EXPECTED";
+          description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+          weaknessContext = `Missed tactic in the ${context?.phase || "middlegame"}`;
+        } else if (context?.phase === "endgame") {
+          tag = "EXPECTED";
+          description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+          weaknessContext = "Endgame technique error";
         } else {
           tag = "EXPECTED";
-          description = `Opponent's ${move.classification} on move ${moveNum} (${move.san}).`;
+          description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+          weaknessContext = `Uncharacteristic ${move.classification}`;
         }
       } else {
         tag = "EXPECTED";
@@ -52,7 +63,7 @@ export function tagMoments(
       // Player's move
       if (move.classification === "blunder" || move.classification === "mistake") {
         tag = "YOUR ERROR";
-        description = `Your ${move.classification} on move ${moveNum}: ${move.san}. Best was the engine's suggestion.`;
+        description = `Your ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
       } else if (move.evalDelta <= -30 && exploitsWeakness(context, profile, weaknessAreas)) {
         tag = "PREP HIT";
         description = `Great move! You exploited the opponent's known weakness on move ${moveNum}.`;
@@ -60,17 +71,25 @@ export function tagMoments(
         tag = "EXPLOITED";
         description = `Strong move ${move.san} on move ${moveNum} gained a significant advantage.`;
       } else {
-        tag = "YOUR ERROR";
-        description = `Inaccuracy on move ${moveNum}: ${move.san}. A slightly better option was available.`;
+        // Inaccuracy (50-100cp loss) — NOT "YOUR ERROR"
+        tag = "INACCURACY";
+        description = `Inaccuracy on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
       }
     }
 
     moments.push({
       moveNum,
+      ply: move.ply,
+      san: move.san,
+      bestMoveSan: (tag === "YOUR ERROR" || tag === "INACCURACY" ||
+        move.classification === "blunder" || move.classification === "mistake")
+        ? (move.bestMoveSan || move.bestMove)
+        : undefined,
       description,
       tag,
       eval: move.eval,
       evalDelta: move.evalDelta,
+      weaknessContext,
     });
   }
 

@@ -1,8 +1,23 @@
 "use client";
 
-import { useEffect, useState, useMemo, useCallback } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { PlayerProfile, OTBProfile, StyleMetrics, OpeningStats, Weakness, ErrorProfile, PhaseErrors } from "@/lib/types";
+import {
+  PlayerProfile,
+  OTBProfile,
+  StyleMetrics,
+  OpeningStats,
+  Weakness,
+  ErrorProfile,
+  PhaseErrors,
+  GameEvalData,
+} from "@/lib/types";
+import { StockfishEngine } from "@/lib/stockfish-worker";
+import {
+  EvalMode,
+  batchEvaluateGames,
+} from "@/lib/engine/batch-eval";
+import { buildErrorProfileFromEvals } from "@/lib/engine/error-profile";
 import PlayerCard from "@/components/PlayerCard";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
@@ -26,7 +41,17 @@ function mergeOpenings(
   openingsSets: { white: OpeningStats[]; black: OpeningStats[] }[]
 ): { white: OpeningStats[]; black: OpeningStats[] } {
   const mergeColor = (lists: OpeningStats[][]): OpeningStats[] => {
-    const map = new Map<string, { eco: string; name: string; wins: number; draws: number; losses: number; total: number }>();
+    const map = new Map<
+      string,
+      {
+        eco: string;
+        name: string;
+        wins: number;
+        draws: number;
+        losses: number;
+        total: number;
+      }
+    >();
     for (const list of lists) {
       for (const op of list) {
         const existing = map.get(op.name);
@@ -47,7 +72,10 @@ function mergeOpenings(
         }
       }
     }
-    const totalGames = Array.from(map.values()).reduce((sum, e) => sum + e.total, 0);
+    const totalGames = Array.from(map.values()).reduce(
+      (sum, e) => sum + e.total,
+      0
+    );
     return Array.from(map.values())
       .filter((e) => e.total >= 2)
       .sort((a, b) => b.total - a.total)
@@ -69,9 +97,15 @@ function mergeOpenings(
   };
 }
 
-function mergeSpeedProfiles(profile: PlayerProfile, speeds: string[]): FilteredData {
+function mergeSpeedProfiles(
+  profile: PlayerProfile,
+  speeds: string[]
+): FilteredData {
   let totalGames = 0;
-  let aggSum = 0, tacSum = 0, posSum = 0, endSum = 0;
+  let aggSum = 0,
+    tacSum = 0,
+    posSum = 0,
+    endSum = 0;
 
   for (const s of speeds) {
     const sp = profile.bySpeed[s];
@@ -83,19 +117,22 @@ function mergeSpeedProfiles(profile: PlayerProfile, speeds: string[]): FilteredD
     endSum += sp.style.endgame * sp.games;
   }
 
-  const style: StyleMetrics = totalGames > 0
-    ? {
-        aggression: Math.round(aggSum / totalGames),
-        tactical: Math.round(tacSum / totalGames),
-        positional: Math.round(posSum / totalGames),
-        endgame: Math.round(endSum / totalGames),
-        sampleSize: totalGames,
-      }
-    : profile.style;
+  const style: StyleMetrics =
+    totalGames > 0
+      ? {
+          aggression: Math.round(aggSum / totalGames),
+          tactical: Math.round(tacSum / totalGames),
+          positional: Math.round(posSum / totalGames),
+          endgame: Math.round(endSum / totalGames),
+          sampleSize: totalGames,
+        }
+      : profile.style;
 
   const openingsSets = speeds
     .map((s) => profile.bySpeed[s]?.openings)
-    .filter((o): o is { white: OpeningStats[]; black: OpeningStats[] } => !!o);
+    .filter(
+      (o): o is { white: OpeningStats[]; black: OpeningStats[] } => !!o
+    );
   const openings = mergeOpenings(openingsSets);
 
   const seen = new Set<string>();
@@ -113,15 +150,18 @@ function mergeSpeedProfiles(profile: PlayerProfile, speeds: string[]): FilteredD
   const errorProfiles = speeds
     .map((s) => profile.bySpeed[s]?.errorProfile)
     .filter((e): e is ErrorProfile => !!e && e.gamesAnalyzed > 0);
-  const errorProfile = errorProfiles.length > 0
-    ? mergeErrorProfiles(errorProfiles)
-    : undefined;
+  const errorProfile =
+    errorProfiles.length > 0 ? mergeErrorProfiles(errorProfiles) : undefined;
 
   return { style, openings, weaknesses, errorProfile, games: totalGames };
 }
 
 function mergePhaseErrors(phases: PhaseErrors[]): PhaseErrors {
-  let totalMoves = 0, inaccuracies = 0, mistakes = 0, blunders = 0, totalCPL = 0;
+  let totalMoves = 0,
+    inaccuracies = 0,
+    mistakes = 0,
+    blunders = 0,
+    totalCPL = 0;
   for (const p of phases) {
     totalMoves += p.totalMoves;
     inaccuracies += p.inaccuracies;
@@ -165,7 +205,22 @@ export default function ScoutPage() {
   const [selectedSpeeds, setSelectedSpeeds] = useState<string[]>([]);
   const [otbProfile, setOtbProfile] = useState<OTBProfile | null>(null);
 
-  // Load OTB data from sessionStorage on mount
+  // Upgrade state
+  const [isUpgrading, setIsUpgrading] = useState(false);
+  const [upgradeProgress, setUpgradeProgress] = useState<{
+    gamesComplete: number;
+    totalGames: number;
+    pct: number;
+  } | null>(null);
+  const [enhancedErrorProfile, setEnhancedErrorProfile] =
+    useState<ErrorProfile | null>(null);
+  const [upgradeComplete, setUpgradeComplete] = useState(false);
+  const [totalGameCount, setTotalGameCount] = useState<number | null>(null);
+  const evalEngineRef = useRef<StockfishEngine | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const computedEvalsRef = useRef<GameEvalData[]>([]);
+
+  // Load OTB data and cached enhanced profile from sessionStorage on mount
   useEffect(() => {
     try {
       const stored = sessionStorage.getItem(`otb:${username}`);
@@ -175,12 +230,27 @@ export default function ScoutPage() {
     } catch {
       // Ignore parse errors
     }
+    try {
+      const cached = sessionStorage.getItem(`enhanced-profile:${username}`);
+      const cachedCount = sessionStorage.getItem(
+        `enhanced-profile-total:${username}`
+      );
+      if (cached) {
+        setEnhancedErrorProfile(JSON.parse(cached));
+        setUpgradeComplete(true);
+        if (cachedCount) setTotalGameCount(parseInt(cachedCount));
+      }
+    } catch {
+      // Ignore parse errors
+    }
   }, [username]);
 
   useEffect(() => {
     async function loadProfile() {
       try {
-        const res = await fetch(`/api/profile/${encodeURIComponent(username)}`);
+        const res = await fetch(
+          `/api/profile/${encodeURIComponent(username)}`
+        );
 
         if (!res.ok) {
           const data = await res.json();
@@ -207,6 +277,14 @@ export default function ScoutPage() {
     loadProfile();
   }, [username]);
 
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+      evalEngineRef.current?.quit();
+    };
+  }, []);
+
   const toggleSpeed = useCallback((speed: string) => {
     setSelectedSpeeds((prev) => {
       if (prev.includes(speed)) {
@@ -223,7 +301,6 @@ export default function ScoutPage() {
     (otb: OTBProfile) => {
       setOtbProfile(otb);
       setActiveTab("otb");
-      // Persist to sessionStorage
       try {
         sessionStorage.setItem(`otb:${username}`, JSON.stringify(otb));
       } catch {
@@ -270,6 +347,134 @@ export default function ScoutPage() {
     // Multi-speed merge
     return mergeSpeedProfiles(profile, selectedSpeeds);
   }, [profile, selectedSpeeds]);
+
+  // Handle upgrade request
+  const handleUpgrade = useCallback(
+    async (mode: EvalMode) => {
+      // Abort any existing computation
+      abortRef.current?.abort();
+      const abort = new AbortController();
+      abortRef.current = abort;
+
+      setIsUpgrading(true);
+      setUpgradeProgress(null);
+      setUpgradeComplete(false);
+      computedEvalsRef.current = [];
+
+      try {
+        // Lazy-fetch game moves from bot-data API
+        const query =
+          selectedSpeeds.length > 0
+            ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
+            : "";
+        const res = await fetch(
+          `/api/bot-data/${encodeURIComponent(username)}${query}`
+        );
+        if (!res.ok || abort.signal.aborted) {
+          setIsUpgrading(false);
+          return;
+        }
+
+        const botData = await res.json();
+        const allGameMoves: Array<{
+          moves: string;
+          playerColor: "white" | "black";
+          hasEvals: boolean;
+        }> = botData.gameMoves || [];
+
+        setTotalGameCount(allGameMoves.length);
+
+        // Filter to games WITHOUT evals — don't re-evaluate what Lichess already has
+        const unevaluated = allGameMoves.filter((g) => !g.hasEvals);
+
+        if (unevaluated.length === 0) {
+          // All games already have evals
+          setUpgradeComplete(true);
+          setIsUpgrading(false);
+          return;
+        }
+
+        // Initialize Stockfish engine if needed
+        if (!evalEngineRef.current) {
+          const engine = new StockfishEngine();
+          await engine.init();
+          evalEngineRef.current = engine;
+        }
+
+        if (abort.signal.aborted) return;
+
+        // Track the base error profile (from Lichess evals) for merging
+        const baseProfile = filteredData?.errorProfile;
+
+        const evalData = await batchEvaluateGames(
+          evalEngineRef.current,
+          unevaluated,
+          mode,
+          (progress) => {
+            if (abort.signal.aborted) return;
+
+            setUpgradeProgress({
+              gamesComplete: progress.gamesComplete,
+              totalGames: progress.totalGames,
+              pct:
+                progress.totalEvals > 0
+                  ? Math.round(
+                      (progress.evalsComplete / progress.totalEvals) * 100
+                    )
+                  : 0,
+            });
+          },
+          abort.signal
+        );
+
+        if (abort.signal.aborted) return;
+
+        // Build error profile from computed evals
+        const computedProfile = buildErrorProfileFromEvals(evalData);
+        computedEvalsRef.current = evalData;
+
+        // Merge with existing Lichess-based profile
+        const merged =
+          baseProfile && baseProfile.gamesAnalyzed > 0
+            ? mergeErrorProfiles([baseProfile, computedProfile])
+            : computedProfile;
+
+        setEnhancedErrorProfile(merged);
+        setUpgradeComplete(true);
+
+        // Cache in sessionStorage
+        try {
+          sessionStorage.setItem(
+            `enhanced-profile:${username}`,
+            JSON.stringify(merged)
+          );
+          sessionStorage.setItem(
+            `enhanced-profile-total:${username}`,
+            String(allGameMoves.length)
+          );
+        } catch {
+          // Storage full — non-fatal
+        }
+      } catch (err) {
+        if (!abort.signal.aborted) {
+          console.error("Upgrade error:", err);
+        }
+      } finally {
+        if (!abort.signal.aborted) {
+          setIsUpgrading(false);
+        }
+      }
+    },
+    [username, selectedSpeeds, filteredData]
+  );
+
+  // Determine displayed error profile: enhanced if available, otherwise base
+  const displayedErrorProfile =
+    enhancedErrorProfile || filteredData?.errorProfile;
+
+  // Total game count for upgrade UI
+  const displayedTotalGames =
+    totalGameCount ?? filteredData?.games ?? undefined;
 
   if (loading) {
     return (
@@ -347,7 +552,9 @@ export default function ScoutPage() {
                   }`}
                 >
                   {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
-                  <span className={isActive ? "text-green-200" : "text-zinc-600"}>
+                  <span
+                    className={isActive ? "text-green-200" : "text-zinc-600"}
+                  >
                     {data.games}
                   </span>
                 </button>
@@ -360,11 +567,19 @@ export default function ScoutPage() {
         <PlayerCard profile={profile} filteredGames={filteredData.games} />
 
         {/* Error Profile */}
-        {filteredData.errorProfile && filteredData.errorProfile.gamesAnalyzed > 0 && (
-          <div className="mt-4">
-            <ErrorProfileCard errorProfile={filteredData.errorProfile} />
-          </div>
-        )}
+        {displayedErrorProfile &&
+          (displayedErrorProfile.gamesAnalyzed > 0 || isUpgrading) && (
+            <div className="mt-4">
+              <ErrorProfileCard
+                errorProfile={displayedErrorProfile}
+                totalGames={displayedTotalGames}
+                onUpgrade={handleUpgrade}
+                upgradeProgress={upgradeProgress}
+                isUpgrading={isUpgrading}
+                upgradeComplete={upgradeComplete}
+              />
+            </div>
+          )}
 
         {/* OTB PGN Upload */}
         <OTBUploader
@@ -402,9 +617,7 @@ export default function ScoutPage() {
             {activeTab === "weaknesses" && (
               <WeaknessesTab weaknesses={filteredData.weaknesses} />
             )}
-            {activeTab === "prep" && (
-              <PrepTipsTab tips={profile.prepTips} />
-            )}
+            {activeTab === "prep" && <PrepTipsTab tips={profile.prepTips} />}
             {activeTab === "otb" && otbProfile && (
               <OTBAnalysisTab profile={otbProfile} />
             )}
@@ -414,11 +627,22 @@ export default function ScoutPage() {
         {/* Practice button */}
         <div className="mt-8 flex justify-center">
           <button
-            onClick={() =>
+            onClick={() => {
+              // Store enhanced profile for play page if available
+              if (enhancedErrorProfile) {
+                try {
+                  sessionStorage.setItem(
+                    `enhanced-profile:${username}`,
+                    JSON.stringify(enhancedErrorProfile)
+                  );
+                } catch {
+                  // Storage full — non-fatal
+                }
+              }
               router.push(
                 `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`
-              )
-            }
+              );
+            }}
             className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
           >
             Practice against {profile.username}

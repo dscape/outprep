@@ -14,6 +14,7 @@ interface BotData {
   errorProfile: ErrorProfile;
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
+  gameMoves: Array<{ moves: string; playerColor: "white" | "black"; hasEvals: boolean }>;
 }
 
 const cache = new Map<string, { data: BotData; expires: number }>();
@@ -44,7 +45,21 @@ export async function GET(
     const whiteTrie = buildOpeningTrie(filtered, username, "white");
     const blackTrie = buildOpeningTrie(filtered, username, "black");
 
-    const data: BotData = { errorProfile, whiteTrie, blackTrie };
+    // Extract game moves for client-side batch eval
+    // playerColor = the profiled player's color (the opponent we're mimicking)
+    const gameMoves = filtered
+      .filter((g) => g.moves)
+      .map((g) => ({
+        moves: g.moves,
+        playerColor: (
+          g.players.white?.user?.id?.toLowerCase() === username.toLowerCase()
+            ? "white"
+            : "black"
+        ) as "white" | "black",
+        hasEvals: !!g.analysis && g.analysis.length > 0,
+      }));
+
+    const data: BotData = { errorProfile, whiteTrie, blackTrie, gameMoves };
     cache.set(cacheKey, { data, expires: Date.now() + TTL });
 
     return NextResponse.json(data);

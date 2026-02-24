@@ -7,6 +7,7 @@ import { StockfishEngine } from "@/lib/stockfish-worker";
 import { ErrorProfile } from "@/lib/types";
 import { OpeningTrie } from "@/lib/engine/opening-trie";
 import { BotController, BotMoveResult } from "@/lib/engine/bot-controller";
+import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
 
 interface ChessBoardProps {
   playerColor: "white" | "black";
@@ -14,7 +15,10 @@ interface ChessBoardProps {
   fideEstimate: number;
   errorProfile: ErrorProfile | null;
   openingTrie: OpeningTrie | null;
-  onGameEnd: (pgn: string, result: string) => void;
+  onGameEnd: (pgn: string, result: string, precomputedAnalysis?: {
+    moves: import("@/lib/types").MoveEval[];
+    summary: import("@/lib/types").AnalysisSummary;
+  }) => void;
 }
 
 export default function ChessBoard({
@@ -34,9 +38,12 @@ export default function ChessBoard({
     phase: string;
     skill: number;
   } | null>(null);
+  const [legalMoveSquares, setLegalMoveSquares] = useState<Record<string, React.CSSProperties>>({});
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
+  const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
   const gameEndedRef = useRef(false);
+  const plyRef = useRef(0);
 
   const botColor = playerColor === "white" ? "black" : "white";
 
@@ -50,19 +57,41 @@ export default function ChessBoard({
         if (chess.isCheckmate()) {
           result = chess.turn() === "w" ? "0-1" : "1-0";
         }
-        onGameEnd(chess.pgn(), result);
+
+        // Try to get pre-computed analysis from live analyzer
+        const analyzer = analyzerRef.current;
+        let precomputed: {
+          moves: import("@/lib/types").MoveEval[];
+          summary: import("@/lib/types").AnalysisSummary;
+        } | undefined;
+
+        if (analyzer) {
+          const history = chess.history();
+          const analysis = analyzer.buildAnalysis(history, playerColor);
+          if (analysis) {
+            precomputed = analysis;
+          }
+        }
+
+        onGameEnd(chess.pgn(), result, precomputed);
       }
     },
-    [onGameEnd],
+    [onGameEnd, playerColor],
   );
 
-  // Initialize Stockfish engine + BotController
+  // Initialize Stockfish engine + BotController + LiveGameAnalyzer
   useEffect(() => {
     const engine = new StockfishEngine();
     engineRef.current = engine;
 
-    engine
-      .init()
+    // Initialize live analyzer in parallel
+    const analyzer = new LiveGameAnalyzer();
+    analyzerRef.current = analyzer;
+
+    Promise.all([
+      engine.init(),
+      analyzer.init(),
+    ])
       .then(() => {
         const bot = new BotController({
           engine,
@@ -73,13 +102,29 @@ export default function ChessBoard({
         });
         botRef.current = bot;
         setEngineReady(true);
+
+        // Record starting position (ply 0)
+        analyzer.recordPosition(0, gameRef.current.fen());
       })
       .catch((err) => {
-        console.error("Failed to init Stockfish:", err);
+        console.error("Failed to init engines:", err);
+        // Still try to use bot engine even if analyzer fails
+        engine.init().then(() => {
+          const bot = new BotController({
+            engine,
+            fideEstimate,
+            errorProfile,
+            openingTrie,
+            botColor,
+          });
+          botRef.current = bot;
+          setEngineReady(true);
+        }).catch(() => {});
       });
 
     return () => {
       engine.quit();
+      analyzer.quit();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -124,9 +169,14 @@ export default function ChessBoard({
 
       const move = game.move({ from, to, promotion });
       if (move) {
+        plyRef.current++;
         setFen(game.fen());
         setMoveSource(result.source);
         setLastMoveInfo({ phase: result.phase, skill: result.dynamicSkill });
+
+        // Record position for live analysis
+        analyzerRef.current?.recordPosition(plyRef.current, game.fen());
+
         checkGameEnd(game);
       }
     } catch (err) {
@@ -152,6 +202,42 @@ export default function ChessBoard({
     }
   }, [fen, playerColor, engineReady, makeBotMove]);
 
+  // Compute legal move highlights when user starts dragging
+  function onPieceDrag({ square }: { piece: unknown; square: string | null }) {
+    const game = gameRef.current;
+    if (gameEndedRef.current || !square) return;
+
+    const isPlayerTurn =
+      (playerColor === "white" && game.turn() === "w") ||
+      (playerColor === "black" && game.turn() === "b");
+    if (!isPlayerTurn) return;
+
+    const moves = game.moves({ square: square as Square, verbose: true });
+
+    const styles: Record<string, React.CSSProperties> = {};
+
+    // Highlight source square
+    styles[square] = { backgroundColor: "rgba(255, 255, 0, 0.4)" };
+
+    for (const move of moves) {
+      if (move.captured) {
+        // Capture: ring around the edge
+        styles[move.to] = {
+          background: "radial-gradient(transparent 0%, transparent 79%, rgba(0,0,0,0.3) 80%)",
+          borderRadius: "50%",
+        };
+      } else {
+        // Empty: centered dot
+        styles[move.to] = {
+          background: "radial-gradient(rgba(0,0,0,0.25) 25%, transparent 25%)",
+          borderRadius: "50%",
+        };
+      }
+    }
+
+    setLegalMoveSquares(styles);
+  }
+
   function onDrop({
     sourceSquare,
     targetSquare,
@@ -160,6 +246,9 @@ export default function ChessBoard({
     sourceSquare: string;
     targetSquare: string | null;
   }): boolean {
+    // Clear legal move highlights
+    setLegalMoveSquares({});
+
     const game = gameRef.current;
     if (gameEndedRef.current) return false;
     if (!targetSquare) return false;
@@ -179,7 +268,12 @@ export default function ChessBoard({
 
       if (!move) return false;
 
+      plyRef.current++;
       setFen(game.fen());
+
+      // Record position for live analysis
+      analyzerRef.current?.recordPosition(plyRef.current, game.fen());
+
       checkGameEnd(game);
       return true;
     } catch {
@@ -190,8 +284,26 @@ export default function ChessBoard({
   function handleResign() {
     if (gameEndedRef.current) return;
     gameEndedRef.current = true;
+
+    const game = gameRef.current;
     const result = playerColor === "white" ? "0-1" : "1-0";
-    onGameEnd(gameRef.current.pgn(), result);
+
+    // Try to get pre-computed analysis
+    const analyzer = analyzerRef.current;
+    let precomputed: {
+      moves: import("@/lib/types").MoveEval[];
+      summary: import("@/lib/types").AnalysisSummary;
+    } | undefined;
+
+    if (analyzer) {
+      const history = game.history();
+      const analysis = analyzer.buildAnalysis(history, playerColor);
+      if (analysis) {
+        precomputed = analysis;
+      }
+    }
+
+    onGameEnd(game.pgn(), result, precomputed);
   }
 
   return (
@@ -225,7 +337,9 @@ export default function ChessBoard({
           options={{
             position: fen,
             onPieceDrop: onDrop,
+            onPieceDrag: onPieceDrag,
             boardOrientation: playerColor,
+            squareStyles: legalMoveSquares,
             boardStyle: {
               borderRadius: "8px",
               boxShadow: "0 4px 20px rgba(0,0,0,0.4)",

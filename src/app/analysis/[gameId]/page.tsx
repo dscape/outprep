@@ -3,12 +3,14 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Chess } from "chess.js";
-import { GameAnalysis, PlayerProfile } from "@/lib/types";
+import { GameAnalysis, PlayerProfile, MoveEval, AnalysisSummary } from "@/lib/types";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { evaluateGame } from "@/lib/analysis/stockfish-eval";
 import { classifyPositions } from "@/lib/analysis/position-classifier";
 import { tagMoments } from "@/lib/analysis/opponent-context";
 import { generateNarrative } from "@/lib/analysis/template-engine";
+import { lookupOpening } from "@/lib/analysis/opening-lookup";
+import { describeMoveError } from "@/lib/analysis/move-descriptions";
 import AnalysisCard from "@/components/AnalysisCard";
 
 interface StoredGame {
@@ -17,6 +19,8 @@ interface StoredGame {
   playerColor: "white" | "black";
   opponentUsername: string;
   opponentFideEstimate?: number;
+  precomputedMoves?: MoveEval[];
+  precomputedSummary?: AnalysisSummary;
 }
 
 export default function AnalysisPage() {
@@ -41,53 +45,71 @@ export default function AnalysisPage() {
       const gameData: StoredGame = JSON.parse(raw);
 
       try {
-        // Step 0: Fetch opponent profile
+        // Step 0: Fetch opponent profile + opening in parallel
         setStage("Loading opponent profile...");
-        let profile: PlayerProfile | null = null;
-        try {
-          const profileRes = await fetch(
-            `/api/analysis?username=${encodeURIComponent(gameData.opponentUsername)}`
+
+        const [profile, opening] = await Promise.all([
+          fetchProfile(gameData.opponentUsername),
+          lookupOpening(gameData.pgn),
+        ]);
+
+        let moves: MoveEval[];
+        let summary: AnalysisSummary;
+
+        // Check for pre-computed analysis from live game analyzer
+        if (gameData.precomputedMoves && gameData.precomputedSummary) {
+          // Skip Step 1 entirely — use pre-computed analysis (instant!)
+          setStage("Loading pre-computed analysis...");
+          moves = gameData.precomputedMoves;
+          summary = gameData.precomputedSummary;
+        } else {
+          // Fallback: run full Stockfish analysis (slow path, ~3-7 min)
+          setStage("Running engine analysis...");
+          const engine = new StockfishEngine();
+          await engine.init();
+
+          const result = await evaluateGame(
+            gameData.pgn,
+            engine,
+            (ply, total) => {
+              setProgress(Math.round((ply / total) * 100));
+            },
+            gameData.playerColor,
           );
-          if (profileRes.ok) {
-            profile = await profileRes.json();
-          }
-        } catch {
-          // Non-fatal: analysis works without profile
+
+          moves = result.moves;
+          summary = result.summary;
+          engine.quit();
         }
 
-        // Step 1: Stockfish evaluation
-        setStage("Running engine analysis...");
-        const engine = new StockfishEngine();
-        await engine.init();
+        // Step 2: Generate English descriptions for errors
+        setStage("Analyzing mistakes...");
+        for (const move of moves) {
+          if (
+            move.classification === "blunder" ||
+            move.classification === "mistake" ||
+            move.classification === "inaccuracy"
+          ) {
+            move.description = describeMoveError(move);
+          }
+        }
 
-        const { moves, summary } = await evaluateGame(
-          gameData.pgn,
-          engine,
-          (ply, total) => {
-            setProgress(Math.round((ply / total) * 100));
-          },
-          gameData.playerColor,
-        );
-
-        engine.quit();
-
-        // Step 2: Position classification
+        // Step 3: Position classification
         setStage("Classifying positions...");
         const contexts = classifyPositions(gameData.pgn, moves);
 
-        // Step 3: Opponent context overlay
+        // Step 4: Opponent context overlay
         setStage("Cross-referencing opponent patterns...");
         const keyMoments = profile
           ? tagMoments(moves, contexts, profile, gameData.playerColor)
           : [];
 
-        // Step 4: Generate narrative
+        // Step 5: Generate narrative
         setStage("Generating coaching analysis...");
         const chess = new Chess();
         chess.loadPgn(gameData.pgn);
         const totalMoves = Math.ceil(chess.history().length / 2);
 
-        const opening = extractOpening(gameData.pgn) || "Unknown Opening";
         const resultType = gameData.result === "1-0"
           ? (gameData.playerColor === "white" ? "win" : "loss")
           : gameData.result === "0-1"
@@ -196,13 +218,14 @@ export default function AnalysisPage() {
   );
 }
 
-function extractOpening(pgn: string): string | null {
-  const match = pgn.match(/\[Opening "([^"]+)"\]/);
-  if (match) return match[1];
-
-  // Try ECO tag
-  const ecoMatch = pgn.match(/\[ECO "([^"]+)"\]/);
-  if (ecoMatch) return ecoMatch[1];
-
+async function fetchProfile(username: string): Promise<PlayerProfile | null> {
+  try {
+    const res = await fetch(
+      `/api/analysis?username=${encodeURIComponent(username)}`
+    );
+    if (res.ok) return res.json();
+  } catch {
+    // Non-fatal
+  }
   return null;
 }
