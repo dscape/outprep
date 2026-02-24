@@ -345,18 +345,32 @@ export function detectWeaknesses(
     }
   }
 
-  // Check opening repertoire weaknesses
-  const allOpenings = [...openings.white, ...openings.black];
-  for (const op of allOpenings) {
+  // Check opening repertoire weaknesses (preserve which color opponent plays)
+  for (const op of openings.white) {
     if (op.games >= 5 && op.lossRate > 55) {
       weaknesses.push({
         area: `Weak in ${op.name}`,
         severity: op.lossRate > 70 ? "critical" : "moderate",
-        description: `Poor results with ${op.name} (${op.eco}). Consider studying this line or switching to a different opening.`,
+        description: `Poor results playing ${op.name} as White (${op.eco}).`,
         stat: `${op.lossRate}% loss rate in ${op.games} games`,
         confidence: conf,
         eco: op.eco,
         openingName: op.name,
+        opponentColor: "white",
+      });
+    }
+  }
+  for (const op of openings.black) {
+    if (op.games >= 5 && op.lossRate > 55) {
+      weaknesses.push({
+        area: `Weak in ${op.name}`,
+        severity: op.lossRate > 70 ? "critical" : "moderate",
+        description: `Poor results playing ${op.name} as Black (${op.eco}).`,
+        stat: `${op.lossRate}% loss rate in ${op.games} games`,
+        confidence: conf,
+        eco: op.eco,
+        openingName: op.name,
+        opponentColor: "black",
       });
     }
   }

@@ -29,10 +29,14 @@ export default function PlayPage() {
   const speeds = searchParams.get("speeds") || "";
   const eco = searchParams.get("eco") || "";
   const openingName = searchParams.get("openingName") || "";
+  const opponentWeaknessColor = searchParams.get("color") as "white" | "black" | null;
 
   const [profile, setProfile] = useState<PlayProfile | null>(null);
   const [botData, setBotData] = useState<BotData | null>(null);
-  const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(null);
+  // Auto-select color when practicing a weakness: play the opposite of the opponent's weak color
+  const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(
+    opponentWeaknessColor ? (opponentWeaknessColor === "white" ? "black" : "white") : null
+  );
   const [profileReady, setProfileReady] = useState(false);
   const [botDataReady, setBotDataReady] = useState(false);
   const [error, setError] = useState("");

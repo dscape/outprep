@@ -29,6 +29,7 @@ export interface Weakness {
   confidence?: "low" | "medium" | "high";
   eco?: string;           // ECO code, e.g. "A07"
   openingName?: string;   // Opening family name, e.g. "King's Indian Attack"
+  opponentColor?: "white" | "black"; // Which color the opponent plays this weak opening as
 }
 
 export interface OpeningStats {

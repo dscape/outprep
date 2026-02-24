@@ -74,6 +74,7 @@ export default function WeaknessesTab({ weaknesses, username, speeds }: Weakness
                   if (speeds) params.set("speeds", speeds);
                   params.set("eco", w.eco!);
                   if (w.openingName) params.set("openingName", w.openingName);
+                  if (w.opponentColor) params.set("color", w.opponentColor);
                   router.push(
                     `/play/${encodeURIComponent(username)}?${params.toString()}`
                   );

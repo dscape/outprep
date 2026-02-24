@@ -18,7 +18,9 @@
       "Bash(node:*)",
       "Bash(npx tsc:*)",
       "Bash(curl:*)",
-      "Bash(python3:*)"
+      "Bash(python3:*)",
+      "Bash(npx next build:*)",
+      "Bash(grep:*)"
     ]
   }
 }

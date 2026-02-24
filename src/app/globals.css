@@ -18,6 +18,10 @@ body {
   font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
 }
 
+button {
+  cursor: pointer;
+}
+
 /* Chess board responsive sizing */
 .chess-board-container {
   width: min(90vw, 560px);
