@@ -248,7 +248,8 @@ export class LiveGameAnalyzer {
       if (!isPlayerMove) continue;
 
       if (move.evalDelta > 0) {
-        totalCPL += move.evalDelta;
+        // Cap at 500cp so mate-score blunders don't dominate the average
+        totalCPL += Math.min(move.evalDelta, 500);
       }
       moveCount++;
 

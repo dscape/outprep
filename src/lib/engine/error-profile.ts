@@ -108,14 +108,13 @@ export function buildErrorProfile(
 
 interface PhaseAccumulator {
   totalMoves: number;
-  inaccuracies: number;
   mistakes: number;
   blunders: number;
   totalCPL: number;
 }
 
 function createAccumulator(): PhaseAccumulator {
-  return { totalMoves: 0, inaccuracies: 0, mistakes: 0, blunders: 0, totalCPL: 0 };
+  return { totalMoves: 0, mistakes: 0, blunders: 0, totalCPL: 0 };
 }
 
 function addMove(acc: PhaseAccumulator, cpLoss: number): void {
@@ -126,16 +125,13 @@ function addMove(acc: PhaseAccumulator, cpLoss: number): void {
     acc.blunders++;
   } else if (cpLoss >= 100) {
     acc.mistakes++;
-  } else if (cpLoss >= 50) {
-    acc.inaccuracies++;
   }
 }
 
 function finalizePhase(acc: PhaseAccumulator): PhaseErrors {
-  const totalErrors = acc.inaccuracies + acc.mistakes + acc.blunders;
+  const totalErrors = acc.mistakes + acc.blunders;
   return {
     totalMoves: acc.totalMoves,
-    inaccuracies: acc.inaccuracies,
     mistakes: acc.mistakes,
     blunders: acc.blunders,
     avgCPL: acc.totalMoves > 0 ? Math.round(acc.totalCPL / acc.totalMoves) : 0,

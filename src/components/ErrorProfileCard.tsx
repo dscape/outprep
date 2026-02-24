@@ -17,22 +17,15 @@ interface ErrorProfileCardProps {
 }
 
 /**
- * Each bar always takes full width. The colored portion (errors) is scaled
- * relative to the worst phase so bars are visually comparable:
- *   - Worst phase → errors fill 100% of bar
- *   - Other phases → errors fill (their rate / worst rate) of bar
- *   - Remaining is gray (clean moves)
- *
- * Within the colored portion, blunders/mistakes/inaccuracies are stacked.
+ * Each bar is scaled independently against a fixed reference rate (20%).
+ * Within the colored portion, blunders and mistakes are stacked.
  */
 function PhaseBar({
   label,
   phase,
-  maxErrorRate,
 }: {
   label: string;
   phase: PhaseErrors;
-  maxErrorRate: number;
 }) {
   const errorPct = (phase.errorRate * 100).toFixed(1);
 
@@ -48,19 +41,17 @@ function PhaseBar({
     );
   }
 
-  // Total width of the colored portion (relative to worst phase)
-  const filledPct =
-    maxErrorRate > 0 ? (phase.errorRate / maxErrorRate) * 100 : 0;
+  // Scale against a fixed reference rate: 20% error rate = full bar
+  const REFERENCE_RATE = 0.20;
+  const filledPct = Math.min((phase.errorRate / REFERENCE_RATE) * 100, 100);
 
-  const totalErrors = phase.inaccuracies + phase.mistakes + phase.blunders;
+  const totalErrors = phase.mistakes + phase.blunders;
 
   // Each segment's share of the colored portion
   const blunderShare =
     totalErrors > 0 ? (phase.blunders / totalErrors) * filledPct : 0;
   const mistakeShare =
     totalErrors > 0 ? (phase.mistakes / totalErrors) * filledPct : 0;
-  const inaccuracyShare =
-    totalErrors > 0 ? (phase.inaccuracies / totalErrors) * filledPct : 0;
 
   return (
     <div className="space-y-1.5">
@@ -93,19 +84,6 @@ function PhaseBar({
             {phase.mistakes >= 2 && mistakeShare > 6 && (
               <span className="text-[10px] text-zinc-900 font-medium">
                 {phase.mistakes}
-              </span>
-            )}
-          </div>
-        )}
-        {/* Inaccuracies (orange) */}
-        {inaccuracyShare > 0 && (
-          <div
-            className="bg-orange-500/60 flex items-center justify-center shrink-0"
-            style={{ width: `${inaccuracyShare}%`, minWidth: "3px" }}
-          >
-            {phase.inaccuracies >= 2 && inaccuracyShare > 6 && (
-              <span className="text-[10px] text-white font-medium">
-                {phase.inaccuracies}
               </span>
             )}
           </div>
@@ -164,13 +142,6 @@ export default function ErrorProfileCard({
     return null;
   }
 
-  const maxErrorRate = Math.max(
-    errorProfile.opening.errorRate,
-    errorProfile.middlegame.errorRate,
-    errorProfile.endgame.errorRate,
-    0.01
-  );
-
   const insight = generateInsight(errorProfile);
 
   const hasUnevaluatedGames =
@@ -196,17 +167,14 @@ export default function ErrorProfileCard({
         <PhaseBar
           label="Opening"
           phase={errorProfile.opening}
-          maxErrorRate={maxErrorRate}
         />
         <PhaseBar
           label="Middlegame"
           phase={errorProfile.middlegame}
-          maxErrorRate={maxErrorRate}
         />
         <PhaseBar
           label="Endgame"
           phase={errorProfile.endgame}
-          maxErrorRate={maxErrorRate}
         />
       </div>
 
@@ -219,10 +187,6 @@ export default function ErrorProfileCard({
         <span className="flex items-center gap-1">
           <span className="inline-block w-2 h-2 rounded-sm bg-yellow-500/80" />{" "}
           Mistakes
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-sm bg-orange-500/60" />{" "}
-          Inaccuracies
         </span>
       </div>
 

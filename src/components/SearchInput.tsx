@@ -54,7 +54,8 @@ export default function SearchInput() {
             setError("");
           }}
           placeholder="Enter Lichess username..."
-          autoComplete="off"
+          name="lichess-search"
+          autoComplete="one-time-code"
           data-1p-ignore
           data-lpignore="true"
           data-form-type="other"
@@ -65,7 +66,7 @@ export default function SearchInput() {
         <button
           type="submit"
           disabled={loading || !username.trim()}
-          className="absolute right-1.5 top-1.5 rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? (
             <span className="flex items-center gap-1.5">

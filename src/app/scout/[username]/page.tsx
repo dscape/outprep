@@ -158,21 +158,18 @@ function mergeSpeedProfiles(
 
 function mergePhaseErrors(phases: PhaseErrors[]): PhaseErrors {
   let totalMoves = 0,
-    inaccuracies = 0,
     mistakes = 0,
     blunders = 0,
     totalCPL = 0;
   for (const p of phases) {
     totalMoves += p.totalMoves;
-    inaccuracies += p.inaccuracies;
     mistakes += p.mistakes;
     blunders += p.blunders;
     totalCPL += p.avgCPL * p.totalMoves;
   }
-  const totalErrors = inaccuracies + mistakes + blunders;
+  const totalErrors = mistakes + blunders;
   return {
     totalMoves,
-    inaccuracies,
     mistakes,
     blunders,
     avgCPL: totalMoves > 0 ? Math.round(totalCPL / totalMoves) : 0,
@@ -345,6 +342,14 @@ export default function ScoutPage() {
       // Ignore
     }
   }, [username, activeTab]);
+
+  // Clear enhanced (upgrade) error profile when speed filter changes
+  // so the base speed-filtered profile is used instead
+  useEffect(() => {
+    setEnhancedErrorProfile(null);
+    setUpgradeComplete(false);
+    setTotalGameCount(null);
+  }, [selectedSpeeds]);
 
   const filteredData = useMemo((): FilteredData | null => {
     if (!profile) return null;

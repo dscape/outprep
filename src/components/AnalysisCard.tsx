@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useCallback, useRef } from "react";
+import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "react";
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
 import { GameAnalysis, MoveEval, MomentTag } from "@/lib/types";
@@ -499,32 +499,36 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
 
             {/* Moves tab */}
             {viewTab === "moves" && (
-              <div className="max-h-[420px] overflow-y-auto pr-1 space-y-0.5 scrollbar-thin">
-                {movePairs.map((pair) => (
-                  <div key={pair.num} className="flex items-center gap-1">
-                    <span className="w-7 text-right text-xs text-zinc-600 font-mono shrink-0">
-                      {pair.num}.
-                    </span>
-                    <div className="flex gap-1">
-                      {pair.white && (
-                        <MoveButton
-                          move={pair.white}
-                          isSelected={selectedPly === pair.white.ply}
-                          isPlayerMove={analysis.playerColor === "white"}
-                          onClick={() => setSelectedPly(pair.white!.ply)}
-                        />
-                      )}
-                      {pair.black && (
-                        <MoveButton
-                          move={pair.black}
-                          isSelected={selectedPly === pair.black.ply}
-                          isPlayerMove={analysis.playerColor === "black"}
-                          onClick={() => setSelectedPly(pair.black!.ply)}
-                        />
-                      )}
-                    </div>
-                  </div>
-                ))}
+              <div className="max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
+                <div className="grid grid-cols-[2rem_1fr_1fr] gap-y-0.5">
+                  {movePairs.map((pair) => (
+                    <Fragment key={pair.num}>
+                      <span className="text-right text-xs text-zinc-600 font-mono py-0.5 pr-1">
+                        {pair.num}.
+                      </span>
+                      <div className="py-0.5">
+                        {pair.white && (
+                          <MoveButton
+                            move={pair.white}
+                            isSelected={selectedPly === pair.white.ply}
+                            isPlayerMove={analysis.playerColor === "white"}
+                            onClick={() => setSelectedPly(pair.white!.ply)}
+                          />
+                        )}
+                      </div>
+                      <div className="py-0.5">
+                        {pair.black && (
+                          <MoveButton
+                            move={pair.black}
+                            isSelected={selectedPly === pair.black.ply}
+                            isPlayerMove={analysis.playerColor === "black"}
+                            onClick={() => setSelectedPly(pair.black!.ply)}
+                          />
+                        )}
+                      </div>
+                    </Fragment>
+                  ))}
+                </div>
               </div>
             )}
 

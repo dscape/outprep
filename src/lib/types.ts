@@ -175,11 +175,10 @@ export interface OTBProfile {
 
 export interface PhaseErrors {
   totalMoves: number;
-  inaccuracies: number;   // 50-100cp loss
   mistakes: number;       // 100-300cp loss
   blunders: number;       // 300+cp loss
   avgCPL: number;
-  errorRate: number;      // (inaccuracies + mistakes + blunders) / totalMoves
+  errorRate: number;      // (mistakes + blunders) / totalMoves
   blunderRate: number;    // blunders / totalMoves
 }
 

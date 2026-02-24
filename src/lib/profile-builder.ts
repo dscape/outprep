@@ -148,20 +148,15 @@ export function analyzeStyle(games: LichessGame[], username: string): StyleMetri
   if (gamesAnalyzed > 0) {
     const avgMoves = totalMoves / gamesAnalyzed;
 
-    // Aggression: sacrifice frequency + early decisive games (recalibrated)
-    aggression = Math.min(100, Math.round(
-      (earlyAttacks / gamesAnalyzed) * 80 +
-      (sacrifices / gamesAnalyzed) * 60 +
-      Math.max(0, (30 - avgMoves)) * 0.8
-    ));
+    // Aggression: % of games won quickly + sacrifice frequency
+    const earlyWinPct = (earlyAttacks / gamesAnalyzed) * 100;
+    const sacrificePct = (sacrifices / gamesAnalyzed) * 100;
+    aggression = Math.min(100, Math.round(earlyWinPct * 0.7 + sacrificePct * 0.3));
 
-    // Tactical: short decisive wins ratio (recalibrated)
-    tactical = Math.min(100, Math.round(
-      (tacticalWins / gamesAnalyzed) * 70 +
-      (earlyAttacks / gamesAnalyzed) * 40
-    ));
+    // Tactical: % of decisive games that ended in under 40 moves
+    tactical = Math.min(100, Math.round((tacticalWins / gamesAnalyzed) * 100));
 
-    // Positional: centered at 50, penalize early losses, mild bonus for longer games
+    // Positional: inverse of early-loss rate, bonus for longer average game length
     const earlyLosses = games.filter((g) => {
       const moves = g.moves?.split(" ") || [];
       const moveCount = Math.floor(moves.length / 2);
@@ -169,11 +164,9 @@ export function analyzeStyle(games: LichessGame[], username: string): StyleMetri
       const lost = (isWhite && g.winner === "black") || (!isWhite && g.winner === "white");
       return moveCount < 25 && lost;
     }).length;
-    positional = Math.min(100, Math.round(
-      50 -
-      (earlyLosses / gamesAnalyzed) * 60 +
-      Math.min(avgMoves - 20, 25) * 0.8
-    ));
+    const earlyLossPct = (earlyLosses / gamesAnalyzed) * 100;
+    const lengthBonus = Math.min(20, Math.max(0, (avgMoves - 25) * 0.8));
+    positional = clamp(Math.round(70 - earlyLossPct * 1.5 + lengthBonus), 0, 100);
 
     // Endgame: conversion rate in long games (30+ moves)
     endgame = longGames > 0
