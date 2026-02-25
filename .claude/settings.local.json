@@ -32,7 +32,8 @@
       "Bash(find:*)",
       "Bash(/tmp/verify_bug.md:*)",
       "Bash(/tmp/full_trace.md:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(git check-ignore:*)"
     ]
   }
 }

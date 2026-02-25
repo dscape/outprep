@@ -26,8 +26,11 @@ export async function history() {
     const status = cycle.accepted ? "✓ ACCEPTED" : "✗ REJECTED";
     const date = new Date(cycle.timestamp).toLocaleString();
 
+    const baselineStr = cycle.baselineScore != null
+      ? `  |  Baseline: ${(cycle.baselineScore * 100).toFixed(2)}%`
+      : "";
     console.log(`  ── Cycle ${cycle.cycle} (${date}) ── ${status}`);
-    console.log(`     Datasets: ${cycle.datasetsUsed}  |  Experiments: ${cycle.experimentsRun}  |  Best Δ: ${formatDelta(cycle.bestScoreDelta)}`);
+    console.log(`     Datasets: ${cycle.datasetsUsed}  |  Experiments: ${cycle.experimentsRun}  |  Best Δ: ${formatDelta(cycle.bestScoreDelta)}${baselineStr}`);
 
     if (cycle.configChanges.length > 0) {
       console.log(`     Changes:`);

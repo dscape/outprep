@@ -12,7 +12,7 @@ import { getOrCreateState, saveState } from "../state/tuner-state";
 import { createSweepPlan, isPlanComplete, planProgress } from "../loop/sweep-planner";
 import { createEngine, runExperiment, runBaseline } from "../loop/experiment-runner";
 import { averageMetrics, aggregateExperimentResults } from "../loop/result-aggregator";
-import { compositeScore } from "../scoring/composite-score";
+import { compositeScore, formatStrength } from "../scoring/composite-score";
 import { loadDataset } from "../data/dataset-manager";
 import type { Dataset } from "@outprep/harness";
 import type { DatasetRef, AggregatedResult } from "../state/types";
@@ -112,7 +112,7 @@ export async function sweep(options: SweepOptions) {
       const m = result.metrics;
       process.stdout.write("\r" + " ".repeat(70) + "\r");
       console.log(
-        `  Baseline ${ref.name}: match=${(m.matchRate * 100).toFixed(1)}% top4=${(m.topNRate * 100).toFixed(1)}% (${m.totalPositions} pos)`
+        `  Baseline ${ref.name} (${ref.elo}): match=${(m.matchRate * 100).toFixed(1)}% top4=${(m.topNRate * 100).toFixed(1)}% | botCPL=${m.avgBotCPL.toFixed(1)} playerCPL=${m.avgActualCPL.toFixed(1)} → ${formatStrength(m.avgActualCPL, m.avgBotCPL)} (${m.totalPositions} pos)`
       );
     }
 
@@ -136,7 +136,10 @@ export async function sweep(options: SweepOptions) {
       scoreDelta: 0,
     };
 
-    console.log(`\n  Baseline composite score: ${(baselineScore * 100).toFixed(2)}%\n`);
+    console.log(`\n  Baseline composite score: ${(baselineScore * 100).toFixed(2)}%`);
+    console.log(
+      `  Breakdown: match=${(baselineAggMetrics.matchRate * 100).toFixed(1)}%  top4=${(baselineAggMetrics.topNRate * 100).toFixed(1)}%  cplΔ=${baselineAggMetrics.cplDelta.toFixed(1)}  book=${(baselineAggMetrics.bookCoverage * 100).toFixed(1)}%  strength: ${formatStrength(baselineAggMetrics.avgActualCPL, baselineAggMetrics.avgBotCPL)}\n`
+    );
 
     // 2. Create or resume sweep plan
     if (!state.currentPlan || isPlanComplete(state.currentPlan)) {
@@ -155,9 +158,23 @@ export async function sweep(options: SweepOptions) {
 
     // 3. Run triage experiments (on representative subset of datasets)
     const triagePairs = selectTriageDatasets(datasetPairs);
+
+    // Compute triage-specific baseline from only the triage subset
+    // (avoids apples-to-oranges comparison with the full 16-dataset baseline)
+    const triageBaselineResults = baselineResults.filter(
+      (r) => triagePairs.some((tp) => tp.ref.name === r.ref.name)
+    );
+    const triageBaselineMetrics = averageMetrics(
+      triageBaselineResults.map((r) => ({ metrics: r.metrics, weight: r.metrics.totalPositions }))
+    );
+    const triageBaselineScore = compositeScore(triageBaselineMetrics);
+
     console.log("  ── Phase 3: Triage Runs ──\n");
     console.log(
-      `  Triage datasets (${triagePairs.length}/${datasetPairs.length}): ${triagePairs.map((p) => `${p.ref.name} (${p.ref.elo})`).join(", ")}\n`
+      `  Triage datasets (${triagePairs.length}/${datasetPairs.length}): ${triagePairs.map((p) => `${p.ref.name} (${p.ref.elo})`).join(", ")}`
+    );
+    console.log(
+      `  Triage baseline: ${(triageBaselineScore * 100).toFixed(2)}%  (full baseline: ${(baselineScore * 100).toFixed(2)}%)\n`
     );
     const allResults: Map<string, AggregatedResult> = new Map();
     const triageStart = Date.now();
@@ -208,7 +225,7 @@ export async function sweep(options: SweepOptions) {
           dataset: state.datasets.find((d) => d.name === r.ref.name)!,
           result: { metrics: r.metrics } as import("@outprep/harness").TestResult,
         })),
-        baselineScore
+        triageBaselineScore
       );
 
       spec.triageScore = aggResult.compositeScore;

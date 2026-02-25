@@ -57,6 +57,7 @@ export async function accept() {
       bestScoreDelta: proposal.rankedExperiments[0]?.scoreDelta ?? 0,
       accepted: true,
       configChanges: [],
+      baselineScore: proposal.baselineScore,
     });
     saveState(state);
     console.log("  Cycle recorded. Ready for next cycle.\n");
@@ -109,6 +110,7 @@ export async function accept() {
     bestScoreDelta: proposal.rankedExperiments[0]?.scoreDelta ?? 0,
     accepted: true,
     configChanges: proposal.configChanges,
+    baselineScore: proposal.baselineScore,
   });
   state.currentPlan = null;
   state.cycle++;

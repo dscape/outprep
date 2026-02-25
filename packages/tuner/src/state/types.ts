@@ -96,6 +96,10 @@ export interface Proposal {
   cycle: number;
   timestamp: string;
   baselineScore: number;
+  /** Full baseline metric breakdown (match%, top4%, CPL, etc.) */
+  baselineMetrics?: Metrics;
+  /** Per-dataset baseline metrics for strength calibration display */
+  baselineDatasetMetrics?: { dataset: string; elo: number; metrics: Metrics }[];
   rankedExperiments: AggregatedResult[];
   proposedConfig: BotConfig;
   configChanges: ConfigChange[];
@@ -124,6 +128,8 @@ export interface CycleRecord {
   bestScoreDelta: number;
   accepted: boolean;
   configChanges: ConfigChange[];
+  /** Baseline composite score for this cycle (tracks progression) */
+  baselineScore?: number;
 }
 
 /* ── Tuner State (top-level persistence) ─────────────────── */

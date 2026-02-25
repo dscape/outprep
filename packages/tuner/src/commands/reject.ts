@@ -57,6 +57,7 @@ export async function reject() {
     bestScoreDelta: proposal?.rankedExperiments[0]?.scoreDelta ?? 0,
     accepted: false,
     configChanges: [],
+    baselineScore: proposal?.baselineScore,
   });
 
   state.currentPlan = null;

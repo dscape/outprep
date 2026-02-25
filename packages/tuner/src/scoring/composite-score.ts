@@ -66,3 +66,15 @@ export function formatDelta(delta: number): string {
   const sign = delta >= 0 ? "+" : "";
   return sign + (delta * 100).toFixed(2) + "%";
 }
+
+/**
+ * Format the strength calibration difference between bot and player.
+ * Positive delta (actualCPL > botCPL) = bot is stronger than the player.
+ * Negative delta (actualCPL < botCPL) = bot is weaker than the player.
+ */
+export function formatStrength(actualCPL: number, botCPL: number): string {
+  const delta = actualCPL - botCPL;
+  if (Math.abs(delta) < 2) return "≈ calibrated";
+  if (delta > 0) return `${delta.toFixed(0)}cp too strong`;
+  return `${Math.abs(delta).toFixed(0)}cp too weak`;
+}

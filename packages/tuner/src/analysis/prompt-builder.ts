@@ -7,6 +7,7 @@
 
 import type { BotConfig } from "@outprep/engine";
 import type { AggregatedResult, CycleRecord } from "../state/types";
+import { formatStrength } from "../scoring/composite-score";
 
 function formatMetricsRow(label: string, r: AggregatedResult): string {
   const m = r.aggregatedMetrics;
@@ -57,17 +58,35 @@ function formatExperimentsTable(
 function formatHistory(history: CycleRecord[]): string {
   if (history.length === 0) return "This is the first tuning cycle.";
 
-  return history
-    .slice(-5) // Last 5 cycles
-    .map(
-      (c) =>
-        `Cycle ${c.cycle}: ${c.accepted ? "ACCEPTED" : "REJECTED"} — ` +
-        `${c.experimentsRun} experiments, best Δ = ${(c.bestScoreDelta * 100).toFixed(2)}%` +
-        (c.configChanges.length > 0
-          ? ` (changed: ${c.configChanges.map((ch) => ch.path).join(", ")})`
-          : "")
-    )
-    .join("\n");
+  const recent = history.slice(-5); // Last 5 cycles
+
+  const cycleLines = recent.map((c) => {
+    const baselineStr = c.baselineScore != null
+      ? `baseline=${(c.baselineScore * 100).toFixed(2)}%`
+      : "baseline=unknown";
+    let line =
+      `Cycle ${c.cycle}: ${c.accepted ? "ACCEPTED" : "REJECTED"} — ` +
+      `${baselineStr}, ${c.experimentsRun} experiments, best Δ = ${(c.bestScoreDelta * 100).toFixed(2)}%`;
+
+    if (c.configChanges.length > 0) {
+      const changeDetails = c.configChanges.map((ch) =>
+        `${ch.path}: ${JSON.stringify(ch.oldValue)} → ${JSON.stringify(ch.newValue)} (${(ch.scoreDelta >= 0 ? "+" : "")}${(ch.scoreDelta * 100).toFixed(2)}%)`
+      );
+      line += "\n  Changes:\n" + changeDetails.map((d) => `    - ${d}`).join("\n");
+    }
+
+    return line;
+  });
+
+  // Score trajectory line
+  const scores = recent
+    .filter((c) => c.baselineScore != null)
+    .map((c) => `${(c.baselineScore! * 100).toFixed(2)}%`);
+  const trajectory = scores.length > 0
+    ? `\nScore trajectory: ${scores.join(" → ")} → current`
+    : "";
+
+  return cycleLines.join("\n\n") + trajectory;
 }
 
 /**
@@ -99,6 +118,15 @@ ${JSON.stringify(bestConfig, null, 2)}
 ## Baseline Metrics (aggregated across ${baseline.datasetMetrics.length} datasets)
 ${formatMetricsRow("BASELINE", baseline)}
 
+## Baseline Strength Calibration
+${baseline.datasetMetrics
+  .sort((a, b) => a.elo - b.elo)
+  .map(
+    (dm) =>
+      `  ${dm.dataset} (Elo ${dm.elo}): botCPL=${dm.metrics.avgBotCPL.toFixed(1)} playerCPL=${dm.metrics.avgActualCPL.toFixed(1)} → ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)}`
+  )
+  .join("\n")}
+
 ## All Experiment Results
 ${formatExperimentsTable(baseline, experiments)}
 
@@ -120,7 +148,7 @@ ${experiments
       exp.datasetMetrics
         .map(
           (dm) =>
-            `  ${dm.dataset} (Elo ${dm.elo}): match=${(dm.metrics.matchRate * 100).toFixed(1)}% top4=${(dm.metrics.topNRate * 100).toFixed(1)}% cplΔ=${dm.metrics.cplDelta.toFixed(1)}`
+            `  ${dm.dataset} (Elo ${dm.elo}): match=${(dm.metrics.matchRate * 100).toFixed(1)}% top4=${(dm.metrics.topNRate * 100).toFixed(1)}% cplΔ=${dm.metrics.cplDelta.toFixed(1)} → ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)}`
         )
         .join("\n")
   )
@@ -155,5 +183,8 @@ Guidelines:
 2. Be conservative when combining changes — flag interaction risks.
 3. If no experiments improved, say so and suggest different perturbation ranges.
 4. Consider Elo-band-specific effects: a change that helps experts but hurts beginners may not be worth it.
-5. For code proposals, suggest specific engine changes (e.g., per-phase temperature, material-weighted scoring).`;
+5. For code proposals, suggest specific engine changes (e.g., per-phase temperature, material-weighted scoring).
+6. IMPORTANT: Prefer proposing ONE high-confidence change per cycle over multiple simultaneous changes. Changing multiple parameters at once makes it impossible to isolate which change caused improvements or regressions. Only combine changes when they are clearly independent (e.g., opening trie + endgame depth).
+7. Use the historical baseline scores to assess whether the tuning trajectory is improving overall. If scores have plateaued or regressed, consider reverting recent changes or trying a different approach.
+8. Pay special attention to strength calibration per Elo band. If the bot is "too strong" for low-Elo players or "too weak" for high-Elo players, prioritize parameters that control skill mapping (dynamicSkill, depthBySkill, temperatureScale).`;
 }

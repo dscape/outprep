@@ -14,6 +14,7 @@ import {
   generateProposal,
   writeProposal,
 } from "../analysis/report-generator";
+import { formatStrength } from "../scoring/composite-score";
 import type { AggregatedResult } from "../state/types";
 
 export async function analyze() {
@@ -52,6 +53,10 @@ export async function analyze() {
   console.log("  ╚══════════════════════════════════════════╝\n");
 
   console.log(`  Baseline score: ${(sweepData.baseline.compositeScore * 100).toFixed(2)}%`);
+  const bm = sweepData.baseline.aggregatedMetrics;
+  console.log(
+    `  Breakdown:      match=${(bm.matchRate * 100).toFixed(1)}%  top4=${(bm.topNRate * 100).toFixed(1)}%  cplΔ=${bm.cplDelta.toFixed(1)}  book=${(bm.bookCoverage * 100).toFixed(1)}%  strength: ${formatStrength(bm.avgActualCPL, bm.avgBotCPL)}`
+  );
   console.log(`  Experiments:    ${sweepData.experiments.length}`);
   console.log(`  Improving:      ${sweepData.experiments.filter((e) => e.scoreDelta > 0).length}\n`);
 

@@ -10,6 +10,16 @@ Autonomous engine accuracy improvement agent. Gathers data from diverse Lichess 
 
 The tuner uses the Claude API to analyze experiment results and synthesize recommendations. Without a valid API key, the program will refuse to run.
 
+The easiest way to configure your key is with a `.env` file:
+
+```bash
+cd packages/tuner
+cp .env.example .env
+# Edit .env and paste your API key
+```
+
+Alternatively, export it in your shell:
+
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
 ```
@@ -17,15 +27,16 @@ export ANTHROPIC_API_KEY=sk-ant-...
 ## Quick Start
 
 ```bash
-# 1. Set your API key
-export ANTHROPIC_API_KEY=sk-ant-...
+# 1. Set your API key (see Prerequisites above)
+cp packages/tuner/.env.example packages/tuner/.env
+# Edit packages/tuner/.env and paste your key
 
 # 2. Run a full tuning cycle
 npm run tuner -- start
 
 # The tuner will:
 #   1. Fetch games from players across 5 Elo bands
-#   2. Run ~40 parameter experiments against all datasets
+#   2. Run ~25 parameter experiments against all datasets
 #   3. Send results to Claude for analysis
 #   4. Generate a proposal with recommendations
 #   5. Pause and wait for your review
@@ -56,8 +67,9 @@ npm run tuner -- start [options]
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--skip-gather` | Reuse existing datasets | off |
-| `--max-experiments <n>` | Cap experiments per sweep | 40 |
-| `--triage-positions <n>` | Positions for quick triage runs | 50 |
+| `--force-gather` | Reset player pool to seeds and re-gather all datasets | off |
+| `--max-experiments <n>` | Cap experiments per sweep | 25 |
+| `--triage-positions <n>` | Positions for quick triage runs | 15 |
 | `--full-positions <n>` | Positions for full validation (0 = unlimited) | 0 |
 | `--seed <n>` | Base random seed | 42 |
 
@@ -84,8 +96,8 @@ npm run tuner -- sweep [options]
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--max-experiments <n>` | Cap total experiments | 40 |
-| `--triage-positions <n>` | Positions for triage runs | 50 |
+| `--max-experiments <n>` | Cap total experiments | 25 |
+| `--triage-positions <n>` | Positions for triage runs | 15 |
 | `--full-positions <n>` | Positions for full validation (0 = unlimited) | 0 |
 | `--seed <n>` | Base random seed | 42 |
 
@@ -147,7 +159,7 @@ GATHER → SWEEP → ANALYZE → PROPOSAL → (human review) → ACCEPT/REJECT �
    | Expert | 2000-2300 | 2 |
    | Master | 2300+ | 1 |
 
-2. **Sweep**: Tests config variations one parameter at a time. Each experiment modifies a single parameter from the current best config. Quick triage runs (~50 positions, ~10s each) filter candidates.
+2. **Sweep**: Tests config variations one parameter at a time. Each experiment modifies a single parameter from the current best config. Quick triage runs (~15 positions) filter candidates before full validation.
 
 3. **Analyze**: Sends all experiment results to Claude (Sonnet) for synthesis. Claude ranks improvements, proposes a combined config, and suggests code-level improvements.
 
@@ -209,9 +221,9 @@ Datasets are cached for 7 days before being re-fetched.
 
 ## Performance
 
-- **Triage run** (~50 positions): ~10s per experiment
+- **Triage run** (~15 positions, top-N eval skipped): ~3-5s per experiment
 - **Full validation** (~200 games, unlimited positions): ~7 min per experiment
-- **Full cycle** (gather + 40 triage experiments + analysis): ~15-30 min
+- **Full cycle** (gather + 25 triage experiments + analysis): ~15-30 min
 - **Lichess API**: Rate-limited to 1.5s between calls
 
 ## Project Structure

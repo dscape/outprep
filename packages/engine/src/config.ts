@@ -72,7 +72,7 @@ export const DEFAULT_CONFIG: BotConfig = {
   },
   dynamicSkill: {
     scale: -3,
-    perfectPhaseBonus: 6,
+    perfectPhaseBonus: 4,
     minOverallMoves: 50,
     minPhaseMoves: 10
   },
@@ -84,7 +84,7 @@ export const DEFAULT_CONFIG: BotConfig = {
   depthBySkill: [
     [
       3,
-      5
+      7
     ],
     [
       6,
@@ -112,7 +112,7 @@ export const DEFAULT_CONFIG: BotConfig = {
     ],
     [
       20,
-      22
+      24
     ]
   ],
   trie: {

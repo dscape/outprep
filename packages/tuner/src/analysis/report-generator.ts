@@ -10,7 +10,7 @@ import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { BotConfig } from "@outprep/engine";
 import type { AggregatedResult, Proposal, ConfigChange } from "../state/types";
-import { formatScore, formatDelta } from "../scoring/composite-score";
+import { formatScore, formatDelta, formatStrength } from "../scoring/composite-score";
 import { getConfigValue } from "../util/parameter-registry";
 import { getTunerRoot } from "../state/tuner-state";
 
@@ -108,6 +108,8 @@ export function generateProposal(
     cycle,
     timestamp: new Date().toISOString(),
     baselineScore: baseline.compositeScore,
+    baselineMetrics: baseline.aggregatedMetrics,
+    baselineDatasetMetrics: baseline.datasetMetrics,
     rankedExperiments: improving,
     proposedConfig,
     configChanges,
@@ -161,6 +163,39 @@ function generateMarkdown(proposal: Proposal): string {
     `**Baseline Score:** ${formatScore(proposal.baselineScore)}`,
     ``,
   ];
+
+  // Baseline metric breakdown
+  if (proposal.baselineMetrics) {
+    const m = proposal.baselineMetrics;
+    lines.push(
+      `| Metric | Value |`,
+      `|--------|-------|`,
+      `| Match Rate | ${(m.matchRate * 100).toFixed(1)}% |`,
+      `| Top-4 Rate | ${(m.topNRate * 100).toFixed(1)}% |`,
+      `| CPL Delta | ${m.cplDelta.toFixed(1)} |`,
+      `| Avg Bot CPL | ${m.avgBotCPL.toFixed(1)} |`,
+      `| Avg Actual CPL | ${m.avgActualCPL.toFixed(1)} |`,
+      `| Book Coverage | ${(m.bookCoverage * 100).toFixed(1)}% |`,
+      ``,
+    );
+  }
+
+  // Strength calibration per dataset
+  if (proposal.baselineDatasetMetrics && proposal.baselineDatasetMetrics.length > 0) {
+    const sorted = [...proposal.baselineDatasetMetrics].sort((a, b) => a.elo - b.elo);
+    lines.push(
+      `## Strength Calibration`,
+      ``,
+      `| Player | Elo | Bot CPL | Player CPL | Status |`,
+      `|--------|-----|---------|------------|--------|`,
+    );
+    for (const dm of sorted) {
+      lines.push(
+        `| ${dm.dataset} | ${dm.elo} | ${dm.metrics.avgBotCPL.toFixed(1)} | ${dm.metrics.avgActualCPL.toFixed(1)} | ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)} |`
+      );
+    }
+    lines.push(``);
+  }
 
   if (!proposal.usedClaudeAnalysis) {
     lines.push(
