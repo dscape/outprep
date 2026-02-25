@@ -114,6 +114,7 @@ export function generateProposal(
     summary,
     codeProposals,
     nextPriorities,
+    usedClaudeAnalysis: !!analysis,
   };
 }
 
@@ -159,11 +160,22 @@ function generateMarkdown(proposal: Proposal): string {
     `**Generated:** ${new Date(proposal.timestamp).toLocaleString()}`,
     `**Baseline Score:** ${formatScore(proposal.baselineScore)}`,
     ``,
+  ];
+
+  if (!proposal.usedClaudeAnalysis) {
+    lines.push(
+      `> **Note:** This report was generated WITHOUT Claude analysis (API unavailable).`,
+      `> Re-run with a valid ANTHROPIC_API_KEY for AI-powered insights.`,
+      ``,
+    );
+  }
+
+  lines.push(
     `## Summary`,
     ``,
     proposal.summary,
     ``,
-  ];
+  );
 
   if (proposal.configChanges.length > 0) {
     lines.push(`## Recommended Changes`, ``);

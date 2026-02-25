@@ -52,10 +52,20 @@ export async function start(options: StartOptions) {
     return;
   }
 
-  // --force-gather: reset player pool to current SEED_PLAYERS and clear datasets
-  if (options.forceGather) {
-    console.log("  Force-gathering: resetting player pool and datasets...\n");
-    const freshState = createInitialState();
+  // Auto-detect if seed players are missing from the saved pool
+  const freshState = createInitialState();
+  const savedUsernames = new Set(state.playerPool.map((p) => p.username.toLowerCase()));
+  const missingSeedPlayers = freshState.playerPool.filter(
+    (p) => !savedUsernames.has(p.username.toLowerCase())
+  );
+
+  if (missingSeedPlayers.length > 0 || options.forceGather) {
+    if (missingSeedPlayers.length > 0) {
+      console.log(`  Auto-resetting: ${missingSeedPlayers.length} seed players missing from saved state.`);
+      console.log(`  Missing: ${missingSeedPlayers.map((p) => p.username).join(", ")}\n`);
+    } else {
+      console.log("  Force-gathering: resetting player pool and datasets...\n");
+    }
     state.playerPool = freshState.playerPool;
     state.datasets = [];
     state.currentPlan = null;
@@ -91,7 +101,7 @@ export async function start(options: StartOptions) {
     console.log(`  [${timestamp()}] Starting sweep phase...`);
     await sweep({
       maxExperiments: options.maxExperiments ?? "25",
-      triagePositions: options.triagePositions ?? "30",
+      triagePositions: options.triagePositions ?? "15",
       fullPositions: options.fullPositions ?? "0",
       seed: options.seed ?? "42",
     });

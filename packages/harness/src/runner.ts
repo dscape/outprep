@@ -9,6 +9,7 @@ import {
   buildErrorProfileFromEvals,
   buildOpeningTrie,
   type ChessEngine,
+  type CandidateMove,
   type ErrorProfile,
   type OpeningTrie,
   type GameRecord,
@@ -129,9 +130,13 @@ export async function runAccuracyTest(
           // Get bot's move
           const botResult = await bot.getMove(fen);
 
-          // Get MultiPV candidates for top-N accuracy
-          const candidates = await engine.evaluateMultiPV(fen, 12, 4);
-          const isInTopN = candidates.some((c) => c.uci === actualUci);
+          // Get MultiPV candidates for top-N accuracy (skip in triage for speed)
+          let isInTopN = false;
+          let candidates: CandidateMove[] = [];
+          if (!runConfig.skipTopN) {
+            candidates = await engine.evaluateMultiPV(fen, 12, 4);
+            isInTopN = candidates.some((c) => c.uci === actualUci);
+          }
 
           // CPL calculation from Lichess evals
           let actualCPL: number | undefined;

@@ -90,8 +90,14 @@ export async function analyze() {
       console.log("  Could not parse Claude response. Falling back to statistical analysis.\n");
     }
   } catch (err) {
-    console.error(`  Claude API error: ${err}`);
-    console.log("  Falling back to statistical analysis.\n");
+    console.error("\n  ╔══════════════════════════════════════════╗");
+    console.error("  ║  ⚠ Claude API call FAILED               ║");
+    console.error("  ╚══════════════════════════════════════════╝\n");
+    console.error(`  Error: ${err}\n`);
+    console.error("  Check that ANTHROPIC_API_KEY is set correctly.");
+    console.error("  You can create packages/tuner/.env with:");
+    console.error("    ANTHROPIC_API_KEY=sk-ant-...\n");
+    console.log("  Falling back to statistical analysis (no AI insights).\n");
   }
 
   // Generate proposal

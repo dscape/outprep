@@ -102,6 +102,8 @@ export interface Proposal {
   summary: string;
   codeProposals: string[];
   nextPriorities: string[];
+  /** Whether Claude API was used for analysis (false = statistical fallback) */
+  usedClaudeAnalysis?: boolean;
 }
 
 export interface ConfigChange {

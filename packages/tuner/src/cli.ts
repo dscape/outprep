@@ -6,6 +6,7 @@
  * Orchestrates: gather data → sweep configs → analyze → propose changes.
  */
 
+import "dotenv/config";
 import { Command } from "commander";
 import { start } from "./commands/start";
 import { gather } from "./commands/gather";
@@ -27,7 +28,7 @@ program
   .option("--skip-gather", "Skip data gathering (reuse existing datasets)")
   .option("--force-gather", "Reset player pool to seeds and re-gather all datasets")
   .option("--max-experiments <n>", "Cap number of experiments per sweep", "25")
-  .option("--triage-positions <n>", "Positions for triage runs", "30")
+  .option("--triage-positions <n>", "Positions for triage runs", "15")
   .option("--full-positions <n>", "Positions for full validation runs (0 = unlimited)", "0")
   .option("--seed <n>", "Base random seed", "42")
   .action(start);
@@ -43,7 +44,7 @@ program
   .command("sweep")
   .description("Run parameter sweep experiments")
   .option("--max-experiments <n>", "Cap total experiments", "25")
-  .option("--triage-positions <n>", "Positions for triage runs", "30")
+  .option("--triage-positions <n>", "Positions for triage runs", "15")
   .option("--full-positions <n>", "Positions for full validation (0 = unlimited)", "0")
   .option("--seed <n>", "Base random seed", "42")
   .action(sweep);

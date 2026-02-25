@@ -39,6 +39,7 @@ export async function runExperiment(
     label: spec.id,
     configOverrides: spec.configOverride as Partial<BotConfig>,
     maxPositions: spec.maxPositions ?? undefined,
+    skipTopN: true,  // triage mode: skip expensive top-N accuracy check
   };
 
   const result = await runAccuracyTest(engine, dataset, runConfig, {

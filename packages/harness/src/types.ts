@@ -27,6 +27,8 @@ export interface RunConfig {
   eloOverride?: number;
   configOverrides?: Partial<BotConfig>;
   maxPositions?: number;
+  /** Skip expensive top-N accuracy check (used in triage mode for speed) */
+  skipTopN?: boolean;
 }
 
 // ── Position-level result ───────────────────────────────────────────
