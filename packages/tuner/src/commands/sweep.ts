@@ -24,6 +24,34 @@ interface SweepOptions {
   seed?: string;
 }
 
+function formatDuration(ms: number): string {
+  const sec = Math.floor(ms / 1000) % 60;
+  const min = Math.floor(ms / 60000) % 60;
+  const hrs = Math.floor(ms / 3600000);
+  if (hrs > 0) return `${hrs}h ${min}m ${sec}s`;
+  if (min > 0) return `${min}m ${sec}s`;
+  return `${sec}s`;
+}
+
+/**
+ * Select a representative subset of datasets for triage runs.
+ * Picks low / median / high Elo to cover the full range without
+ * running every experiment against every dataset.
+ * Baseline still runs against ALL datasets for accurate scoring.
+ */
+function selectTriageDatasets(
+  pairs: { ref: DatasetRef; dataset: Dataset }[]
+): { ref: DatasetRef; dataset: Dataset }[] {
+  if (pairs.length <= 3) return pairs;
+
+  const sorted = [...pairs].sort((a, b) => a.ref.elo - b.ref.elo);
+  return [
+    sorted[0],                                 // lowest Elo
+    sorted[Math.floor(sorted.length / 2)],     // median Elo
+    sorted[sorted.length - 1],                 // highest Elo
+  ];
+}
+
 export async function sweep(options: SweepOptions) {
   const maxExperiments = parseInt(options.maxExperiments ?? "40", 10);
   const triagePositions = parseInt(options.triagePositions ?? "50", 10);
@@ -125,9 +153,14 @@ export async function sweep(options: SweepOptions) {
       console.log(`  Resuming sweep: ${progress.complete}/${progress.total} complete.\n`);
     }
 
-    // 3. Run triage experiments
+    // 3. Run triage experiments (on representative subset of datasets)
+    const triagePairs = selectTriageDatasets(datasetPairs);
     console.log("  ── Phase 3: Triage Runs ──\n");
+    console.log(
+      `  Triage datasets (${triagePairs.length}/${datasetPairs.length}): ${triagePairs.map((p) => `${p.ref.name} (${p.ref.elo})`).join(", ")}\n`
+    );
     const allResults: Map<string, AggregatedResult> = new Map();
+    const triageStart = Date.now();
 
     let experimentIndex = 0;
     const plan = state.currentPlan!;
@@ -137,13 +170,14 @@ export async function sweep(options: SweepOptions) {
 
       experimentIndex++;
       const progress = `[${experimentIndex}/${plan.experiments.length}]`;
+      const expStart = Date.now();
 
       spec.status = "triage";
       saveState(state);
 
       const expResults: { ref: DatasetRef; metrics: import("@outprep/harness").Metrics }[] = [];
 
-      for (const { ref, dataset } of datasetPairs) {
+      for (const { ref, dataset } of triagePairs) {
         try {
           const result = await runExperiment(engine, dataset, spec,
             (evaluated, total) => {
@@ -183,9 +217,10 @@ export async function sweep(options: SweepOptions) {
 
       const delta = aggResult.scoreDelta;
       const indicator = delta > 0 ? "\u25B2" : delta < 0 ? "\u25BC" : "\u2500";
+      const expDuration = formatDuration(Date.now() - expStart);
       process.stdout.write("\r" + " ".repeat(90) + "\r");
       console.log(
-        `  ${progress} ${spec.description.slice(0, 50).padEnd(50)} ${indicator} ${(delta >= 0 ? "+" : "")}${(delta * 100).toFixed(2)}%`
+        `  ${progress} ${spec.description.slice(0, 40).padEnd(40)} ${indicator} ${(delta >= 0 ? "+" : "")}${(delta * 100).toFixed(2)}%  (${expDuration})`
       );
 
       saveState(state);
@@ -198,7 +233,8 @@ export async function sweep(options: SweepOptions) {
     const results = Array.from(allResults.values());
     const improving = results.filter((r) => r.scoreDelta > 0).sort((a, b) => b.scoreDelta - a.scoreDelta);
 
-    console.log(`\n  ── Sweep Complete ──\n`);
+    const triageDuration = formatDuration(Date.now() - triageStart);
+    console.log(`\n  ── Sweep Complete (${triageDuration}) ──\n`);
     console.log(`  Total experiments: ${results.length}`);
     console.log(`  Improving:         ${improving.length}`);
 

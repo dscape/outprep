@@ -134,11 +134,16 @@ export class StockfishEngine {
   async evaluateMultiPV(
     fen: string,
     depth: number,
-    numPV: number
+    numPV: number,
+    skillLevel?: number
   ): Promise<StockfishEvalResult[]> {
     await this.isReady();
     this.send("ucinewgame");
     await this.isReady();
+    // Always set Skill Level: use provided value, or reset to 20 (full strength).
+    // This prevents a stale low Skill Level from a previous bot call leaking
+    // into subsequent full-strength analysis calls.
+    this.send(`setoption name Skill Level value ${skillLevel ?? 20}`);
     this.send(`setoption name MultiPV value ${numPV}`);
     await this.isReady();
     this.send(`position fen ${fen}`);

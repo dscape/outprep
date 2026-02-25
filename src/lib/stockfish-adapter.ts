@@ -12,9 +12,10 @@ export class WasmStockfishAdapter implements ChessEngine {
   async evaluateMultiPV(
     fen: string,
     depth: number,
-    numPV: number
+    numPV: number,
+    skillLevel?: number
   ): Promise<CandidateMove[]> {
-    const results = await this.engine.evaluateMultiPV(fen, depth, numPV);
+    const results = await this.engine.evaluateMultiPV(fen, depth, numPV, skillLevel);
     return results.map((r) => ({
       uci: r.bestMove,
       score: r.eval,

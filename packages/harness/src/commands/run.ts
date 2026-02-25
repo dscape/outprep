@@ -51,7 +51,7 @@ export async function run(options: RunOptions) {
   if (options.config) {
     try {
       configOverrides = JSON.parse(options.config);
-    } catch (e) {
+    } catch {
       console.error(`Invalid config JSON: ${options.config}`);
       process.exit(1);
     }

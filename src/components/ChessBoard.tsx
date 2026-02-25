@@ -43,6 +43,7 @@ export default function ChessBoard({
     skill: number;
   } | null>(null);
   const [legalMoveSquares, setLegalMoveSquares] = useState<Record<string, React.CSSProperties>>({});
+  const [selectedSquare, setSelectedSquare] = useState<Square | null>(null);
   const [finalizingAnalysis, setFinalizingAnalysis] = useState(false);
   const [finalizingProgress, setFinalizingProgress] = useState<{
     evaluated: number;
@@ -246,22 +247,16 @@ export default function ChessBoard({
     }
   }, [fen, playerColor, engineReady, makeBotMove]);
 
-  // Compute legal move highlights when user starts dragging
-  function onPieceDrag({ square }: { piece: unknown; square: string | null }) {
+  // ── Shared helper: highlight legal moves for a given square ──
+
+  function showLegalMoves(square: Square): boolean {
     const game = gameRef.current;
-    if (gameEndedRef.current || !square) return;
-
-    const isPlayerTurn =
-      (playerColor === "white" && game.turn() === "w") ||
-      (playerColor === "black" && game.turn() === "b");
-    if (!isPlayerTurn) return;
-
-    const moves = game.moves({ square: square as Square, verbose: true });
+    const moves = game.moves({ square, verbose: true });
 
     const styles: Record<string, React.CSSProperties> = {};
 
     // Highlight source square
-    styles[square] = { backgroundColor: "rgba(255, 255, 0, 0.4)" };
+    styles[square as string] = { backgroundColor: "rgba(255, 255, 0, 0.4)" };
 
     for (const move of moves) {
       if (move.captured) {
@@ -280,6 +275,24 @@ export default function ChessBoard({
     }
 
     setLegalMoveSquares(styles);
+    return moves.length > 0;
+  }
+
+  function isPlayerTurnNow(): boolean {
+    return (
+      (playerColor === "white" && gameRef.current.turn() === "w") ||
+      (playerColor === "black" && gameRef.current.turn() === "b")
+    );
+  }
+
+  // ── Drag-and-drop handlers ──
+
+  function onPieceDrag({ square }: { piece: unknown; square: string | null }) {
+    if (gameEndedRef.current || !square) return;
+    if (!isPlayerTurnNow()) return;
+
+    setSelectedSquare(null); // Clear click-selection when dragging starts
+    showLegalMoves(square as Square);
   }
 
   function onDrop({
@@ -290,18 +303,14 @@ export default function ChessBoard({
     sourceSquare: string;
     targetSquare: string | null;
   }): boolean {
-    // Clear legal move highlights
+    // Clear legal move highlights and click-selection
     setLegalMoveSquares({});
+    setSelectedSquare(null);
 
     const game = gameRef.current;
     if (gameEndedRef.current) return false;
     if (!targetSquare) return false;
-
-    const isPlayerTurn =
-      (playerColor === "white" && game.turn() === "w") ||
-      (playerColor === "black" && game.turn() === "b");
-
-    if (!isPlayerTurn) return false;
+    if (!isPlayerTurnNow()) return false;
 
     try {
       const move = game.move({
@@ -322,6 +331,53 @@ export default function ChessBoard({
       return true;
     } catch {
       return false;
+    }
+  }
+
+  // ── Click-to-move: select piece then click destination ──
+
+  function onSquareClick({ square }: { piece: unknown; square: string }) {
+    const game = gameRef.current;
+    if (gameEndedRef.current) return;
+    if (!isPlayerTurnNow()) return;
+
+    const sq = square as Square;
+    const playerColorChar = playerColor === "white" ? "w" : "b";
+
+    // If a piece is already selected, try to move there
+    if (selectedSquare) {
+      try {
+        const move = game.move({
+          from: selectedSquare,
+          to: sq,
+          promotion: "q",
+        });
+
+        if (move) {
+          plyRef.current++;
+          setFen(game.fen());
+          setSelectedSquare(null);
+          setLegalMoveSquares({});
+
+          // Record position for live analysis
+          analyzerRef.current?.recordPosition(plyRef.current, game.fen());
+
+          checkGameEnd(game);
+          return;
+        }
+      } catch {
+        // Not a valid move — fall through to reselect
+      }
+    }
+
+    // Select or reselect: check if clicked square has a player piece
+    const piece = game.get(sq);
+    if (piece && piece.color === playerColorChar) {
+      setSelectedSquare(sq);
+      showLegalMoves(sq);
+    } else {
+      setSelectedSquare(null);
+      setLegalMoveSquares({});
     }
   }
 
@@ -395,6 +451,7 @@ export default function ChessBoard({
             position: fen,
             onPieceDrop: onDrop,
             onPieceDrag: onPieceDrag,
+            onSquareClick: onSquareClick,
             boardOrientation: playerColor,
             squareStyles: legalMoveSquares,
             boardStyle: {

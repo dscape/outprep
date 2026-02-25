@@ -197,6 +197,7 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   const [selectedPly, setSelectedPly] = useState<number | null>(null);
   const [viewTab, setViewTab] = useState<"moves" | "moments">("moves");
   const selectedPlyRef = useRef(selectedPly);
+  // eslint-disable-next-line react-hooks/refs -- keeping ref in sync for use in callbacks
   selectedPlyRef.current = selectedPly;
 
   // Plies array for navigation

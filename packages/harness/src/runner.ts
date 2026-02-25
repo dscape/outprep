@@ -9,7 +9,6 @@ import {
   buildErrorProfileFromEvals,
   buildOpeningTrie,
   type ChessEngine,
-  type BotConfig,
   type ErrorProfile,
   type OpeningTrie,
   type GameRecord,
@@ -18,7 +17,6 @@ import {
 import { patchMathRandom } from "./seeded-random";
 import { lichessGameToGameRecord, lichessGameToEvalData } from "./lichess-adapters";
 import { computeMetrics } from "./metrics";
-import { progressBar } from "./format";
 import { captureVersionInfo, resolveFullConfig } from "./version";
 import type { Dataset, RunConfig, TestResult, PositionResult } from "./types";
 

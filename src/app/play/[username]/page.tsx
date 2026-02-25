@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 import { MoveEval, AnalysisSummary } from "@/lib/types";
@@ -31,43 +31,44 @@ export default function PlayPage() {
   const openingName = searchParams.get("openingName") || "";
   const opponentWeaknessColor = searchParams.get("color") as "white" | "black" | null;
 
-  const [profile, setProfile] = useState<PlayProfile | null>(null);
+  // Load cached profile from sessionStorage (stored by scout page) for instant display
+  const cachedProfile = useMemo<{ profile: PlayProfile; ready: boolean } | null>(() => {
+    try {
+      if (typeof window === "undefined") return null;
+      const cached = sessionStorage.getItem(`play-profile:${username}`);
+      if (cached) return { profile: JSON.parse(cached), ready: true };
+    } catch {
+      // Ignore
+    }
+    return null;
+  }, [username]);
+
+  const [profile, setProfile] = useState<PlayProfile | null>(cachedProfile?.profile ?? null);
   const [botData, setBotData] = useState<BotData | null>(null);
   // Auto-select color when practicing a weakness: play the opposite of the opponent's weak color
   const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(
     opponentWeaknessColor ? (opponentWeaknessColor === "white" ? "black" : "white") : null
   );
-  const [profileReady, setProfileReady] = useState(false);
+  const [profileReady, setProfileReady] = useState(cachedProfile?.ready ?? false);
   const [botDataReady, setBotDataReady] = useState(false);
   const [error, setError] = useState("");
-  const [enhancedErrorProfile, setEnhancedErrorProfile] = useState<ErrorProfile | null>(null);
-  const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
-  const [loadingOpening, setLoadingOpening] = useState(false);
-
-  useEffect(() => {
+  const [enhancedErrorProfile] = useState<ErrorProfile | null>(() => {
     // Load enhanced profile from sessionStorage (computed on scout page)
     try {
-      const cached = sessionStorage.getItem(`enhanced-profile:${username}`);
-      if (cached) {
-        setEnhancedErrorProfile(JSON.parse(cached));
-      }
+      const cached = typeof window !== "undefined"
+        ? sessionStorage.getItem(`enhanced-profile:${username}`)
+        : null;
+      if (cached) return JSON.parse(cached) as ErrorProfile;
     } catch {
       // Ignore
     }
+    return null;
+  });
+  const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
+  const [loadingOpening, setLoadingOpening] = useState(!!eco);
 
-    // Try cached profile from sessionStorage (stored by scout page) for instant display
-    let profileFromCache = false;
-    try {
-      const cached = sessionStorage.getItem(`play-profile:${username}`);
-      if (cached) {
-        const data = JSON.parse(cached);
-        setProfile(data);
-        setProfileReady(true);
-        profileFromCache = true;
-      }
-    } catch {
-      // Ignore
-    }
+  useEffect(() => {
+    const profileFromCache = !!cachedProfile;
 
     async function load() {
       try {
@@ -106,16 +107,22 @@ export default function PlayPage() {
     }
 
     load();
+  }, [username, speeds, cachedProfile]);
 
-    // Load opening moves if ECO param is present
-    if (eco) {
-      setLoadingOpening(true);
-      getOpeningMoves(eco)
-        .then((moves) => setStartingMoves(moves.length > 0 ? moves : null))
-        .catch(() => {})
-        .finally(() => setLoadingOpening(false));
-    }
-  }, [username, speeds, eco]);
+  // Load opening moves if ECO param is present (separate effect to avoid sync setState)
+  useEffect(() => {
+    if (!eco) return;
+    let cancelled = false;
+    getOpeningMoves(eco)
+      .then((moves) => {
+        if (!cancelled) setStartingMoves(moves.length > 0 ? moves : null);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setLoadingOpening(false);
+      });
+    return () => { cancelled = true; };
+  }, [eco]);
 
   const handleGameEnd = useCallback((
     pgn: string,

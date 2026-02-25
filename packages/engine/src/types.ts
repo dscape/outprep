@@ -12,11 +12,17 @@ export type GamePhase = "opening" | "middlegame" | "endgame";
  * Both implement this interface.
  */
 export interface ChessEngine {
-  /** Analyze a position and return the top N candidate moves. */
+  /** Analyze a position and return the top N candidate moves.
+   *  @param skillLevel — optional Stockfish Skill Level (0-20).
+   *    When provided, sets `setoption name Skill Level value X` before the
+   *    search so the engine deliberately considers weaker moves.
+   *    When omitted, resets to 20 (full strength) to prevent stale state.
+   */
   evaluateMultiPV(
     fen: string,
     depth: number,
-    numPV: number
+    numPV: number,
+    skillLevel?: number
   ): Promise<CandidateMove[]>;
 
   /** Analyze a position and return the single best move. */

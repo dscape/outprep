@@ -19,7 +19,7 @@ export function analyzeOTBGames(
 
   // Convert OTB games to LichessGame-compatible format
   const converted: LichessGame[] = games.map((g, i) =>
-    adaptOTBToLichess(g, i, username)
+    adaptOTBToLichess(g, i)
   );
 
   const style = analyzeStyle(converted, username);
@@ -48,13 +48,7 @@ export function analyzeOTBGames(
 function adaptOTBToLichess(
   game: OTBGame,
   index: number,
-  resolvedName: string
 ): LichessGame {
-  // Determine which side the player is on
-  const isWhite =
-    game.white.toLowerCase().includes(resolvedName.toLowerCase());
-  const opponent = isWhite ? game.black : game.white;
-
   return {
     id: `otb-${index}`,
     rated: true,

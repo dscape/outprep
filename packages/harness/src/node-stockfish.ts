@@ -75,9 +75,14 @@ export class NodeStockfishAdapter implements ChessEngine {
   async evaluateMultiPV(
     fen: string,
     depth: number,
-    numPV: number
+    numPV: number,
+    skillLevel?: number
   ): Promise<CandidateMove[]> {
     await this.sendAndWait("isready", "readyok");
+    // Always set Skill Level: use provided value, or reset to 20 (full strength).
+    // This prevents a stale low Skill Level from a previous bot call leaking
+    // into subsequent full-strength analysis calls (e.g., harness top-N check).
+    this.send(`setoption name Skill Level value ${skillLevel ?? 20}`);
     this.send(`setoption name MultiPV value ${numPV}`);
     await this.sendAndWait("isready", "readyok");
     this.send(`position fen ${fen}`);

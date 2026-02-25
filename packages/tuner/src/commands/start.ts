@@ -19,8 +19,22 @@ interface StartOptions {
   seed?: string;
 }
 
+function formatDuration(ms: number): string {
+  const sec = Math.floor(ms / 1000) % 60;
+  const min = Math.floor(ms / 60000) % 60;
+  const hrs = Math.floor(ms / 3600000);
+  if (hrs > 0) return `${hrs}h ${min}m ${sec}s`;
+  if (min > 0) return `${min}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function timestamp(): string {
+  return new Date().toLocaleTimeString();
+}
+
 export async function start(options: StartOptions) {
   const state = getOrCreateState();
+  const cycleStart = Date.now();
 
   console.log("\n  ╔══════════════════════════════════════════╗");
   console.log("  ║      Outprep Autonomous Tuner            ║");
@@ -28,6 +42,7 @@ export async function start(options: StartOptions) {
 
   console.log(`  Cycle:  ${state.cycle}`);
   console.log(`  Phase:  ${state.phase}`);
+  console.log(`  Started: ${timestamp()}`);
   console.log();
 
   // If waiting for human review, remind them
@@ -56,7 +71,10 @@ export async function start(options: StartOptions) {
     } else if (state.datasets.length > 0 && state.phase !== "gather" && !options.forceGather) {
       console.log(`  Using ${state.datasets.length} existing datasets. Pass --force-gather to refresh.\n`);
     } else {
+      const gatherStart = Date.now();
+      console.log(`  [${timestamp()}] Starting gather phase...`);
       await gather({ maxGames: "100", speeds: "blitz,rapid" });
+      console.log(`  [${timestamp()}] Gather complete (${formatDuration(Date.now() - gatherStart)})\n`);
 
       // Reload state after gather
       const updated = getOrCreateState();
@@ -69,19 +87,25 @@ export async function start(options: StartOptions) {
 
   // Phase 2: Sweep
   if (state.phase === "idle" || state.phase === "sweep") {
+    const sweepStart = Date.now();
+    console.log(`  [${timestamp()}] Starting sweep phase...`);
     await sweep({
       maxExperiments: options.maxExperiments ?? "25",
       triagePositions: options.triagePositions ?? "30",
       fullPositions: options.fullPositions ?? "0",
       seed: options.seed ?? "42",
     });
+    console.log(`  [${timestamp()}] Sweep complete (${formatDuration(Date.now() - sweepStart)})\n`);
   }
 
   // Phase 3: Analyze
   if (state.phase === "idle" || state.phase === "analyze") {
+    const analyzeStart = Date.now();
+    console.log(`  [${timestamp()}] Starting analysis phase...`);
     await analyze();
+    console.log(`  [${timestamp()}] Analysis complete (${formatDuration(Date.now() - analyzeStart)})\n`);
   }
 
-  // At this point, state.phase should be "waiting"
-  // The analyze command prints next-step instructions
+  // Print total duration
+  console.log(`  Total cycle duration: ${formatDuration(Date.now() - cycleStart)}\n`);
 }

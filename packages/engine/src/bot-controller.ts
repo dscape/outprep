@@ -4,7 +4,6 @@ import type {
   ErrorProfile,
   OpeningTrie,
   BotMoveResult,
-  MoveSource,
   GamePhase,
   BotConfig,
 } from "./types";
@@ -104,12 +103,13 @@ export class BotController {
       ? dynamicSkillLevel(this.baseSkill, this.errorProfile, phase, this.config)
       : this.baseSkill;
 
-    // 4. Run engine MultiPV
+    // 4. Run engine MultiPV (pass skill level so Stockfish weakens internally)
     const depth = depthForSkill(skill, this.config);
     const multiPVResults = await this.engine.evaluateMultiPV(
       fen,
       depth,
-      this.config.boltzmann.multiPvCount
+      this.config.boltzmann.multiPvCount,
+      skill
     );
 
     // Filter to valid UCI moves only
