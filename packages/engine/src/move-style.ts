@@ -68,7 +68,7 @@ export function applyStyleBonus(
   dynamicSkill: number
 ): CandidateMove[] {
   const ms = config.moveStyle;
-  if (ms.influence === 0 || candidates.length === 0) return candidates;
+  if (!ms || ms.influence === 0 || candidates.length === 0) return candidates;
 
   // Skill-dependent damping: influence fades as skill increases
   const skillNorm = dynamicSkill / config.skill.max;

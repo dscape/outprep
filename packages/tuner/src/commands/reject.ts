@@ -58,6 +58,8 @@ export async function reject() {
     accepted: false,
     configChanges: [],
     baselineScore: proposal?.baselineScore,
+    baselineMetrics: proposal?.baselineMetrics,
+    baselineDatasetMetrics: proposal?.baselineDatasetMetrics,
   });
 
   state.currentPlan = null;

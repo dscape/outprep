@@ -130,6 +130,10 @@ export interface CycleRecord {
   configChanges: ConfigChange[];
   /** Baseline composite score for this cycle (tracks progression) */
   baselineScore?: number;
+  /** Aggregate metrics snapshot for progression tracking */
+  baselineMetrics?: Metrics;
+  /** Per-dataset metrics snapshot for strength calibration history */
+  baselineDatasetMetrics?: { dataset: string; elo: number; metrics: Metrics }[];
 }
 
 /* ── Tuner State (top-level persistence) ─────────────────── */

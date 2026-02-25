@@ -89,6 +89,115 @@ function formatHistory(history: CycleRecord[]): string {
   return cycleLines.join("\n\n") + trajectory;
 }
 
+export interface HistoricalBaseline {
+  cycle: number;
+  baseline: AggregatedResult;
+}
+
+function formatMetricsProgression(
+  historicalBaselines: HistoricalBaseline[],
+  current: AggregatedResult
+): string {
+  if (historicalBaselines.length === 0) {
+    return "No previous cycles — this is the first run.";
+  }
+
+  const header = [
+    "Cycle".padStart(5),
+    "Score".padStart(8),
+    "Match%".padStart(8),
+    "Top4%".padStart(8),
+    "Book%".padStart(8),
+    "aCPL".padStart(7),
+    "bCPL".padStart(7),
+    "cplΔ".padStart(7),
+    "Strength",
+  ].join("  ");
+
+  const separator = "─".repeat(header.length);
+
+  function row(label: string, r: AggregatedResult): string {
+    const m = r.aggregatedMetrics;
+    return [
+      label.padStart(5),
+      ((r.compositeScore * 100).toFixed(2) + "%").padStart(8),
+      ((m.matchRate * 100).toFixed(1) + "%").padStart(8),
+      ((m.topNRate * 100).toFixed(1) + "%").padStart(8),
+      ((m.bookCoverage * 100).toFixed(1) + "%").padStart(8),
+      m.avgActualCPL.toFixed(1).padStart(7),
+      m.avgBotCPL.toFixed(1).padStart(7),
+      m.cplDelta.toFixed(1).padStart(7),
+      formatStrength(m.avgActualCPL, m.avgBotCPL),
+    ].join("  ");
+  }
+
+  const rows = [
+    header,
+    separator,
+    ...historicalBaselines.map((h) => row(String(h.cycle), h.baseline)),
+    separator,
+    row("NOW", current),
+  ];
+
+  return rows.join("\n");
+}
+
+function formatStrengthProgression(
+  historicalBaselines: HistoricalBaseline[],
+  current: AggregatedResult
+): string {
+  if (historicalBaselines.length === 0) {
+    return "No previous cycles — this is the first run.";
+  }
+
+  // Collect all datasets that appear in the current baseline
+  const currentDatasets = current.datasetMetrics
+    .slice()
+    .sort((a, b) => a.elo - b.elo);
+
+  if (currentDatasets.length === 0) return "No per-dataset data available.";
+
+  // Build header: Dataset (Elo)  |  Cycle 0  |  Cycle 1  |  ...  |  Current
+  const cycleLabels = historicalBaselines.map((h) => `C${h.cycle}`);
+  const colWidth = 13;
+  const header = [
+    "Dataset (Elo)".padEnd(28),
+    ...cycleLabels.map((l) => l.padStart(colWidth)),
+    "Current".padStart(colWidth),
+  ].join("  ");
+
+  const separator = "─".repeat(header.length);
+
+  const rows: string[] = [header, separator];
+
+  for (const ds of currentDatasets) {
+    const cells: string[] = [`${ds.dataset} (${ds.elo})`.padEnd(28)];
+
+    for (const h of historicalBaselines) {
+      const match = h.baseline.datasetMetrics.find((d) => d.dataset === ds.dataset);
+      if (match) {
+        cells.push(
+          `${match.metrics.avgBotCPL.toFixed(1)}/${match.metrics.avgActualCPL.toFixed(1)}`.padStart(colWidth)
+        );
+      } else {
+        cells.push("—".padStart(colWidth));
+      }
+    }
+
+    // Current
+    cells.push(
+      `${ds.metrics.avgBotCPL.toFixed(1)}/${ds.metrics.avgActualCPL.toFixed(1)}`.padStart(colWidth)
+    );
+
+    rows.push(cells.join("  "));
+  }
+
+  rows.push("");
+  rows.push("(Format: botCPL/playerCPL — closer values = better strength calibration)");
+
+  return rows.join("\n");
+}
+
 /**
  * Build the analysis prompt for Claude.
  */
@@ -96,7 +205,8 @@ export function buildAnalysisPrompt(
   bestConfig: BotConfig,
   baseline: AggregatedResult,
   experiments: AggregatedResult[],
-  history: CycleRecord[]
+  history: CycleRecord[],
+  historicalBaselines: HistoricalBaseline[] = []
 ): string {
   const improving = experiments.filter((e) => e.scoreDelta > 0);
   const declining = experiments.filter((e) => e.scoreDelta < 0);
@@ -137,6 +247,12 @@ ${formatExperimentsTable(baseline, experiments)}
 
 ## Historical Context
 ${formatHistory(history)}
+
+## Metrics Progression (across tuning cycles)
+${formatMetricsProgression(historicalBaselines, baseline)}
+
+## Strength Calibration Progression (per-dataset botCPL vs playerCPL)
+${formatStrengthProgression(historicalBaselines, baseline)}
 
 ## Per-Band Breakdown of Top 5 Experiments
 ${experiments
@@ -185,6 +301,6 @@ Guidelines:
 4. Consider Elo-band-specific effects: a change that helps experts but hurts beginners may not be worth it.
 5. For code proposals, suggest specific engine changes (e.g., per-phase temperature, material-weighted scoring).
 6. IMPORTANT: Prefer proposing ONE high-confidence change per cycle over multiple simultaneous changes. Changing multiple parameters at once makes it impossible to isolate which change caused improvements or regressions. Only combine changes when they are clearly independent (e.g., opening trie + endgame depth).
-7. Use the historical baseline scores to assess whether the tuning trajectory is improving overall. If scores have plateaued or regressed, consider reverting recent changes or trying a different approach.
+7. Use the metrics progression table to assess whether specific metrics (matchRate, cplDelta, strength calibration) are improving, plateauing, or regressing across cycles. If a metric has stalled for 2+ cycles, suggest a different approach. Pay attention to the strength calibration progression to see which Elo bands are converging (botCPL approaching playerCPL) and which still need work.
 8. Pay special attention to strength calibration per Elo band. If the bot is "too strong" for low-Elo players or "too weak" for high-Elo players, prioritize parameters that control skill mapping (dynamicSkill, depthBySkill, temperatureScale).`;
 }

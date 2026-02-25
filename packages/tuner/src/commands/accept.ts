@@ -58,6 +58,8 @@ export async function accept() {
       accepted: true,
       configChanges: [],
       baselineScore: proposal.baselineScore,
+      baselineMetrics: proposal.baselineMetrics,
+      baselineDatasetMetrics: proposal.baselineDatasetMetrics,
     });
     saveState(state);
     console.log("  Cycle recorded. Ready for next cycle.\n");
@@ -111,6 +113,8 @@ export async function accept() {
     accepted: true,
     configChanges: proposal.configChanges,
     baselineScore: proposal.baselineScore,
+    baselineMetrics: proposal.baselineMetrics,
+    baselineDatasetMetrics: proposal.baselineDatasetMetrics,
   });
   state.currentPlan = null;
   state.cycle++;

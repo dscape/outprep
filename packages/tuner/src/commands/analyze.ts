@@ -45,6 +45,26 @@ export async function analyze() {
     experiments: AggregatedResult[];
   };
 
+  // Load all historical sweep results for metrics progression
+  const allSweepFiles = [...files].reverse(); // chronological order (oldest first)
+  const historicalBaselines: { cycle: number; baseline: AggregatedResult }[] = [];
+
+  for (const file of allSweepFiles) {
+    // Skip the current (latest) file — it's already the baseline
+    if (file === files[0]) continue;
+    const match = file.match(/sweep-cycle-(\d+)\.json/);
+    if (!match) continue;
+    try {
+      const cycleNum = parseInt(match[1], 10);
+      const data = JSON.parse(readFileSync(join(resultsDir, file), "utf-8")) as {
+        baseline: AggregatedResult;
+      };
+      historicalBaselines.push({ cycle: cycleNum, baseline: data.baseline });
+    } catch {
+      // Skip corrupt/unreadable files
+    }
+  }
+
   state.phase = "analyze";
   saveState(state);
 
@@ -74,7 +94,8 @@ export async function analyze() {
       state.bestConfig,
       sweepData.baseline,
       sweepData.experiments,
-      state.completedCycles
+      state.completedCycles,
+      historicalBaselines
     );
 
     const response = await client.messages.create({
