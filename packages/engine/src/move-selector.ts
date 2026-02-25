@@ -64,6 +64,34 @@ export function dynamicSkillLevel(
   );
 }
 
+/* ── Temperature lookup ────────────────────────────────────── */
+
+/**
+ * Look up temperature from the per-band table (same pattern as depthForSkill).
+ * Falls back to the legacy linear formula if the table is empty.
+ */
+function lookupTemperature(
+  skill: number,
+  config: Pick<BotConfig, "boltzmann" | "skill">
+): number {
+  const { boltzmann, skill: skillRange } = config;
+  const table = boltzmann.temperatureBySkill;
+
+  if (table && table.length > 0) {
+    for (const [maxSkill, temp] of table) {
+      if (skill <= maxSkill) return Math.max(boltzmann.temperatureFloor, temp);
+    }
+    const last = table[table.length - 1];
+    return Math.max(boltzmann.temperatureFloor, last[1]);
+  }
+
+  // Legacy linear formula (for backward compatibility)
+  return Math.max(
+    boltzmann.temperatureFloor,
+    (skillRange.max - skill) * boltzmann.temperatureScale
+  );
+}
+
 /**
  * Boltzmann (softmax) selection from MultiPV candidates.
  *
@@ -84,11 +112,7 @@ export function boltzmannSelect(
   }
   if (candidates.length === 1) return candidates[0];
 
-  const { boltzmann, skill: skillRange } = config;
-  const temperature = Math.max(
-    boltzmann.temperatureFloor,
-    (skillRange.max - skill) * boltzmann.temperatureScale
-  );
+  const temperature = lookupTemperature(skill, config);
   const maxScore = Math.max(...candidates.map((c) => c.score));
 
   // Compute weights using softmax
@@ -115,9 +139,5 @@ export function temperatureFromSkill(
   skill: number,
   config: Pick<BotConfig, "boltzmann" | "skill"> = DEFAULT_CONFIG
 ): number {
-  const { boltzmann, skill: skillRange } = config;
-  return Math.max(
-    boltzmann.temperatureFloor,
-    (skillRange.max - skill) * boltzmann.temperatureScale
-  );
+  return lookupTemperature(skill, config);
 }

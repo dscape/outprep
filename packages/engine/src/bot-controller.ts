@@ -17,6 +17,7 @@ import {
   boltzmannSelect,
 } from "./move-selector";
 import { applyStyleBonus } from "./move-style";
+import { complexityDepthAdjust } from "./complexity";
 
 /* ── UCI validation ────────────────────────────────────────── */
 
@@ -109,7 +110,9 @@ export class BotController {
       : this.baseSkill;
 
     // 4. Run engine MultiPV (pass skill level so Stockfish weakens internally)
-    const depth = depthForSkill(skill, this.config);
+    const baseDepth = depthForSkill(skill, this.config);
+    const depthAdj = complexityDepthAdjust(fen, this.config.complexityDepth);
+    const depth = Math.max(this.config.complexityDepth.minDepth, baseDepth + depthAdj);
     const multiPVResults = await this.engine.evaluateMultiPV(
       fen,
       depth,

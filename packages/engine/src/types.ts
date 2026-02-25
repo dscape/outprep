@@ -191,8 +191,14 @@ export interface BotConfig {
     multiPvCount: number;
     /** Minimum temperature (prevents deterministic play at high skill) */
     temperatureFloor: number;
-    /** Temperature = max(floor, (skillMax - dynamicSkill) * scale) */
+    /** Legacy linear scale — superseded by temperatureBySkill table */
     temperatureScale: number;
+    /**
+     * Per-band temperature table (same pattern as depthBySkill).
+     * Array of [maxSkill, temperature] pairs, checked in order.
+     * Gives the tuner independent control over temperature at each skill tier.
+     */
+    temperatureBySkill: [number, number][];
   };
 
   /**
@@ -222,6 +228,22 @@ export interface BotConfig {
     quietBonus: number;
     /** Skill damping: influence fades as skill increases (0 = flat, 1 = zero at max skill) */
     skillDamping: number;
+  };
+
+  /** Position complexity → depth adjustment */
+  complexityDepth: {
+    /** Enable complexity-based depth adjustment */
+    enabled: boolean;
+    /** Number of legal captures at or above which position is "tactical" */
+    captureThreshold: number;
+    /** Number of legal captures at or below which position is "quiet" */
+    quietThreshold: number;
+    /** Depth bonus for tactical positions (e.g. +2) */
+    tacticalBonus: number;
+    /** Depth reduction for quiet positions (e.g. 1) */
+    quietReduction: number;
+    /** Absolute minimum depth (never go below this) */
+    minDepth: number;
   };
 
   /** Think time simulation */

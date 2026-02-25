@@ -55,20 +55,37 @@ function round2(n: number): number {
 }
 
 export const PARAMETER_REGISTRY: TunableParameter[] = [
-  // ── Priority 1: Boltzmann temperature scale ─────────────────
+  // ── Priority 1: Temperature by skill (per-band table) ─────────
   {
-    path: "boltzmann.temperatureScale",
-    name: "Temperature Scale",
+    path: "boltzmann.temperatureBySkill",
+    name: "Temperature by Skill",
     priority: 1,
-    description: "Controls move randomness per skill level (higher = more random)",
+    description: "Per-band temperature table — controls randomness at each skill tier",
     perturbations: (v) => {
-      const n = v as number;
-      return [
-        { value: round2(n * 0.7), label: `tempScale ×0.7 (${round2(n * 0.7)})` },
-        { value: round2(n * 0.85), label: `tempScale ×0.85 (${round2(n * 0.85)})` },
-        { value: round2(n * 1.15), label: `tempScale ×1.15 (${round2(n * 1.15)})` },
-        { value: round2(n * 1.3), label: `tempScale ×1.3 (${round2(n * 1.3)})` },
-      ];
+      const arr = v as [number, number][];
+      const results: { value: unknown; label: string }[] = [];
+      // Perturb temperature at low, mid, and high skill tiers
+      const indices = [0, Math.floor(arr.length / 2), arr.length - 1];
+      for (const i of indices) {
+        // Increase temperature (more random)
+        const upArr = arr.map((pair) => [...pair] as [number, number]);
+        upArr[i] = [upArr[i][0], Math.round(upArr[i][1] * 1.3)];
+        results.push({
+          value: upArr,
+          label: `temp[${i}] ×1.3 (skill≤${arr[i][0]}: ${arr[i][1]}→${Math.round(arr[i][1] * 1.3)})`,
+        });
+
+        // Decrease temperature (more deterministic)
+        if (arr[i][1] > 1) {
+          const downArr = arr.map((pair) => [...pair] as [number, number]);
+          downArr[i] = [downArr[i][0], Math.max(1, Math.round(downArr[i][1] * 0.7))];
+          results.push({
+            value: downArr,
+            label: `temp[${i}] ×0.7 (skill≤${arr[i][0]}: ${arr[i][1]}→${Math.max(1, Math.round(arr[i][1] * 0.7))})`,
+          });
+        }
+      }
+      return results;
     },
   },
 
@@ -301,6 +318,61 @@ export const PARAMETER_REGISTRY: TunableParameter[] = [
       results.push({ value: n + 1, label: `multiPV ${n}→${n + 1}` });
       results.push({ value: n + 2, label: `multiPV ${n}→${n + 2}` });
       return results;
+    },
+  },
+
+  // ── Priority 4: Complexity depth parameters ────────────────
+  {
+    path: "complexityDepth.captureThreshold",
+    name: "Capture Threshold",
+    priority: 4,
+    description: "Legal captures at/above this → tactical position (+depth)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: Math.max(2, n - 2), label: `capThresh ${n}→${Math.max(2, n - 2)}` },
+        { value: n + 2, label: `capThresh ${n}→${n + 2}` },
+        { value: n + 4, label: `capThresh ${n}→${n + 4}` },
+      ];
+    },
+  },
+  {
+    path: "complexityDepth.quietThreshold",
+    name: "Quiet Threshold",
+    priority: 4,
+    description: "Legal captures at/below this → quiet position (-depth)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: 0, label: `quietThresh ${n}→0` },
+        { value: n + 1, label: `quietThresh ${n}→${n + 1}` },
+      ];
+    },
+  },
+  {
+    path: "complexityDepth.tacticalBonus",
+    name: "Tactical Depth Bonus",
+    priority: 4,
+    description: "Extra depth for tactical positions",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: Math.max(1, n - 1), label: `tactBonus ${n}→${Math.max(1, n - 1)}` },
+        { value: n + 1, label: `tactBonus ${n}→${n + 1}` },
+      ];
+    },
+  },
+  {
+    path: "complexityDepth.quietReduction",
+    name: "Quiet Depth Reduction",
+    priority: 5,
+    description: "Depth reduction for quiet positions",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: 0, label: `quietReduce ${n}→0 (disabled)` },
+        { value: n + 1, label: `quietReduce ${n}→${n + 1}` },
+      ];
     },
   },
 

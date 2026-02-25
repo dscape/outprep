@@ -23,6 +23,7 @@ export {
   applyStyleBonus,
   analyzeStyleFromRecords,
 } from "./move-style";
+export { complexityDepthAdjust } from "./complexity";
 
 // --- Configuration ---
 export { DEFAULT_CONFIG, mergeConfig } from "./config";
