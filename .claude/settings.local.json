@@ -28,7 +28,11 @@
       "Bash(npx:*)",
       "mcp__Claude_Preview__preview_start",
       "Bash(unset:*)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(find:*)",
+      "Bash(/tmp/verify_bug.md:*)",
+      "Bash(/tmp/full_trace.md:*)",
+      "Bash(cat:*)"
     ]
   }
 }

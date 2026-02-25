@@ -5,13 +5,14 @@
  * Resumes from wherever the state machine left off.
  */
 
-import { getOrCreateState, saveState } from "../state/tuner-state";
+import { getOrCreateState, saveState, createInitialState } from "../state/tuner-state";
 import { gather } from "./gather";
 import { sweep } from "./sweep";
 import { analyze } from "./analyze";
 
 interface StartOptions {
   skipGather?: boolean;
+  forceGather?: boolean;
   maxExperiments?: string;
   triagePositions?: string;
   fullPositions?: string;
@@ -36,14 +37,24 @@ export async function start(options: StartOptions) {
     return;
   }
 
+  // --force-gather: reset player pool to current SEED_PLAYERS and clear datasets
+  if (options.forceGather) {
+    console.log("  Force-gathering: resetting player pool and datasets...\n");
+    const freshState = createInitialState();
+    state.playerPool = freshState.playerPool;
+    state.datasets = [];
+    state.currentPlan = null;
+    state.phase = "idle";
+  }
+
   saveState(state);
 
   // Phase 1: Gather (skip if --skip-gather or datasets already exist)
   if (state.phase === "idle" || state.phase === "gather") {
     if (options.skipGather && state.datasets.length > 0) {
       console.log("  Skipping gather (--skip-gather, using existing datasets).\n");
-    } else if (state.datasets.length > 0 && state.phase !== "gather") {
-      console.log(`  Using ${state.datasets.length} existing datasets. Pass without --skip-gather to refresh.\n`);
+    } else if (state.datasets.length > 0 && state.phase !== "gather" && !options.forceGather) {
+      console.log(`  Using ${state.datasets.length} existing datasets. Pass --force-gather to refresh.\n`);
     } else {
       await gather({ maxGames: "100", speeds: "blitz,rapid" });
 
@@ -59,8 +70,8 @@ export async function start(options: StartOptions) {
   // Phase 2: Sweep
   if (state.phase === "idle" || state.phase === "sweep") {
     await sweep({
-      maxExperiments: options.maxExperiments ?? "40",
-      triagePositions: options.triagePositions ?? "50",
+      maxExperiments: options.maxExperiments ?? "25",
+      triagePositions: options.triagePositions ?? "30",
       fullPositions: options.fullPositions ?? "0",
       seed: options.seed ?? "42",
     });
