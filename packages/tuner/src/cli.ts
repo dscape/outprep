@@ -72,4 +72,21 @@ program
   .description("Print history of tuning cycles and accepted changes")
   .action(history);
 
+// ── API key gate ──────────────────────────────────────────────
+// All commands except status/history require ANTHROPIC_API_KEY.
+const EXEMPT_COMMANDS = new Set(["status", "history"]);
+
+program.hook("preAction", (_thisCommand, actionCommand) => {
+  if (EXEMPT_COMMANDS.has(actionCommand.name())) return;
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error("\n  \u2717 ANTHROPIC_API_KEY is required.\n");
+    console.error("  Set it in your environment before running the tuner:\n");
+    console.error("    export ANTHROPIC_API_KEY=sk-ant-...\n");
+    console.error("  The tuner uses Claude to analyze experiment results and");
+    console.error("  generate config recommendations. Without an API key,");
+    console.error("  the analysis phase cannot produce meaningful proposals.\n");
+    process.exit(1);
+  }
+});
+
 program.parse();

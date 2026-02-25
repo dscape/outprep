@@ -22,7 +22,7 @@ export async function start(options: StartOptions) {
   const state = getOrCreateState();
 
   console.log("\n  ╔══════════════════════════════════════════╗");
-  console.log("  ║      Outprep Autonomous Tuner           ║");
+  console.log("  ║      Outprep Autonomous Tuner            ║");
   console.log("  ╚══════════════════════════════════════════╝\n");
 
   console.log(`  Cycle:  ${state.cycle}`);

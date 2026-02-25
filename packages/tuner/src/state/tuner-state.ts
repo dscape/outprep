@@ -15,20 +15,28 @@ const STATE_PATH = join(TUNER_ROOT, "tuner-state.json");
 
 /** Seed players for initial player pool (well-known Lichess accounts). */
 const SEED_PLAYERS = [
-  // Beginner band (1100-1400)
-  { username: "chess_beginner_01", band: "beginner" as const, estimatedElo: 1200 },
-  { username: "chess_beginner_02", band: "beginner" as const, estimatedElo: 1350 },
-  // Intermediate band (1400-1700)
-  { username: "chess_intermediate_01", band: "intermediate" as const, estimatedElo: 1500 },
-  { username: "chess_intermediate_02", band: "intermediate" as const, estimatedElo: 1650 },
-  // Advanced band (1700-2000)
-  { username: "chess_advanced_01", band: "advanced" as const, estimatedElo: 1800 },
-  { username: "chess_advanced_02", band: "advanced" as const, estimatedElo: 1950 },
-  // Expert band (2000-2300)
-  { username: "chess_expert_01", band: "expert" as const, estimatedElo: 2100 },
-  { username: "chess_expert_02", band: "expert" as const, estimatedElo: 2250 },
-  // Master band (2300+)
-  { username: "DrNykterstein", band: "master" as const, estimatedElo: 2800 },
+  // Beginner band (Lichess rapid ~1100-1400)
+  { username: "benjoboli", band: "beginner" as const, estimatedElo: 1200 },
+  { username: "ElizavetaPetrova", band: "beginner" as const, estimatedElo: 1200 },
+  { username: "biciado", band: "beginner" as const, estimatedElo: 1300 },
+
+  // Intermediate band (Lichess rapid ~1400-1700)
+  { username: "Chess-Network", band: "intermediate" as const, estimatedElo: 1500 },
+  { username: "Rodigheri", band: "intermediate" as const, estimatedElo: 1700 },
+
+  // Advanced band (Lichess rapid ~1700-2000)
+  { username: "Lance5500", band: "advanced" as const, estimatedElo: 1850 },
+  { username: "Fins", band: "advanced" as const, estimatedElo: 1950 },
+
+  // Expert band (Lichess rapid ~2000-2300)
+  { username: "opperwezen", band: "expert" as const, estimatedElo: 2150 },
+  { username: "BeepBeepImAJeep", band: "expert" as const, estimatedElo: 2250 },
+
+  // Master band (Lichess rapid 2300+)
+  { username: "penguingim1", band: "master" as const, estimatedElo: 2700 },
+  // Andrew Tang — GM, bullet/blitz legend, very active on Lichess
+  { username: "DrNykterstein", band: "master" as const, estimatedElo: 2850 },
+  // Magnus Carlsen
 ];
 
 export function createInitialState(): TunerState {

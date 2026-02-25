@@ -55,7 +55,8 @@ export async function runBaseline(
   engine: NodeStockfishAdapter,
   dataset: Dataset,
   seed: number,
-  maxPositions?: number
+  maxPositions?: number,
+  onProgress?: (evaluated: number, total: number) => void
 ): Promise<TestResult> {
   const runConfig: RunConfig = {
     seed,
@@ -63,5 +64,5 @@ export async function runBaseline(
     maxPositions,
   };
 
-  return runAccuracyTest(engine, dataset, runConfig);
+  return runAccuracyTest(engine, dataset, runConfig, { onProgress });
 }

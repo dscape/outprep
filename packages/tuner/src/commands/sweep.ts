@@ -8,15 +8,14 @@
  * 4. Save all results and update state
  */
 
-import { readFileSync } from "fs";
 import { getOrCreateState, saveState } from "../state/tuner-state";
-import { createSweepPlan, getNextExperiment, isPlanComplete, planProgress } from "../loop/sweep-planner";
+import { createSweepPlan, isPlanComplete, planProgress } from "../loop/sweep-planner";
 import { createEngine, runExperiment, runBaseline } from "../loop/experiment-runner";
 import { averageMetrics, aggregateExperimentResults } from "../loop/result-aggregator";
 import { compositeScore } from "../scoring/composite-score";
 import { loadDataset } from "../data/dataset-manager";
 import type { Dataset } from "@outprep/harness";
-import type { DatasetRef, AggregatedResult, ExperimentSpec } from "../state/types";
+import type { DatasetRef, AggregatedResult } from "../state/types";
 
 interface SweepOptions {
   maxExperiments?: string;
@@ -75,11 +74,17 @@ export async function sweep(options: SweepOptions) {
     const baselineResults: { ref: DatasetRef; metrics: import("@outprep/harness").Metrics }[] = [];
 
     for (const { ref, dataset } of datasetPairs) {
-      process.stdout.write(`  Running baseline on ${ref.name}...`);
-      const result = await runBaseline(engine, dataset, baseSeed, triagePositions);
+      const result = await runBaseline(engine, dataset, baseSeed, triagePositions,
+        (evaluated, total) => {
+          const pct = total > 0 ? ((evaluated / total) * 100).toFixed(0) : "0";
+          process.stdout.write(`\r  Baseline ${ref.name}: ${evaluated}/${total} positions (${pct}%)   `);
+        }
+      );
       baselineResults.push({ ref, metrics: result.metrics });
+      const m = result.metrics;
+      process.stdout.write("\r" + " ".repeat(70) + "\r");
       console.log(
-        ` match=${(result.metrics.matchRate * 100).toFixed(1)}% top4=${(result.metrics.topNRate * 100).toFixed(1)}%`
+        `  Baseline ${ref.name}: match=${(m.matchRate * 100).toFixed(1)}% top4=${(m.topNRate * 100).toFixed(1)}% (${m.totalPositions} pos)`
       );
     }
 
@@ -132,7 +137,6 @@ export async function sweep(options: SweepOptions) {
 
       experimentIndex++;
       const progress = `[${experimentIndex}/${plan.experiments.length}]`;
-      process.stdout.write(`  ${progress} ${spec.description.slice(0, 50).padEnd(50)}`);
 
       spec.status = "triage";
       saveState(state);
@@ -141,7 +145,12 @@ export async function sweep(options: SweepOptions) {
 
       for (const { ref, dataset } of datasetPairs) {
         try {
-          const result = await runExperiment(engine, dataset, spec);
+          const result = await runExperiment(engine, dataset, spec,
+            (evaluated, total) => {
+              const pct = total > 0 ? ((evaluated / total) * 100).toFixed(0) : "0";
+              process.stdout.write(`\r  ${progress} ${spec.description.slice(0, 30).padEnd(30)} ${ref.name} ${evaluated}/${total} (${pct}%)   `);
+            }
+          );
           expResults.push({ ref, metrics: result.metrics });
         } catch (err) {
           console.error(`\n    Error on ${ref.name}: ${err}`);
@@ -150,7 +159,8 @@ export async function sweep(options: SweepOptions) {
 
       if (expResults.length === 0) {
         spec.status = "skipped";
-        console.log(" SKIPPED (errors)");
+        process.stdout.write("\r" + " ".repeat(90) + "\r");
+        console.log(`  ${progress} ${spec.description.slice(0, 50).padEnd(50)} SKIPPED`);
         saveState(state);
         continue;
       }
@@ -172,9 +182,10 @@ export async function sweep(options: SweepOptions) {
       allResults.set(spec.id, aggResult);
 
       const delta = aggResult.scoreDelta;
-      const indicator = delta > 0 ? "▲" : delta < 0 ? "▼" : "─";
+      const indicator = delta > 0 ? "\u25B2" : delta < 0 ? "\u25BC" : "\u2500";
+      process.stdout.write("\r" + " ".repeat(90) + "\r");
       console.log(
-        ` ${indicator} ${(delta >= 0 ? "+" : "")}${(delta * 100).toFixed(2)}%`
+        `  ${progress} ${spec.description.slice(0, 50).padEnd(50)} ${indicator} ${(delta >= 0 ? "+" : "")}${(delta * 100).toFixed(2)}%`
       );
 
       saveState(state);

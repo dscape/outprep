@@ -9,7 +9,7 @@
 import { writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import type { BotConfig } from "@outprep/engine";
-import type { AggregatedResult, Proposal, ConfigChange, CycleRecord } from "../state/types";
+import type { AggregatedResult, Proposal, ConfigChange } from "../state/types";
 import { formatScore, formatDelta } from "../scoring/composite-score";
 import { getConfigValue } from "../util/parameter-registry";
 import { getTunerRoot } from "../state/tuner-state";

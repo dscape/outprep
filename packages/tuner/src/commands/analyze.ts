@@ -55,48 +55,43 @@ export async function analyze() {
   console.log(`  Experiments:    ${sweepData.experiments.length}`);
   console.log(`  Improving:      ${sweepData.experiments.filter((e) => e.scoreDelta > 0).length}\n`);
 
-  // Try Claude API analysis
+  // Claude API analysis (ANTHROPIC_API_KEY is guaranteed by CLI preAction hook)
   let claudeAnalysis = null;
-  const apiKey = process.env.ANTHROPIC_API_KEY;
+  const apiKey = process.env.ANTHROPIC_API_KEY!;
 
-  if (apiKey) {
-    console.log("  Using Claude API for analysis...\n");
+  console.log("  Using Claude API for analysis...\n");
 
-    try {
-      const Anthropic = (await import("@anthropic-ai/sdk")).default;
-      const client = new Anthropic({ apiKey });
+  try {
+    const Anthropic = (await import("@anthropic-ai/sdk")).default;
+    const client = new Anthropic({ apiKey });
 
-      const prompt = buildAnalysisPrompt(
-        state.bestConfig,
-        sweepData.baseline,
-        sweepData.experiments,
-        state.completedCycles
-      );
+    const prompt = buildAnalysisPrompt(
+      state.bestConfig,
+      sweepData.baseline,
+      sweepData.experiments,
+      state.completedCycles
+    );
 
-      const response = await client.messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 4096,
-        messages: [{ role: "user", content: prompt }],
-      });
+    const response = await client.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      messages: [{ role: "user", content: prompt }],
+    });
 
-      const text =
-        response.content[0].type === "text" ? response.content[0].text : "";
+    const text =
+      response.content[0].type === "text" ? response.content[0].text : "";
 
-      claudeAnalysis = parseClaudeResponse(text);
+    claudeAnalysis = parseClaudeResponse(text);
 
-      if (claudeAnalysis) {
-        console.log("  Claude analysis complete.\n");
-        console.log(`  Summary: ${claudeAnalysis.summary}\n`);
-      } else {
-        console.log("  Could not parse Claude response. Falling back to statistical analysis.\n");
-      }
-    } catch (err) {
-      console.error(`  Claude API error: ${err}`);
-      console.log("  Falling back to statistical analysis.\n");
+    if (claudeAnalysis) {
+      console.log("  Claude analysis complete.\n");
+      console.log(`  Summary: ${claudeAnalysis.summary}\n`);
+    } else {
+      console.log("  Could not parse Claude response. Falling back to statistical analysis.\n");
     }
-  } else {
-    console.log("  No ANTHROPIC_API_KEY set. Using statistical analysis.\n");
-    console.log("  Tip: Set ANTHROPIC_API_KEY for AI-powered recommendations.\n");
+  } catch (err) {
+    console.error(`  Claude API error: ${err}`);
+    console.log("  Falling back to statistical analysis.\n");
   }
 
   // Generate proposal

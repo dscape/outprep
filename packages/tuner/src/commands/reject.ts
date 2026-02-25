@@ -2,11 +2,10 @@
  * Reject command — reject the current proposal and archive it.
  */
 
-import { existsSync, readdirSync, renameSync, mkdirSync } from "fs";
+import { readFileSync, existsSync, readdirSync, renameSync } from "fs";
 import { join } from "path";
 import { getOrCreateState, saveState, getTunerRoot } from "../state/tuner-state";
-import type { CycleRecord, Proposal } from "../state/types";
-import { readFileSync } from "fs";
+import type { Proposal } from "../state/types";
 
 export async function reject() {
   const state = getOrCreateState();

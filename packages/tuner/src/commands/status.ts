@@ -4,7 +4,6 @@
 
 import { loadState } from "../state/tuner-state";
 import { planProgress } from "../loop/sweep-planner";
-import { formatScore } from "../scoring/composite-score";
 import { ELO_BANDS } from "../state/types";
 
 export async function status() {

@@ -6,7 +6,7 @@
  */
 
 import { fetchLichessUser } from "@outprep/harness";
-import type { PlayerEntry, EloBand, TunerState } from "../state/types";
+import type { PlayerEntry, EloBand } from "../state/types";
 import { ELO_BANDS } from "../state/types";
 
 /**

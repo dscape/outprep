@@ -6,8 +6,7 @@
 import { readFileSync, writeFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import { getOrCreateState, saveState, getTunerRoot } from "../state/tuner-state";
-import { mergeConfig } from "@outprep/engine";
-import type { Proposal, CycleRecord } from "../state/types";
+import type { Proposal } from "../state/types";
 import type { BotConfig } from "@outprep/engine";
 
 export async function accept() {
