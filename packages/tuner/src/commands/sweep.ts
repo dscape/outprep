@@ -106,7 +106,8 @@ export async function sweep(options: SweepOptions) {
         (evaluated, total) => {
           const pct = total > 0 ? ((evaluated / total) * 100).toFixed(0) : "0";
           process.stdout.write(`\r  Baseline ${ref.name}: ${evaluated}/${total} positions (${pct}%)   `);
-        }
+        },
+        true  // triageMode: use reduced depth/multiPV for speed
       );
       baselineResults.push({ ref, metrics: result.metrics });
       const m = result.metrics;
