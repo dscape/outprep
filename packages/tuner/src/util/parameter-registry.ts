@@ -104,6 +104,23 @@ export const PARAMETER_REGISTRY: TunableParameter[] = [
     },
   },
 
+  // ── Priority 3: Style influence ────────────────────────────
+  {
+    path: "moveStyle.influence",
+    name: "Style Influence",
+    priority: 3,
+    description: "Overall strength of player style bias (0=off, 1=full)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: 0, label: "influence off (0)" },
+        { value: round2(n * 0.5), label: `influence ×0.5 (${round2(n * 0.5)})` },
+        { value: round2(Math.min(1, n * 1.5)), label: `influence ×1.5 (${round2(Math.min(1, n * 1.5))})` },
+        { value: 1, label: "influence full (1)" },
+      ];
+    },
+  },
+
   // ── Priority 3: Dynamic skill scale ─────────────────────────
   {
     path: "dynamicSkill.scale",
@@ -162,6 +179,50 @@ export const PARAMETER_REGISTRY: TunableParameter[] = [
       return [
         { value: Math.max(100, n - 50), label: `blunder ${n}→${Math.max(100, n - 50)}` },
         { value: n + 50, label: `blunder ${n}→${n + 50}` },
+      ];
+    },
+  },
+
+  // ── Priority 6: Style bonus parameters ──────────────────────
+  {
+    path: "moveStyle.captureBonus",
+    name: "Capture Bonus",
+    priority: 6,
+    description: "Max centipawn bonus for captures (aggression axis)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: Math.max(0, n - 10), label: `capBonus ${n}→${Math.max(0, n - 10)}` },
+        { value: n + 10, label: `capBonus ${n}→${n + 10}` },
+        { value: n + 20, label: `capBonus ${n}→${n + 20}` },
+      ];
+    },
+  },
+  {
+    path: "moveStyle.checkBonus",
+    name: "Check Bonus",
+    priority: 6,
+    description: "Max centipawn bonus for checks (tactical axis)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: Math.max(0, n - 10), label: `chkBonus ${n}→${Math.max(0, n - 10)}` },
+        { value: n + 10, label: `chkBonus ${n}→${n + 10}` },
+        { value: n + 20, label: `chkBonus ${n}→${n + 20}` },
+      ];
+    },
+  },
+  {
+    path: "moveStyle.quietBonus",
+    name: "Quiet Bonus",
+    priority: 7,
+    description: "Max centipawn bonus for quiet moves (positional axis)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: Math.max(0, n - 10), label: `quietBonus ${n}→${Math.max(0, n - 10)}` },
+        { value: n + 10, label: `quietBonus ${n}→${n + 10}` },
+        { value: n + 20, label: `quietBonus ${n}→${n + 20}` },
       ];
     },
   },

@@ -18,6 +18,11 @@ export {
   boltzmannSelect,
   temperatureFromSkill,
 } from "./move-selector";
+export {
+  classifyMove,
+  applyStyleBonus,
+  analyzeStyleFromRecords,
+} from "./move-style";
 
 // --- Configuration ---
 export { DEFAULT_CONFIG, mergeConfig } from "./config";
@@ -37,6 +42,7 @@ export type {
   TrieMove,
   BotMoveResult,
   MoveSource,
+  StyleMetrics,
 } from "./types";
 
 // --- Factory ---
@@ -46,6 +52,7 @@ import type {
   ErrorProfile,
   OpeningTrie,
   BotConfig,
+  StyleMetrics,
 } from "./types";
 import { BotController } from "./bot-controller";
 
@@ -63,6 +70,7 @@ export function createBot(
     openingTrie: OpeningTrie | null;
     botColor: "white" | "black";
     config?: Partial<BotConfig>;
+    styleMetrics?: StyleMetrics | null;
   }
 ): BotController {
   return new BotController({ engine, ...options });

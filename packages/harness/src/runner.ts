@@ -8,12 +8,14 @@ import {
   createBot,
   buildErrorProfileFromEvals,
   buildOpeningTrie,
+  analyzeStyleFromRecords,
   type ChessEngine,
   type CandidateMove,
   type ErrorProfile,
   type OpeningTrie,
   type GameRecord,
   type GameEvalData,
+  type StyleMetrics,
 } from "@outprep/engine";
 import { patchMathRandom } from "./seeded-random";
 import { lichessGameToGameRecord, lichessGameToEvalData } from "./lichess-adapters";
@@ -50,6 +52,7 @@ export async function runAccuracyTest(
     // Profile building uses DEFAULT_CONFIG (not overrides).
     // Config overrides only affect bot behavior via createBot().
     const errorProfile: ErrorProfile = buildErrorProfileFromEvals(evalData);
+    const styleMetrics: StyleMetrics = analyzeStyleFromRecords(gameRecords);
 
     const elo = runConfig.eloOverride ?? dataset.estimatedElo;
 
@@ -102,6 +105,7 @@ export async function runAccuracyTest(
         openingTrie,
         botColor,
         config: configOverrides,
+        styleMetrics,
       });
 
       const chess = new Chess();
@@ -130,11 +134,16 @@ export async function runAccuracyTest(
           // Get bot's move
           const botResult = await bot.getMove(fen);
 
-          // Get MultiPV candidates for top-N accuracy (skip in triage for speed)
+          // Get MultiPV candidates for top-N accuracy and botCPL
           let isInTopN = false;
           let candidates: CandidateMove[] = [];
           if (!runConfig.skipTopN) {
+            // Full-strength check (original behavior)
             candidates = await engine.evaluateMultiPV(fen, 12, 4);
+            isInTopN = candidates.some((c) => c.uci === actualUci);
+          } else if (botResult.candidates && botResult.candidates.length > 0) {
+            // Triage mode: use bot's own candidates (no extra Stockfish call)
+            candidates = botResult.candidates;
             isInTopN = candidates.some((c) => c.uci === actualUci);
           }
 

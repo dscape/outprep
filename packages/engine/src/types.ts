@@ -113,6 +113,26 @@ export interface OpeningTrie {
   [fenKey: string]: TrieNode;
 }
 
+/* ── Style Metrics ───────────────────────────────────────── */
+
+/**
+ * Player style profile — scores from 0-100 indicating play tendencies.
+ * Computed from game patterns (quick wins, sacrifices, game length, etc.).
+ * Used to bias move selection toward the player's natural style.
+ */
+export interface StyleMetrics {
+  /** Preference for captures, sacrifices, and short decisive games */
+  aggression: number;
+  /** Preference for sharp tactical positions and combinations */
+  tactical: number;
+  /** Preference for quiet, strategic play and long games */
+  positional: number;
+  /** Ability to convert advantages in long endgames */
+  endgame: number;
+  /** Number of games analyzed (for confidence dampening) */
+  sampleSize: number;
+}
+
 /* ── Bot Output ───────────────────────────────────────────── */
 
 export type MoveSource = "book" | "engine";
@@ -124,6 +144,8 @@ export interface BotMoveResult {
   thinkTimeMs: number;
   phase: GamePhase;
   dynamicSkill: number;
+  /** MultiPV candidates from engine evaluation (absent for book moves). */
+  candidates?: CandidateMove[];
 }
 
 /* ── Bot Configuration ────────────────────────────────────── */
@@ -186,6 +208,18 @@ export interface BotConfig {
     maxPly: number;
     /** Minimum games to include a position in the trie */
     minGames: number;
+  };
+
+  /** Player style bias — nudges move selection toward the player's style */
+  moveStyle: {
+    /** Overall strength of style bias (0 = off, 1 = full) */
+    influence: number;
+    /** Max centipawn bonus for captures (aggression axis) */
+    captureBonus: number;
+    /** Max centipawn bonus for checks (tactical axis) */
+    checkBonus: number;
+    /** Max centipawn bonus for quiet moves (positional axis) */
+    quietBonus: number;
   };
 
   /** Think time simulation */

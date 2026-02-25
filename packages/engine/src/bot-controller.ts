@@ -6,6 +6,7 @@ import type {
   BotMoveResult,
   GamePhase,
   BotConfig,
+  StyleMetrics,
 } from "./types";
 import { DEFAULT_CONFIG, mergeConfig } from "./config";
 import { detectPhase } from "./phase-detector";
@@ -15,6 +16,7 @@ import {
   dynamicSkillLevel,
   boltzmannSelect,
 } from "./move-selector";
+import { applyStyleBonus } from "./move-style";
 
 /* ── UCI validation ────────────────────────────────────────── */
 
@@ -45,6 +47,7 @@ export class BotController {
   private baseSkill: number;
   private errorProfile: ErrorProfile | null;
   private openingTrie: OpeningTrie | null;
+  private styleMetrics: StyleMetrics | null;
   private botColor: "white" | "black";
   private config: BotConfig;
 
@@ -55,12 +58,14 @@ export class BotController {
     openingTrie: OpeningTrie | null;
     botColor: "white" | "black";
     config?: Partial<BotConfig>;
+    styleMetrics?: StyleMetrics | null;
   }) {
     this.config = mergeConfig(DEFAULT_CONFIG, options.config);
     this.engine = options.engine;
     this.baseSkill = eloToSkillLevel(options.elo, this.config);
     this.errorProfile = options.errorProfile;
     this.openingTrie = options.openingTrie;
+    this.styleMetrics = options.styleMetrics ?? null;
     this.botColor = options.botColor;
   }
 
@@ -127,11 +132,16 @@ export class BotController {
       };
     }
 
-    // 5. Boltzmann-select from candidates
-    const selected = boltzmannSelect(validResults, skill, this.config);
+    // 5. Apply style bonus (nudge scores toward player's style)
+    const styledResults = this.styleMetrics
+      ? applyStyleBonus(validResults, fen, this.styleMetrics, this.config)
+      : validResults;
 
-    // 6. Calculate think time
-    const thinkTimeMs = this.computeEngineThinkTime(phase, validResults);
+    // 6. Boltzmann-select from styled candidates
+    const selected = boltzmannSelect(styledResults, skill, this.config);
+
+    // 7. Calculate think time
+    const thinkTimeMs = this.computeEngineThinkTime(phase, styledResults);
 
     return {
       uci: selected.uci,
@@ -140,6 +150,7 @@ export class BotController {
       thinkTimeMs,
       phase,
       dynamicSkill: skill,
+      candidates: styledResults,
     };
   }
 
