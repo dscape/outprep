@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
   "scripts": {
     "harness": "tsx src/cli.ts",
     "build": "echo 'harness uses tsx, no build step'",

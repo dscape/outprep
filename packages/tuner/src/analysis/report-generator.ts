@@ -1,0 +1,219 @@
+/**
+ * Report generator — parses Claude's analysis response and produces
+ * proposal.md and proposal.json files.
+ *
+ * Also supports a fallback mode that generates a purely statistical
+ * report when no API key is available.
+ */
+
+import { writeFileSync, mkdirSync, existsSync } from "fs";
+import { join } from "path";
+import type { BotConfig } from "@outprep/engine";
+import type { AggregatedResult, Proposal, ConfigChange, CycleRecord } from "../state/types";
+import { formatScore, formatDelta } from "../scoring/composite-score";
+import { getConfigValue } from "../util/parameter-registry";
+import { getTunerRoot } from "../state/tuner-state";
+
+interface ClaudeAnalysis {
+  summary: string;
+  rankedChanges: {
+    path: string;
+    newValue: unknown;
+    scoreDelta: number;
+    reasoning: string;
+  }[];
+  proposedConfig: BotConfig;
+  codeProposals: string[];
+  nextPriorities: string[];
+  warnings: string[];
+}
+
+/**
+ * Parse Claude's JSON response from the analysis.
+ */
+export function parseClaudeResponse(text: string): ClaudeAnalysis | null {
+  // Extract JSON block from markdown fences
+  const jsonMatch = text.match(/```json\s*([\s\S]*?)```/);
+  if (!jsonMatch) {
+    console.error("  Could not find JSON block in Claude response.");
+    return null;
+  }
+
+  try {
+    return JSON.parse(jsonMatch[1]) as ClaudeAnalysis;
+  } catch (err) {
+    console.error("  Failed to parse Claude JSON:", err);
+    return null;
+  }
+}
+
+/**
+ * Generate a proposal from Claude's analysis or from raw statistics.
+ */
+export function generateProposal(
+  cycle: number,
+  bestConfig: BotConfig,
+  baseline: AggregatedResult,
+  experiments: AggregatedResult[],
+  analysis: ClaudeAnalysis | null
+): Proposal {
+  const improving = experiments
+    .filter((e) => e.scoreDelta > 0)
+    .sort((a, b) => b.scoreDelta - a.scoreDelta);
+
+  // Build config changes from analysis or from top experiments
+  let configChanges: ConfigChange[];
+  let proposedConfig: BotConfig;
+  let summary: string;
+  let codeProposals: string[];
+  let nextPriorities: string[];
+
+  if (analysis) {
+    // Use Claude's analysis
+    configChanges = analysis.rankedChanges.map((change) => ({
+      path: change.path,
+      oldValue: getConfigValue(bestConfig, change.path),
+      newValue: change.newValue,
+      scoreDelta: change.scoreDelta,
+      description: change.reasoning,
+    }));
+    proposedConfig = analysis.proposedConfig;
+    summary = analysis.summary;
+    codeProposals = analysis.codeProposals;
+    nextPriorities = analysis.nextPriorities;
+  } else {
+    // Statistical fallback
+    configChanges = improving.slice(0, 5).map((exp) => {
+      const path = exp.parameter;
+      return {
+        path,
+        oldValue: getConfigValue(bestConfig, path),
+        newValue: getFirstOverrideValue(exp.configOverride),
+        scoreDelta: exp.scoreDelta,
+        description: exp.description,
+      };
+    });
+    proposedConfig = bestConfig; // Can't auto-combine without AI
+    summary =
+      improving.length > 0
+        ? `Found ${improving.length} improving experiment(s). Best: ${improving[0].description} (${formatDelta(improving[0].scoreDelta)}).`
+        : "No experiments improved over baseline. Consider widening perturbation ranges or adding new parameters.";
+    codeProposals = [];
+    nextPriorities = improving.length > 0
+      ? [`Continue exploring ${improving[0].parameter} with finer granularity`]
+      : ["Try larger perturbation ranges", "Consider new tunable parameters"];
+  }
+
+  return {
+    cycle,
+    timestamp: new Date().toISOString(),
+    baselineScore: baseline.compositeScore,
+    rankedExperiments: improving,
+    proposedConfig,
+    configChanges,
+    summary,
+    codeProposals,
+    nextPriorities,
+  };
+}
+
+function getFirstOverrideValue(override: Record<string, unknown>): unknown {
+  for (const key of Object.keys(override)) {
+    const val = override[key];
+    if (val != null && typeof val === "object" && !Array.isArray(val)) {
+      // Nested object — get first nested value
+      const inner = val as Record<string, unknown>;
+      for (const innerKey of Object.keys(inner)) {
+        return inner[innerKey];
+      }
+    }
+    return val;
+  }
+  return undefined;
+}
+
+/**
+ * Write proposal files to disk.
+ */
+export function writeProposal(proposal: Proposal): string {
+  const timestamp = proposal.timestamp.replace(/[:.]/g, "-").slice(0, 19);
+  const proposalDir = join(getTunerRoot(), "proposals", timestamp);
+
+  if (!existsSync(proposalDir)) mkdirSync(proposalDir, { recursive: true });
+
+  // Write JSON
+  const jsonPath = join(proposalDir, "proposal.json");
+  writeFileSync(jsonPath, JSON.stringify(proposal, null, 2) + "\n");
+
+  // Write markdown
+  const mdPath = join(proposalDir, "proposal.md");
+  writeFileSync(mdPath, generateMarkdown(proposal));
+
+  return proposalDir;
+}
+
+function generateMarkdown(proposal: Proposal): string {
+  const lines: string[] = [
+    `# Tuner Report — Cycle ${proposal.cycle}`,
+    ``,
+    `**Generated:** ${new Date(proposal.timestamp).toLocaleString()}`,
+    `**Baseline Score:** ${formatScore(proposal.baselineScore)}`,
+    ``,
+    `## Summary`,
+    ``,
+    proposal.summary,
+    ``,
+  ];
+
+  if (proposal.configChanges.length > 0) {
+    lines.push(`## Recommended Changes`, ``);
+    for (let i = 0; i < proposal.configChanges.length; i++) {
+      const change = proposal.configChanges[i];
+      lines.push(
+        `${i + 1}. **\`${change.path}\`**: \`${JSON.stringify(change.oldValue)}\` → \`${JSON.stringify(change.newValue)}\` (${formatDelta(change.scoreDelta)})`,
+        `   ${change.description}`,
+        ``
+      );
+    }
+  }
+
+  if (proposal.rankedExperiments.length > 0) {
+    lines.push(`## Top Experiments`, ``);
+    lines.push(`| Experiment | Match% | Top4% | CPL Δ | Score | Δ Score |`);
+    lines.push(`|------------|--------|-------|-------|-------|---------|`);
+    for (const exp of proposal.rankedExperiments.slice(0, 10)) {
+      const m = exp.aggregatedMetrics;
+      lines.push(
+        `| ${exp.description.slice(0, 35)} | ${(m.matchRate * 100).toFixed(1)}% | ${(m.topNRate * 100).toFixed(1)}% | ${m.cplDelta.toFixed(1)} | ${formatScore(exp.compositeScore)} | ${formatDelta(exp.scoreDelta)} |`
+      );
+    }
+    lines.push(``);
+  }
+
+  if (proposal.codeProposals.length > 0) {
+    lines.push(`## Code Improvement Suggestions`, ``);
+    for (const cp of proposal.codeProposals) {
+      lines.push(`- ${cp}`);
+    }
+    lines.push(``);
+  }
+
+  if (proposal.nextPriorities.length > 0) {
+    lines.push(`## Next Priorities`, ``);
+    for (const np of proposal.nextPriorities) {
+      lines.push(`- ${np}`);
+    }
+    lines.push(``);
+  }
+
+  lines.push(
+    `## Next Steps`,
+    ``,
+    `- **Accept changes:** \`npm run tuner -- accept\``,
+    `- **Reject and continue:** \`npm run tuner -- reject\``,
+    `- **View full details:** See \`proposal.json\` in this directory`,
+    ``
+  );
+
+  return lines.join("\n");
+}

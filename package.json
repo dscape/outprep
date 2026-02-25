@@ -13,7 +13,8 @@
     "harness:create": "npm run harness -- create-dataset",
     "harness:run": "npm run harness -- run",
     "harness:compare": "npm run harness -- compare",
-    "dashboard": "npm run --workspace=packages/dashboard dev"
+    "dashboard": "npm run --workspace=packages/dashboard dev",
+    "tuner": "npm run --workspace=packages/tuner tuner --"
   },
   "dependencies": {
     "@types/uuid": "^11.0.0",
