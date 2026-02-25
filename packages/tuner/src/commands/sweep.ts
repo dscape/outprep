@@ -34,22 +34,16 @@ function formatDuration(ms: number): string {
 }
 
 /**
- * Select a representative subset of datasets for triage runs.
- * Picks low / median / high Elo to cover the full range without
- * running every experiment against every dataset.
- * Baseline still runs against ALL datasets for accurate scoring.
+ * Select a single representative dataset for expensive experiments
+ * (e.g. depthBySkill where higher depth = longer Stockfish search).
+ * Picks the median-Elo dataset for a balanced signal.
  */
-function selectTriageDatasets(
+function selectSingleDataset(
   pairs: { ref: DatasetRef; dataset: Dataset }[]
 ): { ref: DatasetRef; dataset: Dataset }[] {
-  if (pairs.length <= 3) return pairs;
-
+  if (pairs.length <= 1) return pairs;
   const sorted = [...pairs].sort((a, b) => a.ref.elo - b.ref.elo);
-  return [
-    sorted[0],                                 // lowest Elo
-    sorted[Math.floor(sorted.length / 2)],     // median Elo
-    sorted[sorted.length - 1],                 // highest Elo
-  ];
+  return [sorted[Math.floor(sorted.length / 2)]];
 }
 
 export async function sweep(options: SweepOptions) {
@@ -157,28 +151,15 @@ export async function sweep(options: SweepOptions) {
       console.log(`  Resuming sweep: ${progress.complete}/${progress.total} complete.\n`);
     }
 
-    // 3. Run triage experiments (on representative subset of datasets)
-    const triagePairs = selectTriageDatasets(datasetPairs);
+    // 3. Run experiments against all datasets (depthBySkill uses single dataset)
+    const depthSinglePair = selectSingleDataset(datasetPairs);
 
-    // Compute triage-specific baseline from only the triage subset
-    // (avoids apples-to-oranges comparison with the full 16-dataset baseline)
-    const triageBaselineResults = baselineResults.filter(
-      (r) => triagePairs.some((tp) => tp.ref.name === r.ref.name)
-    );
-    const triageBaselineMetrics = averageMetrics(
-      triageBaselineResults.map((r) => ({ metrics: r.metrics, weight: r.metrics.totalPositions }))
-    );
-    const triageBaselineScore = compositeScore(triageBaselineMetrics);
+    console.log("  ── Phase 3: Experiment Runs ──\n");
+    console.log(`  All experiments: ${datasetPairs.length} datasets`);
+    console.log(`  depthBySkill experiments: 1 dataset (${depthSinglePair[0]?.ref.name ?? "N/A"})\n`);
 
-    console.log("  ── Phase 3: Triage Runs ──\n");
-    console.log(
-      `  Triage datasets (${triagePairs.length}/${datasetPairs.length}): ${triagePairs.map((p) => `${p.ref.name} (${p.ref.elo})`).join(", ")}`
-    );
-    console.log(
-      `  Triage baseline: ${(triageBaselineScore * 100).toFixed(2)}%  (full baseline: ${(baselineScore * 100).toFixed(2)}%)\n`
-    );
     const allResults: Map<string, AggregatedResult> = new Map();
-    const triageStart = Date.now();
+    const sweepStart = Date.now();
 
     let experimentIndex = 0;
     const plan = state.currentPlan!;
@@ -193,9 +174,13 @@ export async function sweep(options: SweepOptions) {
       spec.status = "triage";
       saveState(state);
 
+      // depthBySkill is expensive (depth affects Stockfish search time) — use 1 dataset
+      const isDepthExp = spec.parameter === "depthBySkill";
+      const expPairs = isDepthExp ? depthSinglePair : datasetPairs;
+
       const expResults: { ref: DatasetRef; metrics: import("@outprep/harness").Metrics }[] = [];
 
-      for (const { ref, dataset } of triagePairs) {
+      for (const { ref, dataset } of expPairs) {
         try {
           const result = await runExperiment(engine, dataset, spec,
             (evaluated, total) => {
@@ -217,6 +202,16 @@ export async function sweep(options: SweepOptions) {
         continue;
       }
 
+      // Compute baseline score from only the datasets this experiment ran on
+      // (apples-to-apples comparison)
+      const expBaselineResults = baselineResults.filter(
+        (r) => expPairs.some((p) => p.ref.name === r.ref.name)
+      );
+      const expBaselineMetrics = averageMetrics(
+        expBaselineResults.map((r) => ({ metrics: r.metrics, weight: r.metrics.totalPositions }))
+      );
+      const expBaselineScore = compositeScore(expBaselineMetrics);
+
       const aggResult = aggregateExperimentResults(
         spec.id,
         spec.parameter,
@@ -226,7 +221,7 @@ export async function sweep(options: SweepOptions) {
           dataset: state.datasets.find((d) => d.name === r.ref.name)!,
           result: { metrics: r.metrics } as import("@outprep/harness").TestResult,
         })),
-        triageBaselineScore
+        expBaselineScore
       );
 
       spec.triageScore = aggResult.compositeScore;
@@ -251,8 +246,8 @@ export async function sweep(options: SweepOptions) {
     const results = Array.from(allResults.values());
     const improving = results.filter((r) => r.scoreDelta > 0).sort((a, b) => b.scoreDelta - a.scoreDelta);
 
-    const triageDuration = formatDuration(Date.now() - triageStart);
-    console.log(`\n  ── Sweep Complete (${triageDuration}) ──\n`);
+    const sweepDuration = formatDuration(Date.now() - sweepStart);
+    console.log(`\n  ── Sweep Complete (${sweepDuration}) ──\n`);
     console.log(`  Total experiments: ${results.length}`);
     console.log(`  Improving:         ${improving.length}`);
 

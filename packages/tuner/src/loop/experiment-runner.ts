@@ -39,6 +39,10 @@ const TRIAGE_DEPTH_BY_SKILL: [number, number][] = [
  * experiment-specific overrides. The experiment's tested parameter
  * always takes priority — we only inject speed caps for fields
  * the experiment is NOT testing.
+ *
+ * Only depth is reduced for speed — multiPV stays at default (4).
+ * Depth is the real bottleneck; multiPV=4 at low depth adds negligible cost
+ * but is critical for accurate playerCPL and top4 metrics.
  */
 function buildTriageOverrides(
   expOverride: Partial<BotConfig> | undefined
@@ -49,15 +53,6 @@ function buildTriageOverrides(
   // Tiered depth cap unless experiment tests depthBySkill
   if (!override.depthBySkill) {
     merged.depthBySkill = TRIAGE_DEPTH_BY_SKILL;
-  }
-
-  // Reduce multiPV to 2 unless experiment tests boltzmann.multiPvCount
-  const expBoltzmann = override.boltzmann as Record<string, unknown> | undefined;
-  if (!expBoltzmann || expBoltzmann.multiPvCount === undefined) {
-    merged.boltzmann = {
-      ...(expBoltzmann ?? {}),
-      multiPvCount: 2,
-    } as BotConfig["boltzmann"];
   }
 
   return merged;

@@ -116,10 +116,11 @@ export const DEFAULT_CONFIG: BotConfig = {
     ]
   ],
   moveStyle: {
-    influence: 0.5,
-    captureBonus: 30,
-    checkBonus: 25,
-    quietBonus: 20,
+    influence: 1.0,
+    captureBonus: 50,
+    checkBonus: 40,
+    quietBonus: 30,
+    skillDamping: 0.8,
   },
   trie: {
     maxPly: 40,

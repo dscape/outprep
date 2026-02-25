@@ -162,6 +162,22 @@ export async function runAccuracyTest(
             }
           }
 
+          // Fallback: compute playerCPL from candidates when Lichess evals unavailable
+          if (actualCPL === undefined && candidates.length > 0) {
+            const bestScore = candidates[0].score;
+            const playerCandidate = candidates.find(
+              (c) => c.uci === actualUci
+            );
+            if (playerCandidate) {
+              actualCPL = Math.max(0, bestScore - playerCandidate.score);
+            } else {
+              // Player's move is worse than ALL candidates — use worst candidate
+              // gap as a conservative lower bound for their CPL
+              const worstScore = candidates[candidates.length - 1].score;
+              actualCPL = Math.max(0, bestScore - worstScore);
+            }
+          }
+
           // Bot CPL from candidate scores
           let botCPL: number | undefined;
           if (candidates.length > 0) {

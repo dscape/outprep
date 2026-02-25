@@ -120,6 +120,20 @@ export const PARAMETER_REGISTRY: TunableParameter[] = [
       ];
     },
   },
+  {
+    path: "moveStyle.skillDamping",
+    name: "Style Skill Damping",
+    priority: 3,
+    description: "How much style influence fades with skill (0=flat, 1=zero at max skill)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: 0, label: "skillDamp off (0) — flat influence" },
+        { value: round2(Math.max(0, n - 0.3)), label: `skillDamp ${n}→${round2(Math.max(0, n - 0.3))}` },
+        { value: 1, label: "skillDamp full (1) — zero at max skill" },
+      ];
+    },
+  },
 
   // ── Priority 3: Dynamic skill scale ─────────────────────────
   {

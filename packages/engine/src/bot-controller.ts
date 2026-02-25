@@ -134,7 +134,7 @@ export class BotController {
 
     // 5. Apply style bonus (nudge scores toward player's style)
     const styledResults = this.styleMetrics
-      ? applyStyleBonus(validResults, fen, this.styleMetrics, this.config)
+      ? applyStyleBonus(validResults, fen, this.styleMetrics, this.config, skill)
       : validResults;
 
     // 6. Boltzmann-select from styled candidates

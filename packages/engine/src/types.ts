@@ -220,6 +220,8 @@ export interface BotConfig {
     checkBonus: number;
     /** Max centipawn bonus for quiet moves (positional axis) */
     quietBonus: number;
+    /** Skill damping: influence fades as skill increases (0 = flat, 1 = zero at max skill) */
+    skillDamping: number;
   };
 
   /** Think time simulation */

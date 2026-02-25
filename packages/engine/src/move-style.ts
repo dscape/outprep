@@ -45,6 +45,9 @@ export function classifyMove(fen: string, uci: string): MoveType {
  * For each candidate, classify the move and add a bonus based on
  * the player's style scores. Returns a NEW array (no mutation).
  *
+ * Skill-dependent damping:
+ *   effectiveInfluence = influence × (1 − (skill / skillMax) × skillDamping)
+ *
  * Formula per candidate:
  *   aggrBias = (style.aggression - 50) / 50    // −1 to +1
  *   tactBias = (style.tactical - 50) / 50
@@ -55,16 +58,22 @@ export function classifyMove(fen: string, uci: string): MoveType {
  *   if check:    bonus += tactBias × checkBonus
  *   if quiet:    bonus += posBias  × quietBonus
  *
- *   adjustedScore = score + bonus × influence
+ *   adjustedScore = score + bonus × effectiveInfluence
  */
 export function applyStyleBonus(
   candidates: CandidateMove[],
   fen: string,
   style: StyleMetrics,
-  config: Pick<BotConfig, "moveStyle">
+  config: Pick<BotConfig, "moveStyle" | "skill">,
+  dynamicSkill: number
 ): CandidateMove[] {
   const ms = config.moveStyle;
   if (ms.influence === 0 || candidates.length === 0) return candidates;
+
+  // Skill-dependent damping: influence fades as skill increases
+  const skillNorm = dynamicSkill / config.skill.max;
+  const effectiveInfluence = ms.influence * (1 - skillNorm * ms.skillDamping);
+  if (effectiveInfluence <= 0) return candidates;
 
   const aggrBias = (style.aggression - 50) / 50;
   const tactBias = (style.tactical - 50) / 50;
@@ -86,7 +95,7 @@ export function applyStyleBonus(
         break;
     }
 
-    return { ...c, score: c.score + bonus * ms.influence };
+    return { ...c, score: c.score + bonus * effectiveInfluence };
   });
 }
 

@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "fs";
 import { join } from "path";
-import { DEFAULT_CONFIG } from "@outprep/engine";
+import { DEFAULT_CONFIG, mergeConfig } from "@outprep/engine";
 import type { TunerState } from "./types";
 
 const TUNER_ROOT = join(import.meta.dirname, "../..");
@@ -71,7 +71,16 @@ export function saveState(state: TunerState): void {
 }
 
 export function getOrCreateState(): TunerState {
-  return loadState() ?? createInitialState();
+  const state = loadState();
+  if (!state) return createInitialState();
+
+  // Backfill new config sections from DEFAULT_CONFIG.
+  // mergeConfig(base, override) deep-merges one level — so tuner-optimized
+  // values in bestConfig are preserved, but missing sections (e.g. moveStyle)
+  // get filled from DEFAULT_CONFIG.
+  state.bestConfig = mergeConfig(DEFAULT_CONFIG, state.bestConfig);
+
+  return state;
 }
 
 export function getStatePath(): string {

@@ -72,6 +72,12 @@ export async function start(options: StartOptions) {
     state.phase = "idle";
   }
 
+  // Reset incomplete sweep plans so they pick up config/position changes
+  if (state.currentPlan && state.currentPlan.status !== "complete") {
+    console.log("  Resetting incomplete sweep plan to pick up config changes.\n");
+    state.currentPlan = null;
+  }
+
   saveState(state);
 
   // Phase 1: Gather (skip if --skip-gather or datasets already exist)
