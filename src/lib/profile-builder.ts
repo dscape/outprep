@@ -287,7 +287,7 @@ export function analyzeOpenings(
 
 /** Extract opening family name (before first colon).
  *  e.g. "Italian Game: Giuoco Piano" → "Italian Game" */
-function openingFamily(name: string): string {
+export function openingFamily(name: string): string {
   const idx = name.indexOf(":");
   return idx > 0 ? name.substring(0, idx).trim() : name.trim();
 }

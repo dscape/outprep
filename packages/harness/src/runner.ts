@@ -328,8 +328,10 @@ export async function runAccuracyTest(
             }
           }
 
-          // Fallback: compute playerCPL from candidates when Lichess evals unavailable
-          if (actualCPL === undefined && candidates.length > 0) {
+          // Fallback: compute playerCPL from candidates when Lichess evals unavailable.
+          // ONLY in full mode — triage mode candidates come from the weakened engine
+          // (Stockfish Skill Level applied) and produce distorted scores.
+          if (actualCPL === undefined && candidates.length > 0 && !runConfig.skipTopN) {
             const bestScore = candidates[0].score;
             const playerCandidate = candidates.find(
               (c) => c.uci === actualUci
@@ -344,9 +346,10 @@ export async function runAccuracyTest(
             }
           }
 
-          // Bot CPL from candidate scores
+          // Bot CPL from candidate scores (full mode only — triage mode
+          // candidates come from the weakened engine and scores are unreliable)
           let botCPL: number | undefined;
-          if (candidates.length > 0) {
+          if (candidates.length > 0 && !runConfig.skipTopN) {
             const bestScore = candidates[0].score;
             const botCandidate = candidates.find(
               (c) => c.uci === botResult.uci

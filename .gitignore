@@ -42,6 +42,11 @@ public/stockfish.wasm
 packages/harness/datasets/
 packages/harness/results/
 
+# tuner data (created at runtime)
+packages/tuner/proposals/
+packages/tuner/experiments/
+packages/tuner/tuner-state.json
+
 # vercel
 .vercel
 

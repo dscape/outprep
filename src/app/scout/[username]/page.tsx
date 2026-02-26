@@ -26,6 +26,12 @@ import OTBUploader from "@/components/OTBUploader";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
 import ErrorProfileCard from "@/components/ErrorProfileCard";
 import LoadingStages from "@/components/LoadingStages";
+import {
+  GameForDrilldown,
+  otbGamesToDrilldown,
+  lichessGamesToDrilldown,
+} from "@/lib/game-helpers";
+import { LichessGame } from "@/lib/types";
 
 type Tab = "openings" | "weaknesses" | "prep" | "otb";
 
@@ -220,6 +226,10 @@ export default function ScoutPage() {
   const abortRef = useRef<AbortController | null>(null);
   const computedEvalsRef = useRef<GameEvalData[]>([]);
 
+  // Drill-down: raw Lichess games for opening expansion
+  const [rawLichessGames, setRawLichessGames] = useState<LichessGame[] | null>(null);
+  const [loadingLichessGames, setLoadingLichessGames] = useState(false);
+
   // Load OTB data and cached enhanced profile from sessionStorage on mount
   useEffect(() => {
     try {
@@ -407,6 +417,62 @@ export default function ScoutPage() {
     // Multi-speed merge
     return mergeSpeedProfiles(profile, selectedSpeeds);
   }, [profile, selectedSpeeds]);
+
+  // Drill-down: navigate to analysis page for a single game
+  const handleAnalyzeGame = useCallback(
+    (game: GameForDrilldown) => {
+      const storedGame = {
+        pgn: game.pgn,
+        result: game.result,
+        playerColor: game.playerColor,
+        opponentUsername: game.opponent,
+      };
+      sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
+      router.push(`/analysis/${encodeURIComponent(game.id)}`);
+    },
+    [router]
+  );
+
+  // Drill-down: lazy-fetch raw Lichess games for opening expansion
+  const fetchLichessRawGames = useCallback(async () => {
+    if (rawLichessGames || loadingLichessGames || isPGNMode) return;
+    setLoadingLichessGames(true);
+    try {
+      const params = new URLSearchParams({
+        max: "500",
+        rated: "true",
+        pgnInJson: "true",
+        opening: "true",
+      });
+      const res = await fetch(
+        `https://lichess.org/api/games/user/${username}?${params}`,
+        { headers: { Accept: "application/x-ndjson" } }
+      );
+      if (!res.ok) {
+        console.error("Failed to fetch Lichess games:", res.status);
+        return;
+      }
+      const text = await res.text();
+      const lines = text.trim().split("\n").filter(Boolean);
+      const games: LichessGame[] = lines.map((line) => JSON.parse(line));
+      setRawLichessGames(games);
+    } catch (err) {
+      console.error("Failed to fetch Lichess games:", err);
+    } finally {
+      setLoadingLichessGames(false);
+    }
+  }, [username, rawLichessGames, loadingLichessGames, isPGNMode]);
+
+  // Drill-down: memoize converted games
+  const pgnDrilldownGames = useMemo(() => {
+    if (!isPGNMode || !otbProfile?.games) return undefined;
+    return otbGamesToDrilldown(otbProfile.games, decodeURIComponent(username));
+  }, [isPGNMode, otbProfile, username]);
+
+  const lichessDrilldownGames = useMemo(() => {
+    if (!rawLichessGames) return undefined;
+    return lichessGamesToDrilldown(rawLichessGames, username);
+  }, [rawLichessGames, username]);
 
   // Handle upgrade request
   const handleUpgrade = useCallback(
@@ -692,6 +758,8 @@ export default function ScoutPage() {
                 <OpeningsTab
                   white={otbProfile.openings.white}
                   black={otbProfile.openings.black}
+                  games={pgnDrilldownGames}
+                  onAnalyzeGame={handleAnalyzeGame}
                 />
               )}
               {activeTab === "weaknesses" && (
@@ -811,6 +879,10 @@ export default function ScoutPage() {
               <OpeningsTab
                 white={filteredData.openings.white}
                 black={filteredData.openings.black}
+                games={lichessDrilldownGames}
+                onAnalyzeGame={handleAnalyzeGame}
+                onRequestGames={fetchLichessRawGames}
+                loadingGames={loadingLichessGames}
               />
             )}
             {activeTab === "weaknesses" && (

@@ -124,7 +124,7 @@ export async function accept() {
   state.phase = "idle";
   saveState(state);
 
-  console.log(`\n  Cycle ${proposal.cycle} accepted. Ready for next cycle.`);
+  console.log(`\n  Cycle ${state.cycle - 1} accepted. Ready for next cycle.`);
   console.log(`  Run \`npm run tuner -- start\` to begin the next cycle.\n`);
 }
 

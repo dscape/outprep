@@ -39,7 +39,9 @@
       "WebFetch(domain:github.com)",
       "Bash(/Users/dscape/Desktop/outprep/gen_test_pgn.mts:*)",
       "Bash(git -C /Users/dscape/Desktop/outprep log --oneline --all)",
-      "Bash(git -C /Users/dscape/Desktop/outprep diff HEAD~2 HEAD -- packages/tuner/src/loop/experiment-runner.ts)"
+      "Bash(git -C /Users/dscape/Desktop/outprep diff HEAD~2 HEAD -- packages/tuner/src/loop/experiment-runner.ts)",
+      "Bash(jq:*)",
+      "Bash(git rev-list:*)"
     ]
   }
 }
