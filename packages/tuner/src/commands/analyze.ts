@@ -15,6 +15,12 @@ import {
   writeProposal,
 } from "../analysis/report-generator";
 import { formatStrength } from "../scoring/composite-score";
+import {
+  runRegressionCheck,
+  printRegressionReport,
+  formatRegressionForPrompt,
+} from "../analysis/regression-check";
+import type { RegressionReport } from "../analysis/regression-check";
 import type { AggregatedResult } from "../state/types";
 
 export async function analyze() {
@@ -65,6 +71,26 @@ export async function analyze() {
     }
   }
 
+  // ── Regression Check (before Claude analysis) ──────────
+  let regressionReport: RegressionReport | null = null;
+  let regressionSummary: string | undefined;
+
+  if (historicalBaselines.length > 0) {
+    const prev = historicalBaselines[historicalBaselines.length - 1];
+    regressionReport = runRegressionCheck(
+      sweepData.baseline,
+      prev.baseline,
+      state.cycle,
+      prev.cycle,
+      state.completedCycles,
+      historicalBaselines
+    );
+    printRegressionReport(regressionReport);
+    regressionSummary = formatRegressionForPrompt(regressionReport);
+  } else {
+    console.log("\n  No previous cycle — skipping regression check.\n");
+  }
+
   state.phase = "analyze";
   saveState(state);
 
@@ -95,7 +121,8 @@ export async function analyze() {
       sweepData.baseline,
       sweepData.experiments,
       state.completedCycles,
-      historicalBaselines
+      historicalBaselines,
+      regressionReport
     );
 
     const response = await client.messages.create({
@@ -132,7 +159,8 @@ export async function analyze() {
     state.bestConfig,
     sweepData.baseline,
     sweepData.experiments,
-    claudeAnalysis
+    claudeAnalysis,
+    regressionSummary
   );
 
   const proposalDir = writeProposal(proposal);

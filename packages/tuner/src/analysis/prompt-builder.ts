@@ -8,6 +8,8 @@
 import type { BotConfig } from "@outprep/engine";
 import type { AggregatedResult, CycleRecord } from "../state/types";
 import { formatStrength } from "../scoring/composite-score";
+import type { RegressionReport } from "./regression-check";
+import { formatRegressionForPrompt } from "./regression-check";
 
 function formatMetricsRow(label: string, r: AggregatedResult): string {
   const m = r.aggregatedMetrics;
@@ -206,7 +208,8 @@ export function buildAnalysisPrompt(
   baseline: AggregatedResult,
   experiments: AggregatedResult[],
   history: CycleRecord[],
-  historicalBaselines: HistoricalBaseline[] = []
+  historicalBaselines: HistoricalBaseline[] = [],
+  regressionReport: RegressionReport | null = null
 ): string {
   const improving = experiments.filter((e) => e.scoreDelta > 0);
   const declining = experiments.filter((e) => e.scoreDelta < 0);
@@ -217,6 +220,9 @@ export function buildAnalysisPrompt(
 \`\`\`json
 ${JSON.stringify(bestConfig, null, 2)}
 \`\`\`
+
+## Regression Check (vs Previous Cycle)
+${regressionReport ? formatRegressionForPrompt(regressionReport) : "First cycle — no regression data available."}
 
 ## How the Bot Works
 - Elo → skill level (0-20) via linear mapping
@@ -302,5 +308,6 @@ Guidelines:
 5. For code proposals, suggest specific engine changes (e.g., per-phase temperature, material-weighted scoring).
 6. IMPORTANT: Prefer proposing ONE high-confidence change per cycle over multiple simultaneous changes. Changing multiple parameters at once makes it impossible to isolate which change caused improvements or regressions. Only combine changes when they are clearly independent (e.g., opening trie + endgame depth).
 7. Use the metrics progression table to assess whether specific metrics (matchRate, cplDelta, strength calibration) are improving, plateauing, or regressing across cycles. If a metric has stalled for 2+ cycles, suggest a different approach. Pay attention to the strength calibration progression to see which Elo bands are converging (botCPL approaching playerCPL) and which still need work.
-8. Pay special attention to strength calibration per Elo band. If the bot is "too strong" for low-Elo players or "too weak" for high-Elo players, prioritize parameters that control skill mapping (dynamicSkill, depthBySkill, temperatureScale).`;
+8. Pay special attention to strength calibration per Elo band. If the bot is "too strong" for low-Elo players or "too weak" for high-Elo players, prioritize parameters that control skill mapping (dynamicSkill, depthBySkill, temperatureScale).
+9. CRITICAL: Review the Regression Check section first. If any metrics or Elo bands show critical regression, your proposed changes MUST address those regressions before pursuing further optimization. If regression appears to be sampling noise (small delta with low position count), say so explicitly. Reference the researcher notes for multi-cycle trends.`;
 }

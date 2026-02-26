@@ -55,7 +55,8 @@ export function generateProposal(
   bestConfig: BotConfig,
   baseline: AggregatedResult,
   experiments: AggregatedResult[],
-  analysis: ClaudeAnalysis | null
+  analysis: ClaudeAnalysis | null,
+  regressionSummary?: string
 ): Proposal {
   const improving = experiments
     .filter((e) => e.scoreDelta > 0)
@@ -117,6 +118,7 @@ export function generateProposal(
     codeProposals,
     nextPriorities,
     usedClaudeAnalysis: !!analysis,
+    regressionSummary,
   };
 }
 
@@ -211,6 +213,15 @@ function generateMarkdown(proposal: Proposal): string {
     proposal.summary,
     ``,
   );
+
+  if (proposal.regressionSummary) {
+    lines.push(
+      `## Regression Check`,
+      ``,
+      proposal.regressionSummary,
+      ``,
+    );
+  }
 
   if (proposal.configChanges.length > 0) {
     lines.push(`## Recommended Changes`, ``);

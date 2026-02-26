@@ -108,6 +108,8 @@ export interface Proposal {
   nextPriorities: string[];
   /** Whether Claude API was used for analysis (false = statistical fallback) */
   usedClaudeAnalysis?: boolean;
+  /** Formatted regression summary for inclusion in proposal.md */
+  regressionSummary?: string;
 }
 
 export interface ConfigChange {
