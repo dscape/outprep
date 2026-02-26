@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import {
   PlayerProfile,
   OTBProfile,
@@ -193,7 +193,9 @@ const SPEED_ORDER = ["bullet", "blitz", "rapid", "classical"];
 export default function ScoutPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const username = params.username as string;
+  const isPGNMode = searchParams.get("source") === "pgn";
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -244,6 +246,23 @@ export default function ScoutPage() {
   }, [username]);
 
   useEffect(() => {
+    if (isPGNMode) {
+      try {
+        const stored = sessionStorage.getItem(
+          `pgn-import:${decodeURIComponent(username)}`
+        );
+        if (stored) {
+          setOtbProfile(JSON.parse(stored));
+        } else {
+          setError("PGN data not found. Please go back and re-upload.");
+        }
+      } catch {
+        setError("Failed to load PGN data.");
+      }
+      setLoading(false);
+      return;
+    }
+
     async function loadProfile() {
       try {
         const res = await fetch(
@@ -273,7 +292,7 @@ export default function ScoutPage() {
     }
 
     loadProfile();
-  }, [username]);
+  }, [username, isPGNMode]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -323,25 +342,35 @@ export default function ScoutPage() {
   const handleOtbReady = useCallback(
     (otb: OTBProfile) => {
       setOtbProfile(otb);
-      setActiveTab("otb");
+      if (!isPGNMode) setActiveTab("otb");
       try {
-        sessionStorage.setItem(`otb:${username}`, JSON.stringify(otb));
+        const key = isPGNMode
+          ? `pgn-import:${decodeURIComponent(username)}`
+          : `otb:${username}`;
+        sessionStorage.setItem(key, JSON.stringify(otb));
       } catch {
         // Storage full — non-fatal
       }
     },
-    [username]
+    [username, isPGNMode]
   );
 
   const handleOtbClear = useCallback(() => {
     setOtbProfile(null);
     if (activeTab === "otb") setActiveTab("openings");
     try {
-      sessionStorage.removeItem(`otb:${username}`);
+      if (isPGNMode) {
+        sessionStorage.removeItem(
+          `pgn-import:${decodeURIComponent(username)}`
+        );
+      } else {
+        sessionStorage.removeItem(`otb:${username}`);
+      }
     } catch {
       // Ignore
     }
-  }, [username, activeTab]);
+    if (isPGNMode) router.push("/");
+  }, [username, activeTab, isPGNMode, router]);
 
   // Clear enhanced (upgrade) error profile when speed filter changes
   // so the base speed-filtered profile is used instead
@@ -554,6 +583,126 @@ export default function ScoutPage() {
           >
             Try another player
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  // PGN-only mode: render from OTB profile without Lichess data
+  if (isPGNMode) {
+    if (!otbProfile) return null;
+
+    const displayName = decodeURIComponent(username);
+    const pgnTabs: ["openings" | "weaknesses", string][] = [
+      ["openings", "Openings"],
+      ["weaknesses", "Weaknesses"],
+    ];
+
+    const styleEntries = [
+      ["Aggression", otbProfile.style.aggression],
+      ["Tactical", otbProfile.style.tactical],
+      ["Positional", otbProfile.style.positional],
+      ["Endgame", otbProfile.style.endgame],
+    ] as const;
+
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="mx-auto max-w-3xl">
+          <button
+            onClick={() => router.push("/")}
+            className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            &larr; Back to search
+          </button>
+
+          {/* Player Card */}
+          <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
+            <div>
+              <h2 className="text-2xl font-bold text-white">{displayName}</h2>
+              <p className="text-sm text-zinc-400 mt-1">
+                {otbProfile.totalGames} game
+                {otbProfile.totalGames !== 1 ? "s" : ""} analyzed from PGN
+              </p>
+            </div>
+
+            <div className="mt-6 space-y-3">
+              <div className="flex items-baseline justify-between">
+                <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide">
+                  Playing Style
+                </h3>
+                {otbProfile.style.sampleSize < 30 && (
+                  <span className="text-xs text-zinc-500">
+                    Based on {otbProfile.style.sampleSize} games
+                  </span>
+                )}
+              </div>
+              {styleEntries.map(([label, value]) => (
+                <div key={label} className="flex items-center gap-3">
+                  <span className="w-24 text-sm text-zinc-400">{label}</span>
+                  <div className="flex-1 h-2 rounded-full bg-zinc-700 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-700 ${
+                        value >= 75
+                          ? "bg-green-500"
+                          : value >= 50
+                            ? "bg-yellow-500"
+                            : value >= 25
+                              ? "bg-orange-500"
+                              : "bg-red-500"
+                      }`}
+                      style={{ width: `${value}%` }}
+                    />
+                  </div>
+                  <span className="w-8 text-right text-sm font-mono text-zinc-300">
+                    {value}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Add more PGN games */}
+          <OTBUploader
+            username={displayName}
+            onProfileReady={handleOtbReady}
+            existingProfile={otbProfile}
+            onClear={handleOtbClear}
+          />
+
+          {/* Tabs */}
+          <div className="mt-8">
+            <div className="flex gap-1 border-b border-zinc-800">
+              {pgnTabs.map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setActiveTab(key)}
+                  className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
+                    activeTab === key
+                      ? "border-green-500 text-white"
+                      : "border-transparent text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-6 tab-content">
+              {activeTab === "openings" && (
+                <OpeningsTab
+                  white={otbProfile.openings.white}
+                  black={otbProfile.openings.black}
+                />
+              )}
+              {activeTab === "weaknesses" && (
+                <WeaknessesTab
+                  weaknesses={otbProfile.weaknesses}
+                  username={displayName}
+                  speeds=""
+                />
+              )}
+            </div>
+          </div>
         </div>
       </div>
     );

@@ -9,22 +9,165 @@ import {
   buildErrorProfileFromEvals,
   buildOpeningTrie,
   analyzeStyleFromRecords,
+  detectPhase,
   type ChessEngine,
   type CandidateMove,
   type ErrorProfile,
   type OpeningTrie,
   type GameRecord,
   type GameEvalData,
+  type GamePhase,
   type StyleMetrics,
+  type BotConfig,
 } from "@outprep/engine";
 import { patchMathRandom } from "./seeded-random";
 import { lichessGameToGameRecord, lichessGameToEvalData } from "./lichess-adapters";
 import { computeMetrics } from "./metrics";
 import { captureVersionInfo, resolveFullConfig } from "./version";
 import type { Dataset, RunConfig, TestResult, PositionResult } from "./types";
+import type { LichessGame } from "./lichess-types";
 
 export interface RunCallbacks {
   onProgress?: (evaluated: number, total: number) => void;
+}
+
+/* ── Phase-balanced position sampling ─────────────────────── */
+
+interface CandidatePosition {
+  gameIndex: number;
+  ply: number;
+  phase: GamePhase;
+}
+
+/**
+ * Pre-scan all games and collect candidate positions with their phases.
+ * This is lightweight — only chess.js parsing and piece counting, no engine.
+ */
+function collectCandidatePositions(
+  games: LichessGame[],
+  username: string,
+  config: BotConfig
+): CandidatePosition[] {
+  const candidates: CandidatePosition[] = [];
+
+  let gameIndex = 0;
+  for (const game of games) {
+    if (!game.moves || game.variant !== "standard") {
+      gameIndex++;
+      continue;
+    }
+
+    const isWhite =
+      game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
+    const chess = new Chess();
+    const moves = game.moves.split(" ");
+
+    for (let ply = 0; ply < moves.length; ply++) {
+      const isWhiteMove = ply % 2 === 0;
+      const isPlayerMove =
+        (isWhite && isWhiteMove) || (!isWhite && !isWhiteMove);
+
+      if (isPlayerMove) {
+        const fen = chess.fen();
+        candidates.push({
+          gameIndex,
+          ply,
+          phase: detectPhase(fen, config),
+        });
+      }
+
+      try {
+        chess.move(moves[ply]);
+      } catch {
+        break;
+      }
+    }
+
+    gameIndex++;
+  }
+
+  return candidates;
+}
+
+/**
+ * Sample positions with phase balancing.
+ *
+ * Target distribution: 40% opening, 40% middlegame, 20% endgame.
+ * If a phase has fewer positions than its quota, take all of them
+ * and redistribute the remaining slots to other phases.
+ *
+ * Uses a seeded shuffle to ensure reproducibility.
+ */
+function sampleWithPhaseBalance(
+  candidates: CandidatePosition[],
+  maxPositions: number,
+  seed: number
+): Set<string> {
+  // Group by phase
+  const byPhase: Record<GamePhase, CandidatePosition[]> = {
+    opening: [],
+    middlegame: [],
+    endgame: [],
+  };
+  for (const c of candidates) {
+    byPhase[c.phase].push(c);
+  }
+
+  // Target quotas (proportional, but respect availability)
+  const targets: Record<GamePhase, number> = {
+    opening: Math.round(maxPositions * 0.40),
+    middlegame: Math.round(maxPositions * 0.40),
+    endgame: Math.round(maxPositions * 0.20),
+  };
+
+  // Phase priority for redistribution: middlegame > endgame > opening
+  const phases: GamePhase[] = ["middlegame", "endgame", "opening"];
+
+  // First pass: cap each phase to available positions, accumulate surplus
+  let surplus = 0;
+  for (const phase of phases) {
+    const available = byPhase[phase].length;
+    if (targets[phase] > available) {
+      surplus += targets[phase] - available;
+      targets[phase] = available;
+    }
+  }
+
+  // Second pass: distribute surplus to phases with room
+  for (const phase of phases) {
+    if (surplus <= 0) break;
+    const available = byPhase[phase].length;
+    const room = available - targets[phase];
+    if (room > 0) {
+      const extra = Math.min(room, surplus);
+      targets[phase] += extra;
+      surplus -= extra;
+    }
+  }
+
+  // Seeded shuffle for reproducibility
+  function seededShuffle<T>(arr: T[], s: number): T[] {
+    const result = [...arr];
+    let rng = s;
+    for (let i = result.length - 1; i > 0; i--) {
+      // Simple LCG
+      rng = (rng * 1664525 + 1013904223) >>> 0;
+      const j = rng % (i + 1);
+      [result[i], result[j]] = [result[j], result[i]];
+    }
+    return result;
+  }
+
+  // Select positions from each phase
+  const selected = new Set<string>();
+  for (const phase of phases) {
+    const shuffled = seededShuffle(byPhase[phase], seed);
+    for (let i = 0; i < targets[phase] && i < shuffled.length; i++) {
+      selected.add(`${shuffled[i].gameIndex}-${shuffled[i].ply}`);
+    }
+  }
+
+  return selected;
 }
 
 export async function runAccuracyTest(
@@ -60,24 +203,40 @@ export async function runAccuracyTest(
     const whiteTrie: OpeningTrie = buildOpeningTrie(gameRecords, "white");
     const blackTrie: OpeningTrie = buildOpeningTrie(gameRecords, "black");
 
-    // 2. Count total player-move positions for progress reporting
-    let totalPositions = 0;
-    for (const game of dataset.games) {
-      if (!game.moves || game.variant !== "standard") continue;
-      const isWhite =
-        game.players.white?.user?.id?.toLowerCase() ===
-        dataset.username.toLowerCase();
-      const moves = game.moves.split(" ");
-      for (let ply = 0; ply < moves.length; ply++) {
-        const isWhiteMove = ply % 2 === 0;
-        if ((isWhite && isWhiteMove) || (!isWhite && !isWhiteMove)) {
-          totalPositions++;
-        }
-      }
+    // 2. Phase-balanced sampling (when enabled)
+    //    Pre-scan all positions, group by phase, sample with quotas.
+    //    Without this, the first N positions are heavily skewed toward openings.
+    let selectedPositions: Set<string> | null = null;
+    if (runConfig.phaseBalanced && runConfig.maxPositions) {
+      const allCandidates = collectCandidatePositions(
+        dataset.games, dataset.username, resolvedConfig
+      );
+      selectedPositions = sampleWithPhaseBalance(
+        allCandidates, runConfig.maxPositions, runConfig.seed
+      );
     }
 
-    if (runConfig.maxPositions && runConfig.maxPositions < totalPositions) {
-      totalPositions = runConfig.maxPositions;
+    // Count total positions for progress reporting
+    let totalPositions = 0;
+    if (selectedPositions) {
+      totalPositions = selectedPositions.size;
+    } else {
+      for (const game of dataset.games) {
+        if (!game.moves || game.variant !== "standard") continue;
+        const isWhite =
+          game.players.white?.user?.id?.toLowerCase() ===
+          dataset.username.toLowerCase();
+        const moves = game.moves.split(" ");
+        for (let ply = 0; ply < moves.length; ply++) {
+          const isWhiteMove = ply % 2 === 0;
+          if ((isWhite && isWhiteMove) || (!isWhite && !isWhiteMove)) {
+            totalPositions++;
+          }
+        }
+      }
+      if (runConfig.maxPositions && runConfig.maxPositions < totalPositions) {
+        totalPositions = runConfig.maxPositions;
+      }
     }
 
     // 3. Replay each game and collect bot predictions
@@ -121,6 +280,13 @@ export async function runAccuracyTest(
           (isWhite && isWhiteMove) || (!isWhite && !isWhiteMove);
 
         if (isPlayerMove) {
+          // Phase-balanced mode: skip positions not in the selected set
+          if (selectedPositions && !selectedPositions.has(`${gameIndex}-${ply}`)) {
+            // Still need to advance the game below
+            try { chess.move(moves[ply]); } catch { break; }
+            continue;
+          }
+
           const fen = chess.fen();
           const actualSan = moves[ply];
 
@@ -211,7 +377,14 @@ export async function runAccuracyTest(
             callbacks.onProgress(evaluated, totalPositions);
           }
 
-          if (runConfig.maxPositions && evaluated >= runConfig.maxPositions) {
+          // In phase-balanced mode, stop when all selected positions are evaluated.
+          // In sequential mode, stop at maxPositions.
+          if (selectedPositions) {
+            if (evaluated >= selectedPositions.size) {
+              hitLimit = true;
+              break;
+            }
+          } else if (runConfig.maxPositions && evaluated >= runConfig.maxPositions) {
             hitLimit = true;
             break;
           }

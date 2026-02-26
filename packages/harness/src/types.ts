@@ -29,6 +29,12 @@ export interface RunConfig {
   maxPositions?: number;
   /** Skip expensive top-N accuracy check (used in triage mode for speed) */
   skipTopN?: boolean;
+  /**
+   * When true and maxPositions is set, sample positions across game phases
+   * instead of taking the first N (which skews heavily toward openings).
+   * Guarantees minimum representation of middlegame and endgame positions.
+   */
+  phaseBalanced?: boolean;
 }
 
 // ── Position-level result ───────────────────────────────────────────

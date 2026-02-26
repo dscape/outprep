@@ -157,18 +157,33 @@ export function lookupTrie(
 }
 
 /**
- * Sample a move from a trie node, weighted by count.
+ * Sample a move from a trie node, weighted by count and optionally win rate.
+ *
+ * When winBias > 0, moves with higher win rates get proportionally more weight:
+ *   weight = count * (1 + winBias * (winRate - 0.5))
+ *
+ * At winBias=0: pure frequency sampling (original behavior).
+ * At winBias=1: a move with 75% winRate gets 25% more weight;
+ *               a move with 25% winRate gets 25% less weight.
+ *
  * Returns the selected TrieMove or null if node is empty.
  */
-export function sampleTrieMove(node: TrieNode): TrieMove | null {
+export function sampleTrieMove(node: TrieNode, winBias: number = 0): TrieMove | null {
   if (node.moves.length === 0) return null;
 
-  const totalWeight = node.moves.reduce((sum, m) => sum + m.count, 0);
+  const weights = node.moves.map((m) => {
+    const base = m.count;
+    if (winBias === 0) return base;
+    // Blend frequency with success rate
+    return Math.max(0.1, base * (1 + winBias * (m.winRate - 0.5)));
+  });
+
+  const totalWeight = weights.reduce((sum, w) => sum + w, 0);
   let rand = Math.random() * totalWeight;
 
-  for (const move of node.moves) {
-    rand -= move.count;
-    if (rand <= 0) return move;
+  for (let i = 0; i < node.moves.length; i++) {
+    rand -= weights[i];
+    if (rand <= 0) return node.moves[i];
   }
 
   return node.moves[0];

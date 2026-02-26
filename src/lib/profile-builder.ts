@@ -214,7 +214,8 @@ interface OpeningAccumulator {
 
 export function analyzeOpenings(
   games: LichessGame[],
-  username: string
+  username: string,
+  minGames: number = 2,
 ): { white: OpeningStats[]; black: OpeningStats[] } {
   const whiteMap = new Map<string, OpeningAccumulator>();
   const blackMap = new Map<string, OpeningAccumulator>();
@@ -253,7 +254,7 @@ export function analyzeOpenings(
   const toStats = (map: Map<string, OpeningAccumulator>): OpeningStats[] => {
     const totalGames = Array.from(map.values()).reduce((sum, e) => sum + e.total, 0);
     return Array.from(map.values())
-      .filter((e) => e.total >= 2)
+      .filter((e) => e.total >= minGames)
       .sort((a, b) => b.total - a.total)
       .slice(0, 15)
       .map((e) => {

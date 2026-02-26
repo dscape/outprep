@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "overprep - Practice Against Any Lichess Player",
-  description: "Scout any Lichess player, study their openings and weaknesses, then practice against a bot that plays like them.",
+  title: "outprep - Practice Against Any Chess Player",
+  description:
+    "Scout any chess player, study their openings and weaknesses, then practice against a bot that plays like them.",
 };
 
 export default function RootLayout({

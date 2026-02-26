@@ -64,6 +64,26 @@ export const PARAMETER_REGISTRY: TunableParameter[] = [
     perturbations: (v) => {
       const arr = v as [number, number][];
       const results: { value: unknown; label: string }[] = [];
+
+      // Empty table → generate initial seed tables for tuner to start with.
+      // The engine falls back to legacy linear: temp = (20 - skill) * temperatureScale
+      // Offer a few sensible starting tables derived from that formula.
+      if (arr.length === 0) {
+        results.push({
+          value: [[5, 200], [10, 120], [15, 60], [20, 10]],
+          label: "tempBySkill: init wide (200→10)",
+        });
+        results.push({
+          value: [[5, 150], [10, 90], [15, 40], [20, 5]],
+          label: "tempBySkill: init moderate (150→5)",
+        });
+        results.push({
+          value: [[5, 100], [10, 60], [15, 30], [20, 3]],
+          label: "tempBySkill: init narrow (100→3)",
+        });
+        return results;
+      }
+
       // Perturb temperature at low, mid, and high skill tiers
       const indices = [0, Math.floor(arr.length / 2), arr.length - 1];
       for (const i of indices) {
@@ -285,6 +305,23 @@ export const PARAMETER_REGISTRY: TunableParameter[] = [
         { value: Math.max(1, n - 1), label: `trieMin ${n}→${Math.max(1, n - 1)}` },
         { value: n + 1, label: `trieMin ${n}→${n + 1}` },
         { value: n + 2, label: `trieMin ${n}→${n + 2}` },
+      ];
+    },
+  },
+
+  // ── Priority 7: Trie win bias ──────────────────────────────
+  {
+    path: "trie.winBias",
+    name: "Trie Win Bias",
+    priority: 7,
+    description: "How much win rate influences opening move sampling (0=off, 1=strong)",
+    perturbations: (v) => {
+      const n = v as number;
+      return [
+        { value: 0, label: "winBias off (0)" },
+        { value: round2(Math.max(0, n + 0.3)), label: `winBias ${n}→${round2(Math.max(0, n + 0.3))}` },
+        { value: round2(Math.min(2, n + 0.7)), label: `winBias ${n}→${round2(Math.min(2, n + 0.7))}` },
+        { value: 1, label: "winBias full (1)" },
       ];
     },
   },

@@ -34,7 +34,12 @@
       "Bash(/tmp/full_trace.md:*)",
       "Bash(cat:*)",
       "Bash(git check-ignore:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:github.com)",
+      "Bash(/Users/dscape/Desktop/outprep/gen_test_pgn.mts:*)",
+      "Bash(git -C /Users/dscape/Desktop/outprep log --oneline --all)",
+      "Bash(git -C /Users/dscape/Desktop/outprep diff HEAD~2 HEAD -- packages/tuner/src/loop/experiment-runner.ts)"
     ]
   }
 }

@@ -7,7 +7,7 @@ import { readFileSync, writeFileSync, existsSync, readdirSync } from "fs";
 import { join } from "path";
 import { getOrCreateState, saveState, getTunerRoot } from "../state/tuner-state";
 import type { Proposal } from "../state/types";
-import type { BotConfig } from "@outprep/engine";
+import { DEFAULT_CONFIG, mergeConfig, type BotConfig } from "@outprep/engine";
 
 export async function accept() {
   const state = getOrCreateState();
@@ -66,8 +66,11 @@ export async function accept() {
     return;
   }
 
-  // Apply changes to bestConfig in state
-  const newConfig = proposal.proposedConfig;
+  // Apply changes to bestConfig in state.
+  // IMPORTANT: merge over DEFAULT_CONFIG to ensure all fields are present.
+  // Without this, fields like moveStyle, complexityDepth, temperatureBySkill
+  // would be lost if proposal.proposedConfig doesn't include them.
+  const newConfig = mergeConfig(DEFAULT_CONFIG, proposal.proposedConfig as Partial<BotConfig>);
 
   console.log("  Applying config changes:\n");
   for (const change of proposal.configChanges) {
@@ -126,6 +129,8 @@ export async function accept() {
 }
 
 function generateConfigSource(config: BotConfig): string {
-  return `export const DEFAULT_CONFIG: BotConfig = ${JSON.stringify(config, null, 2).replace(/"([^"]+)":/g, "$1:")};
+  // Pretty-print with unquoted keys for readability
+  const json = JSON.stringify(config, null, 2).replace(/"([^"]+)":/g, "$1:");
+  return `export const DEFAULT_CONFIG: BotConfig = ${json};
 `;
 }

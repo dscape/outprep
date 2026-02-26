@@ -80,16 +80,7 @@ export const DEFAULT_CONFIG: BotConfig = {
     multiPvCount: 4,
     temperatureFloor: 0.1,
     temperatureScale: 15,
-    temperatureBySkill: [
-      [3,  270],  // skill 0-3   (beginners — high randomness)
-      [6,  210],  // skill 4-6
-      [9,  150],  // skill 7-9
-      [12, 120],  // skill 10-12
-      [15,  75],  // skill 13-15
-      [17,  45],  // skill 16-17
-      [19,  15],  // skill 18-19
-      [20,   3],  // skill 20    (masters — near-deterministic)
-    ],
+    temperatureBySkill: []
   },
   depthBySkill: [
     [
@@ -125,24 +116,25 @@ export const DEFAULT_CONFIG: BotConfig = {
       24
     ]
   ],
-  trie: {
-    maxPly: 40,
-    minGames: 3
-  },
   moveStyle: {
-    influence: 1.0,
-    captureBonus: 50,
-    checkBonus: 40,
-    quietBonus: 30,
-    skillDamping: 0.8,
+    influence: 0,
+    captureBonus: 0,
+    checkBonus: 0,
+    quietBonus: 0,
+    skillDamping: 0
   },
   complexityDepth: {
     enabled: true,
-    captureThreshold: 6,   // 6+ legal captures → tactical
-    quietThreshold: 1,     // 0-1 legal captures → quiet
-    tacticalBonus: 2,      // +2 depth for tactical positions
-    quietReduction: 1,     // -1 depth for quiet positions
-    minDepth: 4,           // absolute floor
+    captureThreshold: 6,
+    quietThreshold: 1,
+    tacticalBonus: 2,
+    quietReduction: 1,
+    minDepth: 4
+  },
+  trie: {
+    maxPly: 40,
+    minGames: 3,
+    winBias: 0
   },
   thinkTime: {
     enabled: true,

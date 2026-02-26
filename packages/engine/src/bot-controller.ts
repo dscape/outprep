@@ -87,7 +87,7 @@ export class BotController {
     if (this.openingTrie) {
       const node = lookupTrie(this.openingTrie, fen);
       if (node) {
-        const bookMove = sampleTrieMove(node);
+        const bookMove = sampleTrieMove(node, this.config.trie.winBias);
         if (bookMove && isValidUCI(bookMove.uci)) {
           return {
             uci: bookMove.uci,

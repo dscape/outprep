@@ -4,6 +4,7 @@ import {
   analyzeOpenings,
   detectWeaknesses,
 } from "./profile-builder";
+import { classifyOpening } from "./analysis/eco-classifier";
 
 /**
  * Analyze OTB games using the same analysis functions as Lichess games.
@@ -23,7 +24,7 @@ export function analyzeOTBGames(
   );
 
   const style = analyzeStyle(converted, username);
-  const openings = analyzeOpenings(converted, username);
+  const openings = analyzeOpenings(converted, username, 1);
   const weaknesses = detectWeaknesses(
     converted,
     username,
@@ -78,14 +79,21 @@ function adaptOTBToLichess(
         : game.result === "0-1"
           ? "black"
           : undefined,
-    opening:
-      game.eco || game.opening
-        ? {
-            eco: game.eco || "",
-            name: game.opening || game.eco || "Unknown",
-            ply: 0,
-          }
-        : undefined,
+    opening: (() => {
+      // Priority: PGN header → ECO classifier → fallback
+      if (game.eco || game.opening) {
+        return {
+          eco: game.eco || "",
+          name: game.opening || game.eco || "Unknown",
+          ply: 0,
+        };
+      }
+      const classified = classifyOpening(game.moves);
+      if (classified) {
+        return { eco: classified.eco, name: classified.name, ply: 0 };
+      }
+      return { eco: "", name: "Unknown", ply: 0 };
+    })(),
     moves: game.moves,
   };
 }

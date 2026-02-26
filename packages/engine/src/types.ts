@@ -214,6 +214,13 @@ export interface BotConfig {
     maxPly: number;
     /** Minimum games to include a position in the trie */
     minGames: number;
+    /**
+     * Win-rate bias for trie move sampling (0 = count-only, 1 = strong win-rate influence).
+     * Blends frequency and success: weight = count * (1 + winBias * (winRate - 0.5))
+     * At 0: pure frequency sampling (original behavior).
+     * At 1: winning moves get up to 50% weight boost, losing moves 50% penalty.
+     */
+    winBias: number;
   };
 
   /** Player style bias — nudges move selection toward the player's style */

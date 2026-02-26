@@ -107,7 +107,7 @@ export async function start(options: StartOptions) {
     console.log(`  [${timestamp()}] Starting sweep phase...`);
     await sweep({
       maxExperiments: options.maxExperiments ?? "25",
-      triagePositions: options.triagePositions ?? "10",
+      triagePositions: options.triagePositions ?? "50",
       fullPositions: options.fullPositions ?? "0",
       seed: options.seed ?? "42",
     });

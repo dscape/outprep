@@ -84,6 +84,7 @@ export async function runExperiment(
     configOverrides: buildTriageOverrides(spec.configOverride as Partial<BotConfig>),
     maxPositions: spec.maxPositions ?? undefined,
     skipTopN: true,  // triage mode: skip expensive top-N accuracy check
+    phaseBalanced: true,  // sample across opening/middlegame/endgame
   };
 
   const result = await runAccuracyTest(engine, dataset, runConfig, {
@@ -111,6 +112,7 @@ export async function runBaseline(
     label: "baseline",
     maxPositions,
     skipTopN: triageMode ?? false,
+    phaseBalanced: !!maxPositions,  // balance phases when position limit is set
     configOverrides: triageMode
       ? buildTriageOverrides(undefined)
       : undefined,
