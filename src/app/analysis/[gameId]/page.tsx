@@ -221,13 +221,44 @@ export default function AnalysisPage() {
 }
 
 async function fetchProfile(username: string): Promise<PlayerProfile | null> {
+  // 1. Try Lichess API
   try {
     const res = await fetch(
       `/api/analysis?username=${encodeURIComponent(username)}`
     );
     if (res.ok) return res.json();
   } catch {
+    // Non-fatal — fall through to PGN fallback
+  }
+
+  // 2. Fallback: build a minimal profile from PGN-imported data in sessionStorage
+  try {
+    const stored = sessionStorage.getItem(`pgn-import:${username}`);
+    if (stored) {
+      const otb = JSON.parse(stored) as {
+        totalGames: number;
+        style: PlayerProfile["style"];
+        openings: PlayerProfile["openings"];
+        weaknesses: PlayerProfile["weaknesses"];
+      };
+      return {
+        username,
+        platform: "lichess",
+        totalGames: otb.totalGames,
+        analyzedGames: otb.totalGames,
+        ratings: {},
+        fideEstimate: { rating: 0, confidence: 0 },
+        style: otb.style,
+        weaknesses: otb.weaknesses,
+        openings: otb.openings,
+        prepTips: [],
+        bySpeed: {},
+        lastComputed: Date.now(),
+      } as PlayerProfile;
+    }
+  } catch {
     // Non-fatal
   }
+
   return null;
 }

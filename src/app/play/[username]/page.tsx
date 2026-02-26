@@ -3,8 +3,9 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
-import { MoveEval, AnalysisSummary } from "@/lib/types";
-import type { ErrorProfile, OpeningTrie } from "@outprep/engine";
+import { MoveEval, AnalysisSummary, OTBProfile } from "@/lib/types";
+import type { ErrorProfile, OpeningTrie, GameRecord } from "@outprep/engine";
+import { buildOpeningTrie } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
 
@@ -25,7 +26,8 @@ export default function PlayPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const username = params.username as string;
+  const rawUsername = params.username as string;
+  const username = decodeURIComponent(rawUsername);
   const speeds = searchParams.get("speeds") || "";
   const eco = searchParams.get("eco") || "";
   const openingName = searchParams.get("openingName") || "";
@@ -81,17 +83,24 @@ export default function PlayPage() {
 
         // Only fetch profile API if not in sessionStorage
         if (!profileFromCache) {
-          const profileRes = await fetch(
-            `/api/profile/${encodeURIComponent(username)}`
-          );
-          if (!profileRes.ok) {
-            const data = await profileRes.json();
-            setError(data.error || "Failed to load profile");
-            return;
+          try {
+            const profileRes = await fetch(
+              `/api/profile/${encodeURIComponent(username)}`
+            );
+            if (profileRes.ok) {
+              const profileData = await profileRes.json();
+              setProfile(profileData);
+              setProfileReady(true);
+            } else {
+              // PGN user: no Lichess profile, use username as-is
+              setProfile({ username, fideEstimate: { rating: 0 } });
+              setProfileReady(true);
+            }
+          } catch {
+            // Network error — still try to proceed for PGN users
+            setProfile({ username, fideEstimate: { rating: 0 } });
+            setProfileReady(true);
           }
-          const profileData = await profileRes.json();
-          setProfile(profileData);
-          setProfileReady(true);
         }
 
         // Await bot-data (user is picking color while this loads)
@@ -99,6 +108,10 @@ export default function PlayPage() {
         if (botRes.ok) {
           const data: BotData = await botRes.json();
           setBotData(data);
+        } else {
+          // Fallback: build bot data client-side from PGN-imported games
+          const pgnBotData = buildBotDataFromPGN(username);
+          if (pgnBotData) setBotData(pgnBotData);
         }
         setBotDataReady(true);
       } catch {
@@ -194,9 +207,11 @@ export default function PlayPage() {
           <h2 className="text-2xl font-bold text-white mb-2">
             Play against {profile?.username}
           </h2>
-          <p className="text-zinc-400 mb-2">
-            ~{profile?.fideEstimate.rating} FIDE estimated
-          </p>
+          {!!profile?.fideEstimate.rating && (
+            <p className="text-zinc-400 mb-2">
+              ~{profile.fideEstimate.rating} FIDE estimated
+            </p>
+          )}
           <p className="text-xs text-zinc-600 mb-4">
             {botDataLabel}
           </p>
@@ -286,4 +301,55 @@ export default function PlayPage() {
       </div>
     </div>
   );
+}
+
+/**
+ * Build BotData client-side from PGN-imported OTB games stored in sessionStorage.
+ * Used as a fallback when the Lichess bot-data API is not available.
+ */
+function buildBotDataFromPGN(username: string): BotData | null {
+  try {
+    const stored = sessionStorage.getItem(`pgn-import:${username}`);
+    if (!stored) return null;
+
+    const otb: OTBProfile = JSON.parse(stored);
+
+    // Convert OTB games to GameRecord format for trie building
+    const gameRecords: GameRecord[] = (otb.games || [])
+      .filter((g) => g.moves)
+      .map((g) => {
+        const playerName = username.toLowerCase();
+        const isWhite = g.white.toLowerCase().includes(playerName);
+        return {
+          moves: g.moves,
+          playerColor: (isWhite ? "white" : "black") as "white" | "black",
+          result: g.result === "1-0" ? "white" as const
+            : g.result === "0-1" ? "black" as const
+            : "draw" as const,
+        };
+      });
+
+    const whiteTrie = buildOpeningTrie(gameRecords, "white");
+    const blackTrie = buildOpeningTrie(gameRecords, "black");
+
+    // Empty error profile — no eval data from PGN
+    const emptyPhase = { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 };
+    const errorProfile: ErrorProfile = {
+      opening: { ...emptyPhase },
+      middlegame: { ...emptyPhase },
+      endgame: { ...emptyPhase },
+      overall: { ...emptyPhase },
+      gamesAnalyzed: 0,
+    };
+
+    const gameMoves = gameRecords.map((g) => ({
+      moves: g.moves,
+      playerColor: g.playerColor,
+      hasEvals: false,
+    }));
+
+    return { errorProfile, whiteTrie, blackTrie, gameMoves };
+  } catch {
+    return null;
+  }
 }

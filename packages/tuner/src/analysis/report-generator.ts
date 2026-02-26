@@ -70,20 +70,22 @@ export function generateProposal(
   let nextPriorities: string[];
 
   if (analysis) {
-    // Use Claude's analysis
-    configChanges = analysis.rankedChanges.map((change) => ({
-      path: change.path,
-      oldValue: getConfigValue(bestConfig, change.path),
-      newValue: change.newValue,
-      scoreDelta: change.scoreDelta,
-      description: change.reasoning,
-    }));
+    // Use Claude's analysis — filter out no-op changes (e.g., influence: 0 → 0)
+    configChanges = analysis.rankedChanges
+      .map((change) => ({
+        path: change.path,
+        oldValue: getConfigValue(bestConfig, change.path),
+        newValue: change.newValue,
+        scoreDelta: change.scoreDelta,
+        description: change.reasoning,
+      }))
+      .filter((change) => JSON.stringify(change.oldValue) !== JSON.stringify(change.newValue));
     proposedConfig = analysis.proposedConfig;
     summary = analysis.summary;
     codeProposals = analysis.codeProposals;
     nextPriorities = analysis.nextPriorities;
   } else {
-    // Statistical fallback
+    // Statistical fallback — filter out no-op changes
     configChanges = improving.slice(0, 5).map((exp) => {
       const path = exp.parameter;
       return {
@@ -93,7 +95,7 @@ export function generateProposal(
         scoreDelta: exp.scoreDelta,
         description: exp.description,
       };
-    });
+    }).filter((change) => JSON.stringify(change.oldValue) !== JSON.stringify(change.newValue));
     proposedConfig = bestConfig; // Can't auto-combine without AI
     summary =
       improving.length > 0

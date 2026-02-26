@@ -200,7 +200,8 @@ export default function ScoutPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const username = params.username as string;
+  const rawUsername = params.username as string;
+  const username = decodeURIComponent(rawUsername);
   const isPGNMode = searchParams.get("source") === "pgn";
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
@@ -259,7 +260,7 @@ export default function ScoutPage() {
     if (isPGNMode) {
       try {
         const stored = sessionStorage.getItem(
-          `pgn-import:${decodeURIComponent(username)}`
+          `pgn-import:${username}`
         );
         if (stored) {
           setOtbProfile(JSON.parse(stored));
@@ -314,19 +315,20 @@ export default function ScoutPage() {
 
   // Cache profile in sessionStorage for instant play page loading
   useEffect(() => {
-    if (!profile) return;
+    if (!profile && !isPGNMode) return;
     try {
       sessionStorage.setItem(
         `play-profile:${username}`,
-        JSON.stringify({
-          username: profile.username,
-          fideEstimate: profile.fideEstimate,
-        })
+        JSON.stringify(
+          profile
+            ? { username: profile.username, fideEstimate: profile.fideEstimate }
+            : { username, fideEstimate: { rating: 0 } }
+        )
       );
     } catch {
       // Storage full — non-fatal
     }
-  }, [profile, username]);
+  }, [profile, username, isPGNMode]);
 
   // Pre-warm bot-data server cache for the play page
   useEffect(() => {
@@ -355,7 +357,7 @@ export default function ScoutPage() {
       if (!isPGNMode) setActiveTab("otb");
       try {
         const key = isPGNMode
-          ? `pgn-import:${decodeURIComponent(username)}`
+          ? `pgn-import:${username}`
           : `otb:${username}`;
         sessionStorage.setItem(key, JSON.stringify(otb));
       } catch {
@@ -371,7 +373,7 @@ export default function ScoutPage() {
     try {
       if (isPGNMode) {
         sessionStorage.removeItem(
-          `pgn-import:${decodeURIComponent(username)}`
+          `pgn-import:${username}`
         );
       } else {
         sessionStorage.removeItem(`otb:${username}`);
@@ -428,7 +430,7 @@ export default function ScoutPage() {
         opponentUsername: game.opponent,
       };
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
-      router.push(`/analysis/${encodeURIComponent(game.id)}`);
+      router.push(`/analysis/${game.id}`);
     },
     [router]
   );
@@ -445,7 +447,7 @@ export default function ScoutPage() {
         opening: "true",
       });
       const res = await fetch(
-        `https://lichess.org/api/games/user/${username}?${params}`,
+        `https://lichess.org/api/games/user/${encodeURIComponent(username)}?${params}`,
         { headers: { Accept: "application/x-ndjson" } }
       );
       if (!res.ok) {
@@ -466,7 +468,7 @@ export default function ScoutPage() {
   // Drill-down: memoize converted games
   const pgnDrilldownGames = useMemo(() => {
     if (!isPGNMode || !otbProfile?.games) return undefined;
-    return otbGamesToDrilldown(otbProfile.games, decodeURIComponent(username));
+    return otbGamesToDrilldown(otbProfile.games, username);
   }, [isPGNMode, otbProfile, username]);
 
   const lichessDrilldownGames = useMemo(() => {
@@ -658,7 +660,7 @@ export default function ScoutPage() {
   if (isPGNMode) {
     if (!otbProfile) return null;
 
-    const displayName = decodeURIComponent(username);
+    const displayName = username;
     const pgnTabs: ["openings" | "weaknesses", string][] = [
       ["openings", "Openings"],
       ["weaknesses", "Weaknesses"],
@@ -770,6 +772,20 @@ export default function ScoutPage() {
                 />
               )}
             </div>
+          </div>
+
+          {/* Practice button */}
+          <div className="mt-8 flex flex-col items-center">
+            <button
+              onClick={() =>
+                router.push(
+                  `/play/${encodeURIComponent(username)}?source=pgn`
+                )
+              }
+              className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
+            >
+              Practice against {displayName}
+            </button>
           </div>
         </div>
       </div>

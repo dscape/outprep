@@ -2,7 +2,9 @@
   "name": "chess",
   "version": "0.1.0",
   "private": true,
-  "workspaces": ["packages/*"],
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
@@ -14,10 +16,12 @@
     "harness:run": "npm run harness -- run",
     "harness:compare": "npm run harness -- compare",
     "dashboard": "npm run --workspace=packages/dashboard dev",
-    "tuner": "npm run --workspace=packages/tuner tuner --"
+    "tuner": "npm run --workspace=packages/tuner tuner --",
+    "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --"
   },
   "dependencies": {
     "@types/uuid": "^11.0.0",
+    "@vercel/blob": "^2.3.0",
     "chess.js": "^1.4.0",
     "next": "16.1.6",
     "react": "19.2.3",

@@ -36,7 +36,7 @@ export default function SearchInput() {
         return;
       }
 
-      router.push(`/scout/${encodeURIComponent(trimmed)}`);
+      router.push(`/scout/${trimmed}`);
     } catch {
       setError("Network error. Please check your connection.");
       setLoading(false);

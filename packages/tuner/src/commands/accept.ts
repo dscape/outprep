@@ -72,8 +72,34 @@ export async function accept() {
   // would be lost if proposal.proposedConfig doesn't include them.
   const newConfig = mergeConfig(DEFAULT_CONFIG, proposal.proposedConfig as Partial<BotConfig>);
 
+  // Filter out no-op changes (e.g., influence: 0 → 0) as a safety net
+  const realChanges = proposal.configChanges.filter(
+    (c) => JSON.stringify(c.oldValue) !== JSON.stringify(c.newValue)
+  );
+
+  if (realChanges.length === 0) {
+    console.log("  All proposed changes are no-ops (old value = new value). Nothing to apply.\n");
+    state.phase = "idle";
+    state.cycle++;
+    state.completedCycles.push({
+      cycle: proposal.cycle,
+      timestamp: proposal.timestamp,
+      datasetsUsed: state.datasets.length,
+      experimentsRun: proposal.rankedExperiments.length,
+      bestScoreDelta: proposal.rankedExperiments[0]?.scoreDelta ?? 0,
+      accepted: false,
+      configChanges: [],
+      baselineScore: proposal.baselineScore,
+      baselineMetrics: proposal.baselineMetrics,
+      baselineDatasetMetrics: proposal.baselineDatasetMetrics,
+    });
+    saveState(state);
+    console.log("  Cycle recorded (no real changes). Ready for next cycle.\n");
+    return;
+  }
+
   console.log("  Applying config changes:\n");
-  for (const change of proposal.configChanges) {
+  for (const change of realChanges) {
     console.log(
       `    ${change.path}: ${JSON.stringify(change.oldValue)} → ${JSON.stringify(change.newValue)}`
     );

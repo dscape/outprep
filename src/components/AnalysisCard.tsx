@@ -56,6 +56,42 @@ function isErrorMove(move: MoveEval): boolean {
   );
 }
 
+/* ── Performance helpers ───────────────────────────────── */
+
+function qualityLabel(accuracy: number): { label: string; color: string } {
+  if (accuracy >= 98) return { label: "Brilliant", color: "text-cyan-400" };
+  if (accuracy >= 93) return { label: "Excellent", color: "text-green-400" };
+  if (accuracy >= 85) return { label: "Great", color: "text-green-400" };
+  if (accuracy >= 75) return { label: "Good", color: "text-yellow-400" };
+  if (accuracy >= 60) return { label: "Inaccurate", color: "text-orange-400" };
+  return { label: "Poor", color: "text-red-400" };
+}
+
+function performanceRating(
+  result: string,
+  playerColor: "white" | "black",
+  opponentElo: number
+): number {
+  const isWin =
+    (result === "1-0" && playerColor === "white") ||
+    (result === "0-1" && playerColor === "black");
+  const isLoss =
+    (result === "1-0" && playerColor === "black") ||
+    (result === "0-1" && playerColor === "white");
+
+  if (isWin) return opponentElo + 400;
+  if (isLoss) return opponentElo - 400;
+  return opponentElo; // draw
+}
+
+function parsePgnHeaders(pgn: string): Record<string, string> {
+  const h: Record<string, string> = {};
+  const regex = /\[(\w+)\s+"([^"]*)"\]/g;
+  let m;
+  while ((m = regex.exec(pgn)) !== null) h[m[1]] = m[2];
+  return h;
+}
+
 /* ── Sub-components ─────────────────────────────────────── */
 
 function TagBadge({ tag }: { tag: MomentTag }) {
@@ -204,6 +240,28 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   // eslint-disable-next-line react-hooks/refs -- keeping ref in sync for use in callbacks
   selectedPlyRef.current = selectedPly;
 
+  // Extract player names and Elo from PGN headers
+  const pgnInfo = useMemo(() => {
+    const h = parsePgnHeaders(analysis.pgn);
+
+    const validHeader = (v: string | undefined) => v && v !== "?" ? v : undefined;
+    const whiteName = validHeader(h["White"]) || (analysis.playerColor === "white" ? "You" : analysis.opponentUsername);
+    const blackName = validHeader(h["Black"]) || (analysis.playerColor === "black" ? "You" : analysis.opponentUsername);
+
+    // Opponent Elo: prefer PGN header, fallback to opponentFideEstimate
+    const opponentEloField = analysis.playerColor === "white" ? "BlackElo" : "WhiteElo";
+    const opponentElo = parseInt(h[opponentEloField]) || analysis.opponentFideEstimate || null;
+
+    return { whiteName, blackName, opponentElo };
+  }, [analysis]);
+
+  const quality = useMemo(() => qualityLabel(analysis.summary.accuracy), [analysis.summary.accuracy]);
+
+  const perfRating = useMemo(() => {
+    if (!pgnInfo.opponentElo) return null;
+    return performanceRating(analysis.result, analysis.playerColor, pgnInfo.opponentElo);
+  }, [analysis.result, analysis.playerColor, pgnInfo.opponentElo]);
+
   // Plies array for navigation
   const plies = useMemo(() => analysis.moves.map((m) => m.ply), [analysis.moves]);
   const minPly = plies.length > 0 ? plies[0] : 1;
@@ -335,7 +393,10 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     try {
       const res = await fetch("https://lichess.org/api/import", {
         method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          "Accept": "application/json",
+        },
         body: new URLSearchParams({ pgn: analysis.pgn }),
       });
       if (!res.ok) throw new Error(`Import failed: ${res.status}`);
@@ -379,32 +440,54 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     [analysis.moves]
   );
 
-  const resultColor =
-    analysis.result === "1-0"
-      ? analysis.playerColor === "white" ? "text-green-400" : "text-red-400"
-      : analysis.result === "0-1"
-        ? analysis.playerColor === "black" ? "text-green-400" : "text-red-400"
-        : "text-yellow-400";
-
-  const resultText =
-    analysis.result === "1-0"
-      ? analysis.playerColor === "white" ? "You won" : "You lost"
-      : analysis.result === "0-1"
-        ? analysis.playerColor === "black" ? "You won" : "You lost"
-        : "Draw";
+  // Determine if the scouted player won/lost/drew
+  const isPlayerWin =
+    (analysis.result === "1-0" && analysis.playerColor === "white") ||
+    (analysis.result === "0-1" && analysis.playerColor === "black");
+  const isPlayerLoss =
+    (analysis.result === "1-0" && analysis.playerColor === "black") ||
+    (analysis.result === "0-1" && analysis.playerColor === "white");
 
   return (
     <div className="space-y-6">
       {/* Result banner */}
       <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
-        <div className={`text-2xl font-bold ${resultColor}`}>{resultText}</div>
-        <p className="mt-1 text-sm text-zinc-400">
-          vs {analysis.opponentUsername}
-          {analysis.opponentFideEstimate && ` (~${analysis.opponentFideEstimate} FIDE)`}
-          {" · "}{analysis.opening}
-          {" · "}{analysis.totalMoves} moves
-          {" · "}{analysis.summary.accuracy}% accuracy
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          {/* Left: player matchup */}
+          <div>
+            <div className="flex items-center gap-2 text-lg">
+              <span className="inline-block h-3.5 w-3.5 rounded-sm bg-white flex-shrink-0" />
+              <span className={analysis.playerColor === "white" ? "font-bold text-white" : "text-zinc-400"}>
+                {pgnInfo.whiteName}
+              </span>
+              <span className="font-mono text-zinc-500 text-sm mx-1">
+                {analysis.result}
+              </span>
+              <span className="inline-block h-3.5 w-3.5 rounded-sm bg-zinc-600 flex-shrink-0" />
+              <span className={analysis.playerColor === "black" ? "font-bold text-white" : "text-zinc-400"}>
+                {pgnInfo.blackName}
+              </span>
+            </div>
+            <p className="mt-1.5 text-sm text-zinc-500">
+              {analysis.opening}
+              {" · "}{analysis.totalMoves} moves
+            </p>
+          </div>
+
+          {/* Right: quality label + perf rating */}
+          <div className="text-right flex-shrink-0">
+            <div className={`text-xl font-bold ${quality.color}`}>
+              {isPlayerWin ? "Won" : isPlayerLoss ? "Lost" : "Draw"}
+              {" · "}
+              <span className={quality.color}>{quality.label}</span>
+            </div>
+            {perfRating !== null && (
+              <p className="text-sm text-zinc-500 mt-0.5">
+                Perf. <span className="font-mono text-zinc-300">{perfRating}</span>
+              </p>
+            )}
+          </div>
+        </div>
       </div>
 
       {/* Action bar: Copy PGN + Analyze on Lichess */}
@@ -452,8 +535,12 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatBox label="Accuracy" value={`${analysis.summary.accuracy}%`} />
-        <StatBox label="Avg CPL" value={`${analysis.summary.averageCentipawnLoss}`} />
+        <StatBox label={`Accuracy · ${quality.label}`} value={`${analysis.summary.accuracy}%`} />
+        {perfRating !== null ? (
+          <StatBox label="Perf. Rating" value={`${perfRating}`} />
+        ) : (
+          <StatBox label="Avg CPL" value={`${analysis.summary.averageCentipawnLoss}`} />
+        )}
         <StatBox
           label="Blunders"
           value={`${analysis.summary.blunders}`}
@@ -604,6 +691,22 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
             {/* Moves tab */}
             {viewTab === "moves" && (
               <div ref={moveListRef} className="max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
+                {/* Column headers with player names */}
+                <div className="grid grid-cols-[2rem_1fr_1fr] gap-y-0.5 mb-1 pb-1 border-b border-zinc-700/50 sticky top-0 bg-zinc-800/95 backdrop-blur-sm z-10">
+                  <span />
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                    <span className="inline-block h-2.5 w-2.5 rounded-sm bg-white flex-shrink-0" />
+                    <span className={analysis.playerColor === "white" ? "text-zinc-200 font-medium" : ""}>
+                      {pgnInfo.whiteName}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                    <span className="inline-block h-2.5 w-2.5 rounded-sm bg-zinc-600 flex-shrink-0" />
+                    <span className={analysis.playerColor === "black" ? "text-zinc-200 font-medium" : ""}>
+                      {pgnInfo.blackName}
+                    </span>
+                  </div>
+                </div>
                 <div className="grid grid-cols-[2rem_1fr_1fr] gap-y-0.5">
                   {movePairs.map((pair) => (
                     <Fragment key={pair.num}>

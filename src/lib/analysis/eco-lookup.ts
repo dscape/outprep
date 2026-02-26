@@ -24,7 +24,15 @@ function getSeedMoves(eco: string): string[] {
     if (num < 40) return ["g1f3"]; // Various Nf3 systems
     return ["d2d4"]; // A40+ = 1. d4 (Indian systems, etc.)
   }
-  if (letter === "B") return ["e2e4"]; // Sicilian, Caro-Kann, etc.
+  if (letter === "B") {
+    // B00: Uncommon King's Pawn, B01: Scandinavian, B02-B05: Alekhine,
+    // B06: Modern/Pirc, B07-B09: Pirc, B10-B19: Caro-Kann, B20-B99: Sicilian
+    if (num <= 1) return ["e2e4", "d7d5"];   // Scandinavian (1.e4 d5)
+    if (num <= 5) return ["e2e4", "g8f6"];   // Alekhine (1.e4 Nf6)
+    if (num <= 9) return ["e2e4", "d7d6"];   // Pirc/Modern (1.e4 d6)
+    if (num <= 19) return ["e2e4", "c7c6"];  // Caro-Kann (1.e4 c6)
+    return ["e2e4", "c7c5"];                 // Sicilian (1.e4 c5)
+  }
   if (letter === "C") return ["e2e4", "e7e5"]; // Open games
   if (letter === "D") return ["d2d4", "d7d5"]; // Queen's Gambit, Slav, etc.
   if (letter === "E") return ["d2d4", "g8f6", "c2c4"]; // Indian defenses
@@ -75,6 +83,9 @@ export async function getOpeningMoves(eco: string): Promise<string[]> {
 
       // Try each candidate move to see if it gets us to the target ECO
       let found = false;
+      const targetNum = parseInt(eco.substring(1)) || 0;
+      let bestCandidate: { uci: string; distance: number } | null = null;
+
       for (const candidate of data.moves.slice(0, 3)) {
         const testMoves = [...moves, candidate.uci];
         const testData = await queryExplorer(testMoves);
@@ -83,16 +94,20 @@ export async function getOpeningMoves(eco: string): Promise<string[]> {
           cacheEcoMoves(eco, moves);
           return moves;
         }
-        // If the ECO letter matches, this might be on the right path
-        if (
-          testData?.opening?.eco &&
-          testData.opening.eco[0] === eco[0] &&
-          !found
-        ) {
-          moves.push(candidate.uci);
-          found = true;
-          break;
+        // Track the candidate whose ECO is closest to the target
+        if (testData?.opening?.eco && testData.opening.eco[0] === eco[0]) {
+          const candidateNum = parseInt(testData.opening.eco.substring(1)) || 0;
+          const distance = Math.abs(candidateNum - targetNum);
+          if (!bestCandidate || distance < bestCandidate.distance) {
+            bestCandidate = { uci: candidate.uci, distance };
+          }
         }
+      }
+
+      // Pick the candidate closest to the target ECO number
+      if (bestCandidate) {
+        moves.push(bestCandidate.uci);
+        found = true;
       }
 
       // If no candidate matched, follow the most popular move
