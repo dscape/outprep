@@ -83,34 +83,43 @@ export function generateSlug(name: string, fideId: string): string {
  * Generate alias slugs that 301-redirect to the canonical.
  * Returns an array of alternative slugs (does NOT include the canonical).
  *
- * Aliases generated:
+ * Takes ALL name variants seen for this player and generates aliases from each.
+ * This ensures that both "Caruana,F" and "Caruana,Fabiano" produce searchable URLs.
+ *
+ * Per name variant, aliases generated:
  * 1. lastname-firstname-fideId  (PGN order + ID)
  * 2. lastname-firstname         (PGN order, no ID — short form)
  * 3. For multi-part first names: first-part-only-lastname-fideId
  */
 export function generateAliases(
-  name: string,
+  nameVariants: Iterable<string>,
   fideId: string,
   canonicalSlug: string
 ): string[] {
-  const { lastName, firstName } = parseNameParts(name);
   const aliases = new Set<string>();
 
-  if (firstName) {
-    // 1. lastname-firstname-fideId (PGN order + ID)
-    aliases.add(slugify(`${lastName} ${firstName} ${fideId}`));
+  for (const name of nameVariants) {
+    const { lastName, firstName } = parseNameParts(name);
 
-    // 2. lastname-firstname (PGN order, no ID)
-    aliases.add(slugify(`${lastName} ${firstName}`));
+    if (firstName) {
+      // firstname-lastname-fideId (natural search order + ID) — may duplicate canonical
+      aliases.add(slugify(`${firstName} ${lastName} ${fideId}`));
 
-    // 3. For multi-part first names, add short alias: first-part-lastname-fideId
-    const firstParts = firstName.split(/\s+/);
-    if (firstParts.length > 1) {
-      aliases.add(slugify(`${firstParts[0]} ${lastName} ${fideId}`));
+      // lastname-firstname-fideId (PGN order + ID)
+      aliases.add(slugify(`${lastName} ${firstName} ${fideId}`));
+
+      // lastname-firstname (PGN order, no ID — short form)
+      aliases.add(slugify(`${lastName} ${firstName}`));
+
+      // For multi-part first names, add short alias: first-part-lastname-fideId
+      const firstParts = firstName.split(/\s+/);
+      if (firstParts.length > 1) {
+        aliases.add(slugify(`${firstParts[0]} ${lastName} ${fideId}`));
+      }
+    } else {
+      // No first name — add lastname-only without ID
+      aliases.add(slugify(lastName));
     }
-  } else {
-    // No first name — add lastname-only without ID
-    aliases.add(slugify(lastName));
   }
 
   // Remove canonical from aliases (it's not an alias of itself)
@@ -186,7 +195,7 @@ export function aggregatePlayers(
   for (const acc of accumulators) {
     const fideId = acc.fideId!; // guaranteed non-null by filter above
     const slug = generateSlug(acc.name, fideId);
-    const aliases = generateAliases(acc.name, fideId, slug);
+    const aliases = generateAliases(acc.nameVariants, fideId, slug);
     const totalResults = acc.wins + acc.draws + acc.losses;
 
     result.push({
@@ -244,6 +253,7 @@ function processPlayer(
   if (!acc) {
     acc = {
       name: input.name,
+      nameVariants: new Set([input.name]),
       normalizedKey: key,
       fideId: input.fideId,
       latestElo: input.elo,
@@ -260,6 +270,9 @@ function processPlayer(
     };
     players.set(key, acc);
   }
+
+  // Track all name variants for this player
+  acc.nameVariants.add(input.name);
 
   // If we now have a FIDE ID that was missing before, store it
   if (input.fideId && !acc.fideId) {

@@ -108,7 +108,7 @@ export async function analyze() {
 
   console.log(`  Baseline score: ${(sweepData.baseline.compositeScore * 100).toFixed(2)}%`);
   const bm = sweepData.baseline.aggregatedMetrics;
-  const analyzeCplStr = isNaN(bm.cplDelta) ? "N/A" : bm.cplDelta.toFixed(1);
+  const analyzeCplStr = (bm.cplDelta == null || isNaN(bm.cplDelta)) ? "N/A" : bm.cplDelta.toFixed(1);
   console.log(
     `  Breakdown:      match=${(bm.matchRate * 100).toFixed(1)}%  top4=${(bm.topNRate * 100).toFixed(1)}%  cplΔ=${analyzeCplStr}  book=${(bm.bookCoverage * 100).toFixed(1)}%  strength: ${formatStrength(bm.avgActualCPL, bm.avgBotCPL)}`
   );

@@ -14,6 +14,11 @@ import { formatScore, formatDelta, formatStrength } from "../scoring/composite-s
 import { getConfigValue } from "../util/parameter-registry";
 import { getTunerRoot } from "../state/tuner-state";
 
+/** Null-safe isNaN: treats null/undefined (from JSON round-trip of NaN) as NaN */
+function isNullOrNaN(v: number): boolean {
+  return v == null || isNaN(v);
+}
+
 interface ClaudeAnalysis {
   summary: string;
   rankedChanges: {
@@ -176,9 +181,9 @@ function generateMarkdown(proposal: Proposal): string {
       `|--------|-------|`,
       `| Match Rate | ${(m.matchRate * 100).toFixed(1)}% |`,
       `| Top-4 Rate | ${(m.topNRate * 100).toFixed(1)}% |`,
-      `| CPL Delta | ${isNaN(m.cplDelta) ? "N/A" : m.cplDelta.toFixed(1)} |`,
-      `| Avg Bot CPL | ${isNaN(m.avgBotCPL) ? "N/A" : m.avgBotCPL.toFixed(1)} |`,
-      `| Avg Actual CPL | ${isNaN(m.avgActualCPL) ? "N/A" : m.avgActualCPL.toFixed(1)} |`,
+      `| CPL Delta | ${isNullOrNaN(m.cplDelta) ? "N/A" : m.cplDelta.toFixed(1)} |`,
+      `| Avg Bot CPL | ${isNullOrNaN(m.avgBotCPL) ? "N/A" : m.avgBotCPL.toFixed(1)} |`,
+      `| Avg Actual CPL | ${isNullOrNaN(m.avgActualCPL) ? "N/A" : m.avgActualCPL.toFixed(1)} |`,
       `| Book Coverage | ${(m.bookCoverage * 100).toFixed(1)}% |`,
       ``,
     );
@@ -194,8 +199,8 @@ function generateMarkdown(proposal: Proposal): string {
       `|--------|-----|---------|------------|--------|`,
     );
     for (const dm of sorted) {
-      const bCPL = isNaN(dm.metrics.avgBotCPL) ? "N/A" : dm.metrics.avgBotCPL.toFixed(1);
-      const aCPL = isNaN(dm.metrics.avgActualCPL) ? "N/A" : dm.metrics.avgActualCPL.toFixed(1);
+      const bCPL = isNullOrNaN(dm.metrics.avgBotCPL) ? "N/A" : dm.metrics.avgBotCPL.toFixed(1);
+      const aCPL = isNullOrNaN(dm.metrics.avgActualCPL) ? "N/A" : dm.metrics.avgActualCPL.toFixed(1);
       lines.push(
         `| ${dm.dataset} | ${dm.elo} | ${bCPL} | ${aCPL} | ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)} |`
       );
@@ -245,7 +250,7 @@ function generateMarkdown(proposal: Proposal): string {
     lines.push(`|------------|--------|-------|-------|-------|---------|`);
     for (const exp of proposal.rankedExperiments.slice(0, 10)) {
       const m = exp.aggregatedMetrics;
-      const cplStr = isNaN(m.cplDelta) ? "N/A" : m.cplDelta.toFixed(1);
+      const cplStr = isNullOrNaN(m.cplDelta) ? "N/A" : m.cplDelta.toFixed(1);
       lines.push(
         `| ${exp.description.slice(0, 35)} | ${(m.matchRate * 100).toFixed(1)}% | ${(m.topNRate * 100).toFixed(1)}% | ${cplStr} | ${formatScore(exp.compositeScore)} | ${formatDelta(exp.scoreDelta)} |`
       );

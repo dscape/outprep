@@ -17,6 +17,33 @@ import type { TWICGameHeader, FIDEPlayer } from "./types";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+// ─── Load .env from project root ────────────────────────────────────────────
+// Walk up from packages/fide-pipeline/ to find the root .env file.
+// This avoids adding a dotenv dependency — just parse KEY=VALUE lines.
+function loadEnvFile(): void {
+  // Try root .env first, then .env.local
+  const root = join(import.meta.dirname, "..", "..", "..");
+  for (const name of [".env", ".env.local"]) {
+    const envPath = join(root, name);
+    if (!existsSync(envPath)) continue;
+    const content = readFileSync(envPath, "utf-8");
+    for (const line of content.split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx === -1) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      const value = trimmed.slice(eqIdx + 1).trim();
+      // Don't override existing env vars (e.g., from CI)
+      if (!process.env[key]) {
+        process.env[key] = value;
+      }
+    }
+  }
+}
+
+loadEnvFile();
+
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const PROCESSED_DIR = join(DATA_DIR, "processed");
 

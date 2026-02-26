@@ -36,10 +36,10 @@ export function averageMetrics(
   const avg = (fn: (m: Metrics) => number) =>
     results.reduce((sum, r) => sum + fn(r.metrics) * r.weight, 0) / totalWeight;
 
-  // NaN-safe weighted average: skips datasets where the value is NaN.
-  // Returns NaN if ALL values are NaN (no data at all).
+  // NaN-safe weighted average: skips datasets where the value is NaN or null (JSON round-trip).
+  // Returns NaN if ALL values are NaN/null (no data at all).
   const avgNaN = (fn: (m: Metrics) => number) => {
-    const valid = results.filter((r) => !isNaN(fn(r.metrics)));
+    const valid = results.filter((r) => { const v = fn(r.metrics); return v != null && !isNaN(v); });
     if (valid.length === 0) return NaN;
     const w = valid.reduce((sum, r) => sum + r.weight, 0);
     return valid.reduce((sum, r) => sum + fn(r.metrics) * r.weight, 0) / w;

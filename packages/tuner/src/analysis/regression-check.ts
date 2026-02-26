@@ -11,6 +11,11 @@ import type { AggregatedResult, CycleRecord } from "../state/types";
 import { compositeScore, formatStrength } from "../scoring/composite-score";
 import type { HistoricalBaseline } from "./prompt-builder";
 
+/** Null-safe isNaN: treats null/undefined (from JSON round-trip of NaN) as NaN */
+function isNullOrNaN(v: number): boolean {
+  return v == null || isNaN(v);
+}
+
 /* ── Types ───────────────────────────────────────────────── */
 
 export interface MetricDelta {
@@ -122,7 +127,7 @@ export function runRegressionCheck(
   {
     const prevVal = prev.cplDelta;
     const currVal = curr.cplDelta;
-    const hasData = !isNaN(prevVal) && !isNaN(currVal);
+    const hasData = !isNullOrNaN(prevVal) && !isNullOrNaN(currVal);
     const delta = hasData ? prevVal - currVal : 0;
     const th = THRESHOLDS.cplDelta;
 
@@ -133,8 +138,8 @@ export function runRegressionCheck(
       delta,
       direction: hasData ? classifyDirection(delta, th, "lower-raw") : "stable",
       severity: hasData ? classifySeverity(delta, th, "lower-raw") : "none",
-      displayPrevious: isNaN(prevVal) ? "N/A" : prevVal.toFixed(1),
-      displayCurrent: isNaN(currVal) ? "N/A" : currVal.toFixed(1),
+      displayPrevious: isNullOrNaN(prevVal) ? "N/A" : prevVal.toFixed(1),
+      displayCurrent: isNullOrNaN(currVal) ? "N/A" : currVal.toFixed(1),
       displayDelta: hasData
         ? (delta >= 0 ? "-" : "+") + Math.abs(delta).toFixed(1) + "cp"
         : "N/A",
@@ -144,8 +149,8 @@ export function runRegressionCheck(
   // Lower-is-better: |botCPL - actualCPL| (strength calibration gap)
   // Skip when CPL data is unavailable (NaN in triage mode)
   {
-    const hasPrev = !isNaN(prev.avgBotCPL) && !isNaN(prev.avgActualCPL);
-    const hasCurr = !isNaN(curr.avgBotCPL) && !isNaN(curr.avgActualCPL);
+    const hasPrev = !isNullOrNaN(prev.avgBotCPL) && !isNullOrNaN(prev.avgActualCPL);
+    const hasCurr = !isNullOrNaN(curr.avgBotCPL) && !isNullOrNaN(curr.avgActualCPL);
     const prevGap = hasPrev ? Math.abs(prev.avgBotCPL - prev.avgActualCPL) : NaN;
     const currGap = hasCurr ? Math.abs(curr.avgBotCPL - curr.avgActualCPL) : NaN;
     const hasData = hasPrev && hasCurr;
@@ -154,13 +159,13 @@ export function runRegressionCheck(
 
     metricDeltas.push({
       metric: "|bot-actual|",
-      previous: isNaN(prevGap) ? 0 : prevGap,
-      current: isNaN(currGap) ? 0 : currGap,
+      previous: isNullOrNaN(prevGap) ? 0 : prevGap,
+      current: isNullOrNaN(currGap) ? 0 : currGap,
       delta,
       direction: hasData ? classifyDirection(delta, th, "lower-raw") : "stable",
       severity: hasData ? classifySeverity(delta, th, "lower-raw") : "none",
-      displayPrevious: isNaN(prevGap) ? "N/A" : prevGap.toFixed(1),
-      displayCurrent: isNaN(currGap) ? "N/A" : currGap.toFixed(1),
+      displayPrevious: isNullOrNaN(prevGap) ? "N/A" : prevGap.toFixed(1),
+      displayCurrent: isNullOrNaN(currGap) ? "N/A" : currGap.toFixed(1),
       displayDelta: hasData
         ? (delta >= 0 ? "-" : "+") + Math.abs(delta).toFixed(1) + "cp"
         : "N/A",
@@ -180,8 +185,8 @@ export function runRegressionCheck(
     const scoreDelta = currScore - prevScore;
     const th = THRESHOLDS.eloBand;
 
-    const hasPrevGap = !isNaN(prevDs.metrics.avgBotCPL) && !isNaN(prevDs.metrics.avgActualCPL);
-    const hasCurrGap = !isNaN(ds.metrics.avgBotCPL) && !isNaN(ds.metrics.avgActualCPL);
+    const hasPrevGap = !isNullOrNaN(prevDs.metrics.avgBotCPL) && !isNullOrNaN(prevDs.metrics.avgActualCPL);
+    const hasCurrGap = !isNullOrNaN(ds.metrics.avgBotCPL) && !isNullOrNaN(ds.metrics.avgActualCPL);
     const prevGap = hasPrevGap ? Math.abs(prevDs.metrics.avgBotCPL - prevDs.metrics.avgActualCPL) : NaN;
     const currGap = hasCurrGap ? Math.abs(ds.metrics.avgBotCPL - ds.metrics.avgActualCPL) : NaN;
     const gapDelta = (hasPrevGap && hasCurrGap) ? prevGap - currGap : 0;
@@ -204,8 +209,8 @@ export function runRegressionCheck(
   // Strength calibration: average |botCPL - actualCPL| across Elo bands (NaN-safe)
   const prevBands = previousBaseline.datasetMetrics;
   const currBands = currentBaseline.datasetMetrics;
-  const prevValidBands = prevBands.filter((d) => !isNaN(d.metrics.avgBotCPL) && !isNaN(d.metrics.avgActualCPL));
-  const currValidBands = currBands.filter((d) => !isNaN(d.metrics.avgBotCPL) && !isNaN(d.metrics.avgActualCPL));
+  const prevValidBands = prevBands.filter((d) => !isNullOrNaN(d.metrics.avgBotCPL) && !isNullOrNaN(d.metrics.avgActualCPL));
+  const currValidBands = currBands.filter((d) => !isNullOrNaN(d.metrics.avgBotCPL) && !isNullOrNaN(d.metrics.avgActualCPL));
   const prevAvgGap =
     prevValidBands.length > 0
       ? prevValidBands.reduce((s, d) => s + Math.abs(d.metrics.avgBotCPL - d.metrics.avgActualCPL), 0) /
@@ -216,7 +221,7 @@ export function runRegressionCheck(
       ? currValidBands.reduce((s, d) => s + Math.abs(d.metrics.avgBotCPL - d.metrics.avgActualCPL), 0) /
         currValidBands.length
       : NaN;
-  const gapDelta = (!isNaN(prevAvgGap) && !isNaN(currAvgGap)) ? prevAvgGap - currAvgGap : 0;
+  const gapDelta = (!isNullOrNaN(prevAvgGap) && !isNullOrNaN(currAvgGap)) ? prevAvgGap - currAvgGap : 0;
 
   // ── Config diffs ──
   const configDiffs = extractConfigDiffs(completedCycles, previousCycle, currentCycle);
@@ -309,8 +314,8 @@ export function printRegressionReport(report: RegressionReport): void {
   // Strength calibration
   console.log("  ── Strength Calibration ──");
   const sc = report.strengthCalibration;
-  const prevGapStr = isNaN(sc.previousAvgGap) ? "N/A" : sc.previousAvgGap.toFixed(1);
-  const currGapStr = isNaN(sc.currentAvgGap) ? "N/A" : sc.currentAvgGap.toFixed(1);
+  const prevGapStr = isNullOrNaN(sc.previousAvgGap) ? "N/A" : sc.previousAvgGap.toFixed(1);
+  const currGapStr = isNullOrNaN(sc.currentAvgGap) ? "N/A" : sc.currentAvgGap.toFixed(1);
   console.log(
     `    Avg |botCPL - actualCPL|: ${prevGapStr} → ${currGapStr}  ${sc.direction}\n`
   );
@@ -388,8 +393,10 @@ export function formatRegressionForPrompt(report: RegressionReport): string {
   // Strength calibration
   const sc = report.strengthCalibration;
   lines.push("### Strength Calibration");
+  const scPrevStr = isNullOrNaN(sc.previousAvgGap) ? "N/A" : sc.previousAvgGap.toFixed(1);
+  const scCurrStr = isNullOrNaN(sc.currentAvgGap) ? "N/A" : sc.currentAvgGap.toFixed(1);
   lines.push(
-    `Avg |botCPL - actualCPL|: ${sc.previousAvgGap.toFixed(1)} → ${sc.currentAvgGap.toFixed(1)} — **${sc.direction}**`
+    `Avg |botCPL - actualCPL|: ${scPrevStr} → ${scCurrStr} — **${sc.direction}**`
   );
   lines.push("");
 
@@ -522,7 +529,7 @@ function generateResearcherNotes(
     for (let i = 1; i < baselines.length; i++) {
       const currDelta = baselines[i].aggregatedMetrics.cplDelta;
       const prevDelta = baselines[i - 1].aggregatedMetrics.cplDelta;
-      if (isNaN(currDelta) || isNaN(prevDelta)) {
+      if (isNullOrNaN(currDelta) || isNullOrNaN(prevDelta)) {
         cplDeclines = 0; // Reset on missing data
         continue;
       }

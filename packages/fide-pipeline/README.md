@@ -6,9 +6,33 @@ Download, process, and upload FIDE player data from [This Week in Chess (TWIC)](
 
 - Node.js 20+
 - `unzip` command available (pre-installed on macOS/Linux)
-- `BLOB_READ_WRITE_TOKEN` environment variable (for upload to Vercel Blob)
 
-Get a Blob token from: **Vercel Dashboard → Storage → Blob → Tokens**
+## Setup
+
+### 1. Environment variables
+
+Copy the example env file from the project root and fill in your values:
+
+```bash
+cp .env.example .env
+```
+
+The only variable needed is `BLOB_READ_WRITE_TOKEN` (for uploading to Vercel Blob):
+
+| Variable | Required for | How to get it |
+|----------|-------------|---------------|
+| `BLOB_READ_WRITE_TOKEN` | `upload`, `full`, `smoke` (without `--skip-upload`) | [Vercel Dashboard](https://vercel.com/dashboard) → Storage → Blob → Tokens |
+
+> **Local development doesn't need a token.** The Next.js app falls back to reading
+> local files from `packages/fide-pipeline/data/processed/` when no token is set.
+
+### 2. Create a Blob store (first time only)
+
+1. Go to [vercel.com/dashboard](https://vercel.com/dashboard)
+2. Select your project → **Storage** tab → **Create Database** → **Blob**
+3. Name it (e.g. `outprep-blob`) and click **Create**
+4. Go to the new store → **Tokens** tab → **Create Token**
+5. Copy the token (starts with `vercel_blob_...`) into your `.env` file
 
 ## Quick Start
 
@@ -17,7 +41,8 @@ Get a Blob token from: **Vercel Dashboard → Storage → Blob → Tokens**
 npm run fide-pipeline -- smoke --skip-upload
 
 # Smoke test with Blob upload (uses fide-smoke/ prefix)
-BLOB_READ_WRITE_TOKEN=vercel_blob_... npm run fide-pipeline -- smoke
+# Requires BLOB_READ_WRITE_TOKEN in .env
+npm run fide-pipeline -- smoke
 ```
 
 ## Full Pipeline
@@ -29,11 +54,11 @@ npm run fide-pipeline -- download --from 1433 --to 1633
 # Step 2: Process PGNs into player profiles
 npm run fide-pipeline -- process --min-games 3
 
-# Step 3: Upload to Vercel Blob
-BLOB_READ_WRITE_TOKEN=vercel_blob_... npm run fide-pipeline -- upload
+# Step 3: Upload to Vercel Blob (requires BLOB_READ_WRITE_TOKEN in .env)
+npm run fide-pipeline -- upload
 
 # Or all three in one command:
-BLOB_READ_WRITE_TOKEN=vercel_blob_... npm run fide-pipeline -- full --from 1433 --to 1633
+npm run fide-pipeline -- full --from 1433 --to 1633
 ```
 
 ## CLI Reference
@@ -188,8 +213,8 @@ npm run fide-pipeline -- download --from 1634 --to 1634
 # Re-process all downloaded data
 npm run fide-pipeline -- process --min-games 3
 
-# Re-upload
-BLOB_READ_WRITE_TOKEN=vercel_blob_... npm run fide-pipeline -- upload
+# Re-upload (requires BLOB_READ_WRITE_TOKEN in .env)
+npm run fide-pipeline -- upload
 ```
 
 Or set up the GitHub Action (see `.github/workflows/twic-update.yml`) for automatic weekly updates.
@@ -198,7 +223,7 @@ Or set up the GitHub Action (see `.github/workflows/twic-update.yml`) for automa
 
 ### "BLOB_READ_WRITE_TOKEN not set"
 
-Set the env var before running upload commands. Get a token from Vercel Dashboard → Storage → Blob.
+Make sure you have a `.env` file in the project root with your token. See [Setup](#setup) above for how to create one.
 
 ### "No .pgn file found in zip archive"
 

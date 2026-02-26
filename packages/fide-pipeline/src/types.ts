@@ -71,7 +71,8 @@ export interface PlayerIndex {
 
 /** Internal accumulator used during aggregation. */
 export interface PlayerAccumulator {
-  name: string; // Display name (most recent form seen)
+  name: string; // Display name (best/longest form seen)
+  nameVariants: Set<string>; // All name forms seen (e.g. "Caruana,F", "Caruana,Fabiano")
   normalizedKey: string; // Lowercase deduplication key
   fideId: string | null; // FIDE ID — primary dedup key when available
   latestElo: number;
