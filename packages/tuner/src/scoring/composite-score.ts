@@ -40,7 +40,9 @@ export function compositeScore(
   metrics: Metrics,
   weights: ScoreWeights = DEFAULT_WEIGHTS
 ): number {
-  const hasCPL = !isNaN(metrics.cplDelta) && !isNaN(metrics.avgBotCPL);
+  // null-safe: JSON round-trip turns NaN → null, and isNaN(null) === false
+  const hasCPL = metrics.cplDelta != null && !isNaN(metrics.cplDelta)
+    && metrics.avgBotCPL != null && !isNaN(metrics.avgBotCPL);
 
   if (!hasCPL) {
     // No CPL data — score from matchRate, topNRate, bookCoverage only.
@@ -92,7 +94,7 @@ export function formatDelta(delta: number): string {
  * Negative delta (actualCPL < botCPL) = bot is weaker than the player.
  */
 export function formatStrength(actualCPL: number, botCPL: number): string {
-  if (isNaN(actualCPL) || isNaN(botCPL)) return "CPL N/A (triage)";
+  if (actualCPL == null || botCPL == null || isNaN(actualCPL) || isNaN(botCPL)) return "CPL N/A (triage)";
   const delta = actualCPL - botCPL;
   if (Math.abs(delta) < 2) return "≈ calibrated";
   if (delta > 0) return `${delta.toFixed(0)}cp too strong`;

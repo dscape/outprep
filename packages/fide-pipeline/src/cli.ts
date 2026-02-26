@@ -298,11 +298,17 @@ program
       }
     }
 
+    // Load aliases
+    const aliasesPath = join(PROCESSED_DIR, "aliases.json");
+    const aliases: Record<string, string> = existsSync(aliasesPath)
+      ? JSON.parse(readFileSync(aliasesPath, "utf-8"))
+      : buildAliasMap(players);
+
     console.log(`\nUploading to Vercel Blob (prefix: ${opts.prefix}/)`);
-    console.log(`  ${index.totalPlayers} players, ${playerGames.size} game files\n`);
+    console.log(`  ${index.totalPlayers} players, ${playerGames.size} game files, ${Object.keys(aliases).length} aliases\n`);
 
     const start = Date.now();
-    const result = await uploadAll(players, index, playerGames, {
+    const result = await uploadAll(players, index, playerGames, aliases, {
       prefix: opts.prefix,
       onProgress: (uploaded, total) => {
         if (uploaded % 200 === 0 || uploaded === total) {
@@ -372,9 +378,11 @@ program
       return;
     }
 
+    const fullAliasMap = buildAliasMap(players);
+
     console.log(`\nStep 3/3: Upload to Vercel Blob (prefix: ${opts.prefix}/)\n`);
 
-    const result = await uploadAll(players, index, playerGames, {
+    const result = await uploadAll(players, index, playerGames, fullAliasMap, {
       prefix: opts.prefix,
       onProgress: (uploaded, total) => {
         if (uploaded % 500 === 0 || uploaded === total) {

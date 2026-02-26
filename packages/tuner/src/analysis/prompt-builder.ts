@@ -11,9 +11,9 @@ import { formatStrength } from "../scoring/composite-score";
 import type { RegressionReport } from "./regression-check";
 import { formatRegressionForPrompt } from "./regression-check";
 
-/** Format a number for display, returning "N/A" for NaN */
+/** Format a number for display, returning "N/A" for NaN or null (JSON round-trip) */
 function fmtNum(n: number, decimals: number): string {
-  return isNaN(n) ? "N/A" : n.toFixed(decimals);
+  return (n == null || isNaN(n)) ? "N/A" : n.toFixed(decimals);
 }
 
 function formatMetricsRow(label: string, r: AggregatedResult): string {

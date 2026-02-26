@@ -22,6 +22,7 @@ import {
 } from "../analysis/regression-check";
 import type { RegressionReport } from "../analysis/regression-check";
 import type { AggregatedResult } from "../state/types";
+import { sanitizeAggregatedResult } from "../util/nan-safe";
 
 export async function analyze() {
   const state = getOrCreateState();
@@ -51,6 +52,12 @@ export async function analyze() {
     experiments: AggregatedResult[];
   };
 
+  // Sanitize NaN fields that became null during JSON round-trip
+  sanitizeAggregatedResult(sweepData.baseline);
+  for (const exp of sweepData.experiments) {
+    sanitizeAggregatedResult(exp);
+  }
+
   // Load all historical sweep results for metrics progression
   const allSweepFiles = [...files].reverse(); // chronological order (oldest first)
   const historicalBaselines: { cycle: number; baseline: AggregatedResult }[] = [];
@@ -65,6 +72,7 @@ export async function analyze() {
       const data = JSON.parse(readFileSync(join(resultsDir, file), "utf-8")) as {
         baseline: AggregatedResult;
       };
+      sanitizeAggregatedResult(data.baseline);
       historicalBaselines.push({ cycle: cycleNum, baseline: data.baseline });
     } catch {
       // Skip corrupt/unreadable files

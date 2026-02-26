@@ -30,6 +30,8 @@ const IS_DEV = process.env.NODE_ENV === "development";
 
 // In-memory cache for the player index (expensive to fetch, rarely changes)
 let cachedIndex: { data: PlayerIndex; fetchedAt: number } | null = null;
+// In-memory cache for the alias map (alias slug → canonical slug)
+let cachedAliases: { data: Record<string, string>; fetchedAt: number } | null = null;
 const INDEX_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 // ─── Local file fallback for development ──────────────────────────────────────
@@ -192,6 +194,45 @@ export async function getPlayerGames(slug: string): Promise<string[] | null> {
   }
 
   return fetchBlobJson<string[]>(`${PREFIX}/games/${slug}.json`);
+}
+
+/**
+ * Look up an alias slug and return the canonical slug it redirects to.
+ * Returns null if the slug is not an alias.
+ */
+export async function getAliasTarget(slug: string): Promise<string | null> {
+  // Check cache first
+  if (cachedAliases && Date.now() - cachedAliases.fetchedAt < INDEX_CACHE_TTL) {
+    return cachedAliases.data[slug] ?? null;
+  }
+
+  // Dev fallback: load local aliases.json
+  if (IS_DEV) {
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const aliasesPath = path.join(
+        process.cwd(),
+        "packages/fide-pipeline/data/processed/aliases.json"
+      );
+      if (fs.existsSync(aliasesPath)) {
+        const data = JSON.parse(fs.readFileSync(aliasesPath, "utf-8"));
+        cachedAliases = { data, fetchedAt: Date.now() };
+        return data[slug] ?? null;
+      }
+    } catch {
+      // fall through to Blob
+    }
+  }
+
+  // Production: fetch from Blob
+  const aliases = await fetchBlobJson<Record<string, string>>(`${PREFIX}/aliases.json`);
+  if (aliases) {
+    cachedAliases = { data: aliases, fetchedAt: Date.now() };
+    return aliases[slug] ?? null;
+  }
+
+  return null;
 }
 
 /**

@@ -96,8 +96,10 @@ interface PlayerIndex {
   generatedAt: string;    // ISO timestamp
   totalPlayers: number;
   players: Array<{
-    slug: string;         // URL slug (e.g., "carlsen-magnus")
-    name: string;         // Display name (e.g., "Carlsen,Magnus")
+    slug: string;         // Canonical URL slug (e.g., "f-caruana-2020009")
+    name: string;         // Display name (e.g., "Caruana,F")
+    fideId: string;       // FIDE ID (e.g., "2020009")
+    aliases: string[];    // Alternative slugs that 301 redirect to canonical
     fideRating: number;
     title: string | null; // "GM", "IM", "FM", etc.
     gameCount: number;
@@ -107,12 +109,14 @@ interface PlayerIndex {
 
 ### FIDEPlayer (`fide/players/{slug}.json`)
 
-Full profile for a single player.
+Full profile for a single player. Only players with a FIDE ID are included.
 
 ```typescript
 interface FIDEPlayer {
   name: string;
-  slug: string;
+  slug: string;           // Canonical: firstname-lastname-fideId
+  fideId: string;         // FIDE ID (used for dedup + uniqueness)
+  aliases: string[];      // Alternative slugs → 301 redirect to canonical
   fideRating: number;
   title: string | null;
   gameCount: number;
@@ -128,6 +132,31 @@ interface FIDEPlayer {
 }
 ```
 
+### Aliases (`fide/aliases.json`)
+
+Map from alias slug → canonical slug for 301 redirects.
+
+```json
+{
+  "caruana-f-2020009": "f-caruana-2020009",
+  "caruana-f": "f-caruana-2020009",
+  "carlsen-m-1503014": "m-carlsen-1503014",
+  "carlsen-m": "m-carlsen-1503014"
+}
+```
+
+### URL Slug Design
+
+**Canonical slug** = `{firstname}-{lastname}-{fideId}` (matches natural search queries):
+- `"Caruana,F"` → `/player/f-caruana-2020009`
+- `"Carlsen,M"` → `/player/m-carlsen-1503014`
+
+**Aliases** (301 redirect to canonical):
+- `caruana-f-2020009` → lastname-first order + FIDE ID
+- `caruana-f` → short form without FIDE ID
+
+Players without a FIDE ID are not indexed (no landing page generated).
+
 ### Player Games (`fide/games/{slug}.json`)
 
 Array of raw PGN strings for practice mode.
@@ -136,14 +165,15 @@ Array of raw PGN strings for practice mode.
 
 ```
 fide/
-├── index.json               # ~2 MB  (all players)
+├── index.json                     # ~2 MB  (all players)
+├── aliases.json                   # ~200 KB (alias → canonical map)
 ├── players/
-│   ├── carlsen-magnus.json  # ~10 KB (profile)
-│   ├── nakamura-hi.json
+│   ├── m-carlsen-1503014.json     # ~10 KB (profile)
+│   ├── hi-nakamura-2016192.json
 │   └── ...
 └── games/
-    ├── carlsen-magnus.json  # ~100 KB (raw PGNs)
-    ├── nakamura-hi.json
+    ├── m-carlsen-1503014.json     # ~100 KB (raw PGNs)
+    ├── hi-nakamura-2016192.json
     └── ...
 ```
 

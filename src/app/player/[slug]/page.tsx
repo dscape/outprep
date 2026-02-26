@@ -1,9 +1,10 @@
 import { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import {
   getPlayer,
   getPlayerIndex,
   getPlayerGames,
+  getAliasTarget,
   formatPlayerName,
 } from "@/lib/fide-blob";
 import type { FIDEPlayer, OpeningStats } from "@/lib/fide-blob";
@@ -141,9 +142,14 @@ export default async function PlayerPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const player = await getPlayer(slug);
+  let player = await getPlayer(slug);
 
   if (!player) {
+    // Check if this slug is an alias that should redirect to the canonical URL
+    const canonicalSlug = await getAliasTarget(slug);
+    if (canonicalSlug) {
+      permanentRedirect(`/player/${canonicalSlug}`);
+    }
     notFound();
   }
 
