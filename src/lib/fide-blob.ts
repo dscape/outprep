@@ -39,7 +39,6 @@ const INDEX_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 let localData: {
   index: PlayerIndex | null;
   players: Map<string, FIDEPlayer>;
-  games: Map<string, string[]>;
 } | null = null;
 
 async function loadLocalData(): Promise<typeof localData> {
@@ -53,7 +52,7 @@ async function loadLocalData(): Promise<typeof localData> {
       "packages/fide-pipeline/data/processed"
     );
 
-    localData = { index: null, players: new Map(), games: new Map() };
+    localData = { index: null, players: new Map() };
 
     if (!fs.existsSync(processedDir)) {
       console.warn(`[fide-blob] Local data dir not found: ${processedDir}`);
@@ -90,21 +89,32 @@ async function loadLocalData(): Promise<typeof localData> {
       }
     }
 
-    // Load games
-    const gamesPath = path.join(processedDir, "games.json");
-    if (fs.existsSync(gamesPath)) {
-      const gamesObj: Record<string, string[]> = JSON.parse(
-        fs.readFileSync(gamesPath, "utf-8")
-      );
-      for (const [slug, pgns] of Object.entries(gamesObj)) {
-        localData.games.set(slug, pgns);
-      }
-    }
-
     return localData;
   } catch {
-    localData = { index: null, players: new Map(), games: new Map() };
+    localData = { index: null, players: new Map() };
     return localData;
+  }
+}
+
+/**
+ * Load a single player's games from the per-player game file on disk.
+ * Reads lazily — only loads the requested player's file, not all games.
+ */
+async function loadLocalGames(slug: string): Promise<string[] | null> {
+  try {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const gameFile = path.join(
+      process.cwd(),
+      "packages/fide-pipeline/data/processed/games",
+      `${slug}.json`
+    );
+    if (fs.existsSync(gameFile)) {
+      return JSON.parse(fs.readFileSync(gameFile, "utf-8"));
+    }
+    return null;
+  } catch {
+    return null;
   }
 }
 
@@ -184,12 +194,12 @@ export async function getPlayer(slug: string): Promise<FIDEPlayer | null> {
 
 /**
  * Get raw PGN games for a player (for practice mode).
+ * In dev, reads the per-player game file lazily (not all games at once).
  */
 export async function getPlayerGames(slug: string): Promise<string[] | null> {
-  // Dev fallback
+  // Dev fallback: read single per-player game file from disk
   if (IS_DEV) {
-    const local = await loadLocalData();
-    const games = local?.games.get(slug);
+    const games = await loadLocalGames(slug);
     if (games) return games;
   }
 

@@ -87,5 +87,4 @@ export interface PlayerAccumulator {
   whiteEcos: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>;
   /** ECO counts as black */
   blackEcos: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>;
-  rawPgns: string[]; // All raw PGN texts for practice
 }

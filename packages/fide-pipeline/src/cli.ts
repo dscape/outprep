@@ -12,9 +12,9 @@ import {
   buildPlayerIndex,
   normalizePlayerName,
 } from "./aggregate";
-import { uploadAll } from "./upload";
+import { uploadAllFromDisk } from "./upload";
 import type { TWICGameHeader, FIDEPlayer } from "./types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 // ─── Load .env from project root ────────────────────────────────────────────
@@ -46,16 +46,94 @@ loadEnvFile();
 
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const PROCESSED_DIR = join(DATA_DIR, "processed");
+const GAMES_DIR = join(PROCESSED_DIR, "games");
 
 function ensureDirs(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   if (!existsSync(PROCESSED_DIR)) mkdirSync(PROCESSED_DIR, { recursive: true });
+  if (!existsSync(GAMES_DIR)) mkdirSync(GAMES_DIR, { recursive: true });
 }
 
 const program = new Command()
   .name("fide-pipeline")
   .description("Download TWIC data, process FIDE players, upload to Vercel Blob")
   .version("0.1.0");
+
+// ─── Shared helpers ──────────────────────────────────────────────────────────
+
+/**
+ * Build a map from alias slug → canonical slug for 301 redirects.
+ */
+function buildAliasMap(players: FIDEPlayer[]): Record<string, string> {
+  const map: Record<string, string> = {};
+  for (const p of players) {
+    for (const alias of p.aliases) {
+      map[alias] = p.slug;
+    }
+  }
+  return map;
+}
+
+/**
+ * Write per-player game files to disk, one JSON file per player.
+ * This replaces the old in-memory buildPlayerGameMap + giant games.json approach.
+ *
+ * Iterates allGames once, collects PGNs per slug in memory (Map<slug, string[]>),
+ * then flushes each player's file individually. This is much more memory-efficient
+ * than serializing everything into one giant JSON object.
+ *
+ * Returns the number of game files written.
+ */
+function writePlayerGames(
+  allGames: TWICGameHeader[],
+  players: FIDEPlayer[],
+  gamesDir: string
+): number {
+  // Build lookups: FIDE ID → slug (primary), normalized name → slug (fallback)
+  const fideIdToSlug = new Map<string, string>();
+  const nameToSlug = new Map<string, string>();
+  for (const p of players) {
+    if (p.fideId) {
+      fideIdToSlug.set(p.fideId, p.slug);
+    }
+    nameToSlug.set(normalizePlayerName(p.name), p.slug);
+  }
+
+  // Collect games per player slug
+  const gamesBySlug = new Map<string, string[]>();
+  for (const p of players) {
+    gamesBySlug.set(p.slug, []);
+  }
+
+  for (const game of allGames) {
+    // Match white player: prefer FIDE ID, fall back to name
+    const whiteSlug = (game.whiteFideId && fideIdToSlug.get(game.whiteFideId))
+      || nameToSlug.get(normalizePlayerName(game.white));
+    // Match black player: prefer FIDE ID, fall back to name
+    const blackSlug = (game.blackFideId && fideIdToSlug.get(game.blackFideId))
+      || nameToSlug.get(normalizePlayerName(game.black));
+
+    if (whiteSlug && gamesBySlug.has(whiteSlug)) {
+      gamesBySlug.get(whiteSlug)!.push(game.rawPgn);
+    }
+    if (blackSlug && gamesBySlug.has(blackSlug)) {
+      gamesBySlug.get(blackSlug)!.push(game.rawPgn);
+    }
+  }
+
+  // Write each player's games to an individual file
+  if (!existsSync(gamesDir)) mkdirSync(gamesDir, { recursive: true });
+
+  let written = 0;
+  for (const [slug, pgns] of gamesBySlug) {
+    if (pgns.length > 0) {
+      writeFileSync(join(gamesDir, `${slug}.json`), JSON.stringify(pgns));
+      written++;
+    }
+  }
+
+  return written;
+}
 
 // ─── smoke ────────────────────────────────────────────────────────────────────
 
@@ -99,39 +177,37 @@ program
       );
     }
 
-    // 4. Build index
+    // 4. Build index + aliases
     const index = buildPlayerIndex(players);
-
-    // 5. Build per-player game maps (uses FIDE ID matching)
-    const playerGames = buildPlayerGameMap(games, players);
-
-    // Build aliases map (alias → canonical slug)
     const aliasMap = buildAliasMap(players);
 
-    // Save processed data locally (full data for dev mode)
+    // 5. Write per-player game files to disk
     ensureDirs();
+    const gameFilesWritten = writePlayerGames(games, players, GAMES_DIR);
+
+    // Save index + players + aliases
     writeFileSync(
       join(PROCESSED_DIR, "smoke-index.json"),
       JSON.stringify(index, null, 2)
     );
     writeFileSync(
+      join(PROCESSED_DIR, "index.json"),
+      JSON.stringify(index)
+    );
+    writeFileSync(
       join(PROCESSED_DIR, "smoke-players.json"),
       JSON.stringify(players, null, 2)
     );
-    // Save games for dev mode practice flow
-    const gamesObj: Record<string, string[]> = {};
-    for (const [slug, pgns] of playerGames) gamesObj[slug] = pgns;
     writeFileSync(
-      join(PROCESSED_DIR, "games.json"),
-      JSON.stringify(gamesObj)
+      join(PROCESSED_DIR, "players.json"),
+      JSON.stringify(players)
     );
-    // Save aliases for dev mode redirects
     writeFileSync(
       join(PROCESSED_DIR, "aliases.json"),
       JSON.stringify(aliasMap, null, 2)
     );
 
-    console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${playerGames.size} game files, ${Object.keys(aliasMap).length} aliases)`);
+    console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${gameFilesWritten} game files, ${Object.keys(aliasMap).length} aliases)`);
 
     // 6. Upload (optional)
     if (!opts.skipUpload) {
@@ -147,7 +223,7 @@ program
         process.exit(1);
       }
 
-      const result = await uploadAll(players, index, playerGames, aliasMap, {
+      const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
         prefix: "fide-smoke",
         onProgress: (uploaded, total) => {
           if (uploaded % 100 === 0 || uploaded === total) {
@@ -218,7 +294,6 @@ program
     ensureDirs();
 
     // Find all downloaded PGN files
-    const { readdirSync } = await import("node:fs");
     const pgnFiles = readdirSync(DATA_DIR)
       .filter((f) => f.endsWith(".pgn"))
       .sort();
@@ -243,50 +318,32 @@ program
 
     console.log(`\nTotal games: ${allGames.length}`);
 
-    // Aggregate
+    // Aggregate (lightweight — no raw PGNs stored in accumulators)
     console.log("\nAggregating players...");
     const players = aggregatePlayers(allGames, minGames);
     console.log(`  ${players.length} players with ${minGames}+ games`);
 
-    // Build index
+    // Build index + aliases
     const index = buildPlayerIndex(players);
-
-    // Build per-player game maps
-    console.log("\nBuilding per-player game files...");
-    const playerGames = buildPlayerGameMap(allGames, players);
-    console.log(`  ${playerGames.size} game files prepared`);
-
-    // Save to processed dir
-    writeFileSync(
-      join(PROCESSED_DIR, "index.json"),
-      JSON.stringify(index)
-    );
-    writeFileSync(
-      join(PROCESSED_DIR, "players.json"),
-      JSON.stringify(players)
-    );
-
-    // Save games per player (chunked into files of 1000 players each for manageability)
-    const gamesObj: Record<string, string[]> = {};
-    for (const [slug, pgns] of playerGames) {
-      gamesObj[slug] = pgns;
-    }
-    writeFileSync(
-      join(PROCESSED_DIR, "games.json"),
-      JSON.stringify(gamesObj)
-    );
-
-    // Save aliases
     const aliasMap = buildAliasMap(players);
-    writeFileSync(
-      join(PROCESSED_DIR, "aliases.json"),
-      JSON.stringify(aliasMap)
-    );
+
+    // Write per-player game files to disk (one file per player)
+    console.log("\nWriting per-player game files...");
+    const gameFilesWritten = writePlayerGames(allGames, players, GAMES_DIR);
+    console.log(`  ${gameFilesWritten} game files written`);
+
+    // Free allGames memory before writing remaining files
+    allGames = [];
+
+    // Save index, players, aliases
+    writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
+    writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
+    writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
 
     console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
     console.log(`  index.json:   ${index.totalPlayers} players`);
     console.log(`  players.json: ${players.length} player profiles`);
-    console.log(`  games.json:   ${playerGames.size} game files`);
+    console.log(`  games/:       ${gameFilesWritten} game files`);
     console.log(`  aliases.json: ${Object.keys(aliasMap).length} aliases\n`);
   });
 
@@ -307,23 +364,19 @@ program
 
     const indexPath = join(PROCESSED_DIR, "index.json");
     const playersPath = join(PROCESSED_DIR, "players.json");
-    const gamesPath = join(PROCESSED_DIR, "games.json");
 
     if (!existsSync(indexPath) || !existsSync(playersPath)) {
       console.error("Processed data not found. Run 'process' first.");
       process.exit(1);
     }
 
+    if (!existsSync(GAMES_DIR)) {
+      console.error("Game files not found at games/. Run 'process' first.");
+      process.exit(1);
+    }
+
     const index = JSON.parse(readFileSync(indexPath, "utf-8"));
     const players: FIDEPlayer[] = JSON.parse(readFileSync(playersPath, "utf-8"));
-
-    let playerGames = new Map<string, string[]>();
-    if (existsSync(gamesPath)) {
-      const gamesObj = JSON.parse(readFileSync(gamesPath, "utf-8"));
-      for (const [slug, pgns] of Object.entries(gamesObj)) {
-        playerGames.set(slug, pgns as string[]);
-      }
-    }
 
     // Load aliases
     const aliasesPath = join(PROCESSED_DIR, "aliases.json");
@@ -331,11 +384,13 @@ program
       ? JSON.parse(readFileSync(aliasesPath, "utf-8"))
       : buildAliasMap(players);
 
+    const gameFileCount = readdirSync(GAMES_DIR).filter(f => f.endsWith(".json")).length;
+
     console.log(`\nUploading to Vercel Blob (prefix: ${opts.prefix}/)`);
-    console.log(`  ${index.totalPlayers} players, ${playerGames.size} game files, ${Object.keys(aliases).length} aliases\n`);
+    console.log(`  ${index.totalPlayers} players, ${gameFileCount} game files, ${Object.keys(aliases).length} aliases\n`);
 
     const start = Date.now();
-    const result = await uploadAll(players, index, playerGames, aliases, {
+    const result = await uploadAllFromDisk(players, index, aliases, GAMES_DIR, {
       prefix: opts.prefix,
       onProgress: (uploaded, total) => {
         if (uploaded % 200 === 0 || uploaded === total) {
@@ -388,28 +443,32 @@ program
     console.log(`  Players with ${minGames}+ games: ${players.length}`);
 
     const index = buildPlayerIndex(players);
-    const playerGames = buildPlayerGameMap(allGames, players);
+    const aliasMap = buildAliasMap(players);
+
+    // Write per-player game files to disk
+    ensureDirs();
+    console.log("\n  Writing per-player game files...");
+    const gameFilesWritten = writePlayerGames(allGames, players, GAMES_DIR);
+    console.log(`  ${gameFilesWritten} game files written`);
+
+    // Free allGames memory before upload/save
+    allGames = [];
+
+    // Save index, players, aliases to disk (useful for dev mode and as backup)
+    writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
+    writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
+    writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
 
     // Step 3: Upload
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      console.error("\n  BLOB_READ_WRITE_TOKEN not set. Saving locally instead.");
-      ensureDirs();
-      writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
-      writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
-      const gamesObj: Record<string, string[]> = {};
-      for (const [slug, p] of playerGames) gamesObj[slug] = p;
-      writeFileSync(join(PROCESSED_DIR, "games.json"), JSON.stringify(gamesObj));
-      const aliasMap = buildAliasMap(players);
-      writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
+      console.log("\n  BLOB_READ_WRITE_TOKEN not set. Data saved locally.");
       console.log(`  Saved to ${PROCESSED_DIR}/\n`);
       return;
     }
 
-    const fullAliasMap = buildAliasMap(players);
-
     console.log(`\nStep 3/3: Upload to Vercel Blob (prefix: ${opts.prefix}/)\n`);
 
-    const result = await uploadAll(players, index, playerGames, fullAliasMap, {
+    const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
       prefix: opts.prefix,
       onProgress: (uploaded, total) => {
         if (uploaded % 500 === 0 || uploaded === total) {
@@ -420,7 +479,6 @@ program
     });
 
     console.log(`\n═══ Pipeline Complete ═══`);
-    console.log(`  Games processed:  ${allGames.length}`);
     console.log(`  Players:          ${players.length}`);
     console.log(`  Index URL:        ${result.indexUrl}`);
     console.log(`  Players uploaded:  ${result.playersUploaded}`);
@@ -428,57 +486,3 @@ program
   });
 
 program.parse();
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-
-/**
- * Build a map from alias slug → canonical slug for 301 redirects.
- */
-function buildAliasMap(players: FIDEPlayer[]): Record<string, string> {
-  const map: Record<string, string> = {};
-  for (const p of players) {
-    for (const alias of p.aliases) {
-      map[alias] = p.slug;
-    }
-  }
-  return map;
-}
-
-function buildPlayerGameMap(
-  allGames: TWICGameHeader[],
-  players: FIDEPlayer[]
-): Map<string, string[]> {
-  // Build lookups: FIDE ID → slug (primary), normalized name → slug (fallback)
-  const fideIdToSlug = new Map<string, string>();
-  const nameToSlug = new Map<string, string>();
-  for (const p of players) {
-    if (p.fideId) {
-      fideIdToSlug.set(p.fideId, p.slug);
-    }
-    nameToSlug.set(normalizePlayerName(p.name), p.slug);
-  }
-
-  // Collect games per player
-  const result = new Map<string, string[]>();
-  for (const p of players) {
-    result.set(p.slug, []);
-  }
-
-  for (const game of allGames) {
-    // Match white player: prefer FIDE ID, fall back to name
-    const whiteSlug = (game.whiteFideId && fideIdToSlug.get(game.whiteFideId))
-      || nameToSlug.get(normalizePlayerName(game.white));
-    // Match black player: prefer FIDE ID, fall back to name
-    const blackSlug = (game.blackFideId && fideIdToSlug.get(game.blackFideId))
-      || nameToSlug.get(normalizePlayerName(game.black));
-
-    if (whiteSlug) {
-      result.get(whiteSlug)?.push(game.rawPgn);
-    }
-    if (blackSlug) {
-      result.get(blackSlug)?.push(game.rawPgn);
-    }
-  }
-
-  return result;
-}

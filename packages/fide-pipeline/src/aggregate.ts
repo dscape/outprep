@@ -163,7 +163,6 @@ export function aggregatePlayers(
         event: game.event,
         date: game.date,
         result: game.result,
-        rawPgn: game.rawPgn,
       });
     }
 
@@ -179,7 +178,6 @@ export function aggregatePlayers(
         event: game.event,
         date: game.date,
         result: game.result,
-        rawPgn: game.rawPgn,
       });
     }
   }
@@ -237,7 +235,6 @@ interface GameInput {
   event: string | null;
   date: string | null;
   result: string;
-  rawPgn: string;
 }
 
 function processPlayer(
@@ -266,7 +263,6 @@ function processPlayer(
       events: new Map(),
       whiteEcos: new Map(),
       blackEcos: new Map(),
-      rawPgns: [],
     };
     players.set(key, acc);
   }
@@ -325,8 +321,6 @@ function processPlayer(
     else entry.losses++;
   }
 
-  // Store raw PGN for practice
-  acc.rawPgns.push(input.rawPgn);
 }
 
 /** Get a human-readable ECO name from code. */

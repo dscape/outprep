@@ -5,9 +5,12 @@
  *   fide/index.json          — PlayerIndex (master list for sitemap)
  *   fide/players/{slug}.json — FIDEPlayer per player (profile + stats)
  *   fide/games/{slug}.json   — Raw PGN strings per player (for practice)
+ *   fide/aliases.json        — Alias → canonical slug map (for 301 redirects)
  */
 
 import { put } from "@vercel/blob";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { join } from "node:path";
 import type { FIDEPlayer, PlayerIndex } from "./types";
 
 const DEFAULT_PREFIX = "fide";
@@ -53,15 +56,17 @@ export async function uploadPlayer(
 
 /**
  * Upload raw PGN games for a player to Blob.
+ * Reads the game data directly from a file on disk to avoid holding all games in memory.
  */
-export async function uploadPlayerGames(
+export async function uploadPlayerGamesFromFile(
   slug: string,
-  pgns: string[],
+  filePath: string,
   opts?: UploadOptions
 ): Promise<string> {
   const prefix = opts?.prefix ?? DEFAULT_PREFIX;
-  const path = `${prefix}/games/${slug}.json`;
-  const blob = await put(path, JSON.stringify(pgns), {
+  const blobPath = `${prefix}/games/${slug}.json`;
+  const content = readFileSync(filePath, "utf-8");
+  const blob = await put(blobPath, content, {
     access: "public",
     contentType: "application/json",
     addRandomSuffix: false,
@@ -87,23 +92,29 @@ export async function uploadAliases(
 }
 
 /**
- * Upload all player data in batches.
+ * Upload all player data, reading game files from disk one at a time.
+ * This avoids loading all game data into memory simultaneously.
  *
  * Uploads:
  * 1. Player index
  * 2. Alias map (for 301 redirects)
- * 3. Individual player profiles
- * 4. Per-player raw PGN games
+ * 3. Individual player profiles (batched)
+ * 4. Per-player raw PGN games (read from gamesDir, one at a time)
  */
-export async function uploadAll(
+export async function uploadAllFromDisk(
   players: FIDEPlayer[],
   index: PlayerIndex,
-  playerGames: Map<string, string[]>,
   aliases: Record<string, string>,
+  gamesDir: string,
   opts?: UploadOptions
 ): Promise<{ indexUrl: string; playersUploaded: number; gamesUploaded: number }> {
   const onProgress = opts?.onProgress;
-  const total = 2 + players.length + playerGames.size; // +2 for index + aliases
+
+  // Count game files on disk
+  const gameFiles = existsSync(gamesDir)
+    ? readdirSync(gamesDir).filter(f => f.endsWith(".json"))
+    : [];
+  const total = 2 + players.length + gameFiles.length; // +2 for index + aliases
   let uploaded = 0;
 
   // 1. Upload index
@@ -131,15 +142,16 @@ export async function uploadAll(
     );
   }
 
-  // 4. Upload per-player games in batches of 20 (larger files)
+  // 4. Upload per-player games from disk (one file at a time to keep memory low)
   let gamesUploaded = 0;
-  const entries = Array.from(playerGames.entries());
   const GAME_BATCH_SIZE = 20;
-  for (let i = 0; i < entries.length; i += GAME_BATCH_SIZE) {
-    const batch = entries.slice(i, i + GAME_BATCH_SIZE);
+  for (let i = 0; i < gameFiles.length; i += GAME_BATCH_SIZE) {
+    const batch = gameFiles.slice(i, i + GAME_BATCH_SIZE);
     await Promise.all(
-      batch.map(async ([slug, pgns]) => {
-        await uploadPlayerGames(slug, pgns, opts);
+      batch.map(async (fileName) => {
+        const slug = fileName.replace(/\.json$/, "");
+        const filePath = join(gamesDir, fileName);
+        await uploadPlayerGamesFromFile(slug, filePath, opts);
         gamesUploaded++;
         uploaded++;
         onProgress?.(uploaded, total);

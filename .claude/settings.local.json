@@ -43,7 +43,8 @@
       "Bash(jq:*)",
       "Bash(git rev-list:*)",
       "WebFetch(domain:theweekinchess.com)",
-      "WebFetch(domain:www.saremba.de)"
+      "WebFetch(domain:www.saremba.de)",
+      "Bash(test:*)"
     ]
   }
 }
