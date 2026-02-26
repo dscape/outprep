@@ -120,7 +120,7 @@ program
         process.exit(1);
       }
 
-      const result = await uploadAll(players, index, playerGames, {
+      const result = await uploadAll(players, index, playerGames, aliasMap, {
         prefix: "fide-smoke",
         onProgress: (uploaded, total) => {
           if (uploaded % 100 === 0 || uploaded === total) {

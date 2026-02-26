@@ -70,21 +70,40 @@ export async function uploadPlayerGames(
 }
 
 /**
+ * Upload the alias map (alias slug → canonical slug) to Blob.
+ */
+export async function uploadAliases(
+  aliases: Record<string, string>,
+  opts?: UploadOptions
+): Promise<string> {
+  const prefix = opts?.prefix ?? DEFAULT_PREFIX;
+  const path = `${prefix}/aliases.json`;
+  const blob = await put(path, JSON.stringify(aliases), {
+    access: "public",
+    contentType: "application/json",
+    addRandomSuffix: false,
+  });
+  return blob.url;
+}
+
+/**
  * Upload all player data in batches.
  *
  * Uploads:
  * 1. Player index
- * 2. Individual player profiles
- * 3. Per-player raw PGN games
+ * 2. Alias map (for 301 redirects)
+ * 3. Individual player profiles
+ * 4. Per-player raw PGN games
  */
 export async function uploadAll(
   players: FIDEPlayer[],
   index: PlayerIndex,
   playerGames: Map<string, string[]>,
+  aliases: Record<string, string>,
   opts?: UploadOptions
 ): Promise<{ indexUrl: string; playersUploaded: number; gamesUploaded: number }> {
   const onProgress = opts?.onProgress;
-  const total = 1 + players.length + playerGames.size;
+  const total = 2 + players.length + playerGames.size; // +2 for index + aliases
   let uploaded = 0;
 
   // 1. Upload index
@@ -92,7 +111,12 @@ export async function uploadAll(
   uploaded++;
   onProgress?.(uploaded, total);
 
-  // 2. Upload player profiles in batches of 50
+  // 2. Upload aliases
+  await uploadAliases(aliases, opts);
+  uploaded++;
+  onProgress?.(uploaded, total);
+
+  // 3. Upload player profiles in batches of 50
   let playersUploaded = 0;
   const BATCH_SIZE = 50;
   for (let i = 0; i < players.length; i += BATCH_SIZE) {
@@ -107,7 +131,7 @@ export async function uploadAll(
     );
   }
 
-  // 3. Upload per-player games in batches of 20 (larger files)
+  // 4. Upload per-player games in batches of 20 (larger files)
   let gamesUploaded = 0;
   const entries = Array.from(playerGames.entries());
   const GAME_BATCH_SIZE = 20;
