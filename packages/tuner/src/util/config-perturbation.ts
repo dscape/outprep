@@ -33,12 +33,15 @@ export function generateVariants(
     return [];
   }
 
-  return param.perturbations(currentValue).map(({ value, label }) => ({
-    parameter: param.path,
-    label,
-    description: `${param.name}: ${label}`,
-    override: buildOverride(param.path, value),
-  }));
+  const currentJson = JSON.stringify(currentValue);
+  return param.perturbations(currentValue)
+    .filter(({ value }) => JSON.stringify(value) !== currentJson)  // skip no-ops
+    .map(({ value, label }) => ({
+      parameter: param.path,
+      label,
+      description: `${param.name}: ${label}`,
+      override: buildOverride(param.path, value),
+    }));
 }
 
 /**

@@ -31,11 +31,30 @@ export const DEFAULT_WEIGHTS: ScoreWeights = {
 /**
  * Compute a composite score from metrics. Higher = better.
  * Returns a value in [0, 1].
+ *
+ * When CPL data is unavailable (NaN — e.g. triage mode where botCPL
+ * can't be reliably measured), the cplDelta and cplSimilarity weights
+ * are redistributed proportionally to the remaining components.
  */
 export function compositeScore(
   metrics: Metrics,
   weights: ScoreWeights = DEFAULT_WEIGHTS
 ): number {
+  const hasCPL = !isNaN(metrics.cplDelta) && !isNaN(metrics.avgBotCPL);
+
+  if (!hasCPL) {
+    // No CPL data — score from matchRate, topNRate, bookCoverage only.
+    // Redistribute CPL weight proportionally so result stays in [0, 1].
+    const activeWeight = weights.matchRate + weights.topNRate + weights.bookCoverage;
+    if (activeWeight === 0) return 0;
+    return (
+      weights.matchRate * metrics.matchRate +
+      weights.topNRate * metrics.topNRate +
+      weights.bookCoverage * metrics.bookCoverage
+    ) / activeWeight;
+  }
+
+  // Full scoring with CPL data
   // Normalize cplDelta: 0 → 1.0, 50+ → 0.0
   const cplDeltaNorm = 1 - Math.min(1, metrics.cplDelta / 50);
 
@@ -73,6 +92,7 @@ export function formatDelta(delta: number): string {
  * Negative delta (actualCPL < botCPL) = bot is weaker than the player.
  */
 export function formatStrength(actualCPL: number, botCPL: number): string {
+  if (isNaN(actualCPL) || isNaN(botCPL)) return "CPL N/A (triage)";
   const delta = actualCPL - botCPL;
   if (Math.abs(delta) < 2) return "≈ calibrated";
   if (delta > 0) return `${delta.toFixed(0)}cp too strong`;

@@ -106,8 +106,10 @@ export async function sweep(options: SweepOptions) {
       baselineResults.push({ ref, metrics: result.metrics });
       const m = result.metrics;
       process.stdout.write("\r" + " ".repeat(70) + "\r");
+      const botCPLStr = isNaN(m.avgBotCPL) ? "N/A" : m.avgBotCPL.toFixed(1);
+      const plrCPLStr = isNaN(m.avgActualCPL) ? "N/A" : m.avgActualCPL.toFixed(1);
       console.log(
-        `  Baseline ${ref.name} (${ref.elo}): match=${(m.matchRate * 100).toFixed(1)}% top4=${(m.topNRate * 100).toFixed(1)}% | botCPL=${m.avgBotCPL.toFixed(1)} playerCPL=${m.avgActualCPL.toFixed(1)} → ${formatStrength(m.avgActualCPL, m.avgBotCPL)} (${m.totalPositions} pos)`
+        `  Baseline ${ref.name} (${ref.elo}): match=${(m.matchRate * 100).toFixed(1)}% top4=${(m.topNRate * 100).toFixed(1)}% | botCPL=${botCPLStr} playerCPL=${plrCPLStr} → ${formatStrength(m.avgActualCPL, m.avgBotCPL)} (${m.totalPositions} pos)`
       );
     }
 
@@ -132,8 +134,9 @@ export async function sweep(options: SweepOptions) {
     };
 
     console.log(`\n  Baseline composite score: ${(baselineScore * 100).toFixed(2)}%`);
+    const cplDeltaStr = isNaN(baselineAggMetrics.cplDelta) ? "N/A" : baselineAggMetrics.cplDelta.toFixed(1);
     console.log(
-      `  Breakdown: match=${(baselineAggMetrics.matchRate * 100).toFixed(1)}%  top4=${(baselineAggMetrics.topNRate * 100).toFixed(1)}%  cplΔ=${baselineAggMetrics.cplDelta.toFixed(1)}  book=${(baselineAggMetrics.bookCoverage * 100).toFixed(1)}%  strength: ${formatStrength(baselineAggMetrics.avgActualCPL, baselineAggMetrics.avgBotCPL)}\n`
+      `  Breakdown: match=${(baselineAggMetrics.matchRate * 100).toFixed(1)}%  top4=${(baselineAggMetrics.topNRate * 100).toFixed(1)}%  cplΔ=${cplDeltaStr}  book=${(baselineAggMetrics.bookCoverage * 100).toFixed(1)}%  strength: ${formatStrength(baselineAggMetrics.avgActualCPL, baselineAggMetrics.avgBotCPL)}\n`
     );
 
     // 2. Create or resume sweep plan

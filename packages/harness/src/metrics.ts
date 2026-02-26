@@ -12,17 +12,17 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
       positions: 0,
       matchRate: 0,
       topNRate: 0,
-      avgCPL: 0,
-      botAvgCPL: 0,
+      avgCPL: NaN,
+      botAvgCPL: NaN,
     };
     return {
       totalPositions: 0,
       matchRate: 0,
       topNRate: 0,
       bookCoverage: 0,
-      avgActualCPL: 0,
-      avgBotCPL: 0,
-      cplDelta: 0,
+      avgActualCPL: NaN,
+      avgBotCPL: NaN,
+      cplDelta: NaN,
       byPhase: {
         opening: { ...emptyPhase },
         middlegame: { ...emptyPhase },
@@ -41,14 +41,14 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
     withActualCPL.length > 0
       ? withActualCPL.reduce((sum, p) => sum + (p.actualCPL ?? 0), 0) /
         withActualCPL.length
-      : 0;
+      : NaN;   // No data → NaN (not 0, which would mean "perfect play")
 
   const withBotCPL = positions.filter((p) => p.botCPL !== undefined);
   const avgBotCPL =
     withBotCPL.length > 0
       ? withBotCPL.reduce((sum, p) => sum + (p.botCPL ?? 0), 0) /
         withBotCPL.length
-      : 0;
+      : NaN;   // No data → NaN (not 0, which would mean "perfect play")
 
   // Per-phase metrics
   const phases: GamePhase[] = ["opening", "middlegame", "endgame"];
@@ -67,12 +67,12 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
         ppWithActualCPL.length > 0
           ? ppWithActualCPL.reduce((sum, p) => sum + (p.actualCPL ?? 0), 0) /
             ppWithActualCPL.length
-          : 0,
+          : NaN,
       botAvgCPL:
         ppWithBotCPL.length > 0
           ? ppWithBotCPL.reduce((sum, p) => sum + (p.botCPL ?? 0), 0) /
             ppWithBotCPL.length
-          : 0,
+          : NaN,
     };
   }
 
@@ -83,7 +83,9 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
     bookCoverage: bookPositions / total,
     avgActualCPL,
     avgBotCPL,
-    cplDelta: Math.abs(avgBotCPL - avgActualCPL),
+    cplDelta: (isNaN(avgBotCPL) || isNaN(avgActualCPL))
+      ? NaN
+      : Math.abs(avgBotCPL - avgActualCPL),
     byPhase,
   };
 }

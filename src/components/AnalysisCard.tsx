@@ -176,6 +176,7 @@ function MoveButton({
 
   return (
     <button
+      data-ply={move.ply}
       onClick={onClick}
       className={`px-1.5 py-0.5 rounded text-sm font-mono transition-all ${
         isSelected
@@ -196,7 +197,10 @@ function MoveButton({
 export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   const [selectedPly, setSelectedPly] = useState<number | null>(null);
   const [viewTab, setViewTab] = useState<"moves" | "moments">("moves");
+  const [copiedPgn, setCopiedPgn] = useState(false);
+  const [lichessImporting, setLichessImporting] = useState(false);
   const selectedPlyRef = useRef(selectedPly);
+  const moveListRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line react-hooks/refs -- keeping ref in sync for use in callbacks
   selectedPlyRef.current = selectedPly;
 
@@ -233,6 +237,15 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [goNext, goPrev, goFirst, goLast]);
+
+  // Auto-scroll move list to keep selected move visible
+  useEffect(() => {
+    if (selectedPly === null || !moveListRef.current) return;
+    const el = moveListRef.current.querySelector(`[data-ply="${selectedPly}"]`);
+    if (el) {
+      el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [selectedPly]);
 
   // Compute the FEN for the selected move
   const selectedFen = useMemo(() => {
@@ -290,6 +303,53 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     return arrows;
   }, [selectedMove]);
 
+  // Copy PGN to clipboard
+  const handleCopyPgn = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(analysis.pgn);
+      setCopiedPgn(true);
+      setTimeout(() => setCopiedPgn(false), 2000);
+    } catch {
+      // Fallback for older browsers
+      const textarea = document.createElement("textarea");
+      textarea.value = analysis.pgn;
+      document.body.appendChild(textarea);
+      textarea.select();
+      document.execCommand("copy");
+      document.body.removeChild(textarea);
+      setCopiedPgn(true);
+      setTimeout(() => setCopiedPgn(false), 2000);
+    }
+  }, [analysis.pgn]);
+
+  // Open on Lichess
+  const handleOpenLichess = useCallback(async () => {
+    const isOtbGame = analysis.gameId.startsWith("otb-");
+    if (!isOtbGame) {
+      // Lichess game — link directly
+      window.open(`https://lichess.org/${analysis.gameId}`, "_blank");
+      return;
+    }
+    // OTB game — import via Lichess API
+    setLichessImporting(true);
+    try {
+      const res = await fetch("https://lichess.org/api/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ pgn: analysis.pgn }),
+      });
+      if (!res.ok) throw new Error(`Import failed: ${res.status}`);
+      const data = await res.json();
+      if (data.url) {
+        window.open(data.url, "_blank");
+      }
+    } catch (err) {
+      console.error("Lichess import failed:", err);
+    } finally {
+      setLichessImporting(false);
+    }
+  }, [analysis.gameId, analysis.pgn]);
+
   // Group moves into pairs: (white, black)
   const movePairs = useMemo(() => {
     const pairs: { num: number; white?: MoveEval; black?: MoveEval }[] = [];
@@ -345,6 +405,49 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
           {" · "}{analysis.totalMoves} moves
           {" · "}{analysis.summary.accuracy}% accuracy
         </p>
+      </div>
+
+      {/* Action bar: Copy PGN + Analyze on Lichess */}
+      <div className="flex items-center justify-end gap-2">
+        <button
+          onClick={handleCopyPgn}
+          className="flex items-center gap-1.5 rounded-md border border-zinc-700/50 bg-zinc-800/50 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:text-white"
+        >
+          {copiedPgn ? (
+            <>
+              <span className="text-green-400">✓</span> Copied!
+            </>
+          ) : (
+            <>
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1" />
+              </svg>
+              Copy PGN
+            </>
+          )}
+        </button>
+        <button
+          onClick={handleOpenLichess}
+          disabled={lichessImporting}
+          className="flex items-center gap-1.5 rounded-md border border-zinc-700/50 bg-zinc-800/50 px-3 py-1.5 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:text-white disabled:opacity-50 disabled:cursor-wait"
+        >
+          {lichessImporting ? (
+            <>
+              <span className="h-3 w-3 rounded-full border-2 border-zinc-400 border-t-transparent animate-spin" />
+              Importing...
+            </>
+          ) : (
+            <>
+              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6" />
+                <polyline points="15 3 21 3 21 9" />
+                <line x1="10" y1="14" x2="21" y2="3" />
+              </svg>
+              Analyze on Lichess
+            </>
+          )}
+        </button>
       </div>
 
       {/* Summary stats */}
@@ -500,7 +603,7 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
 
             {/* Moves tab */}
             {viewTab === "moves" && (
-              <div className="max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
+              <div ref={moveListRef} className="max-h-[420px] overflow-y-auto pr-1 scrollbar-thin">
                 <div className="grid grid-cols-[2rem_1fr_1fr] gap-y-0.5">
                   {movePairs.map((pair) => (
                     <Fragment key={pair.num}>

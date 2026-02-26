@@ -118,10 +118,12 @@ export function runRegressionCheck(
   }
 
   // Lower-is-better: cplDelta (closer to 0 = bot error pattern matches player better)
+  // Skip when CPL data is unavailable (NaN in triage mode)
   {
     const prevVal = prev.cplDelta;
     const currVal = curr.cplDelta;
-    const delta = prevVal - currVal; // positive = improved (delta got smaller)
+    const hasData = !isNaN(prevVal) && !isNaN(currVal);
+    const delta = hasData ? prevVal - currVal : 0;
     const th = THRESHOLDS.cplDelta;
 
     metricDeltas.push({
@@ -129,31 +131,39 @@ export function runRegressionCheck(
       previous: prevVal,
       current: currVal,
       delta,
-      direction: classifyDirection(delta, th, "lower-raw"),
-      severity: classifySeverity(delta, th, "lower-raw"),
-      displayPrevious: prevVal.toFixed(1),
-      displayCurrent: currVal.toFixed(1),
-      displayDelta: (delta >= 0 ? "-" : "+") + Math.abs(delta).toFixed(1) + "cp",
+      direction: hasData ? classifyDirection(delta, th, "lower-raw") : "stable",
+      severity: hasData ? classifySeverity(delta, th, "lower-raw") : "none",
+      displayPrevious: isNaN(prevVal) ? "N/A" : prevVal.toFixed(1),
+      displayCurrent: isNaN(currVal) ? "N/A" : currVal.toFixed(1),
+      displayDelta: hasData
+        ? (delta >= 0 ? "-" : "+") + Math.abs(delta).toFixed(1) + "cp"
+        : "N/A",
     });
   }
 
   // Lower-is-better: |botCPL - actualCPL| (strength calibration gap)
+  // Skip when CPL data is unavailable (NaN in triage mode)
   {
-    const prevGap = Math.abs(prev.avgBotCPL - prev.avgActualCPL);
-    const currGap = Math.abs(curr.avgBotCPL - curr.avgActualCPL);
-    const delta = prevGap - currGap; // positive = improved (gap shrank)
+    const hasPrev = !isNaN(prev.avgBotCPL) && !isNaN(prev.avgActualCPL);
+    const hasCurr = !isNaN(curr.avgBotCPL) && !isNaN(curr.avgActualCPL);
+    const prevGap = hasPrev ? Math.abs(prev.avgBotCPL - prev.avgActualCPL) : NaN;
+    const currGap = hasCurr ? Math.abs(curr.avgBotCPL - curr.avgActualCPL) : NaN;
+    const hasData = hasPrev && hasCurr;
+    const delta = hasData ? prevGap - currGap : 0;
     const th = THRESHOLDS.cplSimilarity;
 
     metricDeltas.push({
       metric: "|bot-actual|",
-      previous: prevGap,
-      current: currGap,
+      previous: isNaN(prevGap) ? 0 : prevGap,
+      current: isNaN(currGap) ? 0 : currGap,
       delta,
-      direction: classifyDirection(delta, th, "lower-raw"),
-      severity: classifySeverity(delta, th, "lower-raw"),
-      displayPrevious: prevGap.toFixed(1),
-      displayCurrent: currGap.toFixed(1),
-      displayDelta: (delta >= 0 ? "-" : "+") + Math.abs(delta).toFixed(1) + "cp",
+      direction: hasData ? classifyDirection(delta, th, "lower-raw") : "stable",
+      severity: hasData ? classifySeverity(delta, th, "lower-raw") : "none",
+      displayPrevious: isNaN(prevGap) ? "N/A" : prevGap.toFixed(1),
+      displayCurrent: isNaN(currGap) ? "N/A" : currGap.toFixed(1),
+      displayDelta: hasData
+        ? (delta >= 0 ? "-" : "+") + Math.abs(delta).toFixed(1) + "cp"
+        : "N/A",
     });
   }
 
@@ -170,9 +180,11 @@ export function runRegressionCheck(
     const scoreDelta = currScore - prevScore;
     const th = THRESHOLDS.eloBand;
 
-    const prevGap = Math.abs(prevDs.metrics.avgBotCPL - prevDs.metrics.avgActualCPL);
-    const currGap = Math.abs(ds.metrics.avgBotCPL - ds.metrics.avgActualCPL);
-    const gapDelta = prevGap - currGap; // positive = converging
+    const hasPrevGap = !isNaN(prevDs.metrics.avgBotCPL) && !isNaN(prevDs.metrics.avgActualCPL);
+    const hasCurrGap = !isNaN(ds.metrics.avgBotCPL) && !isNaN(ds.metrics.avgActualCPL);
+    const prevGap = hasPrevGap ? Math.abs(prevDs.metrics.avgBotCPL - prevDs.metrics.avgActualCPL) : NaN;
+    const currGap = hasCurrGap ? Math.abs(ds.metrics.avgBotCPL - ds.metrics.avgActualCPL) : NaN;
+    const gapDelta = (hasPrevGap && hasCurrGap) ? prevGap - currGap : 0;
 
     eloBandDeltas.push({
       dataset: ds.dataset,
@@ -189,19 +201,22 @@ export function runRegressionCheck(
   }
 
   // ── Strength calibration summary ──
+  // Strength calibration: average |botCPL - actualCPL| across Elo bands (NaN-safe)
   const prevBands = previousBaseline.datasetMetrics;
   const currBands = currentBaseline.datasetMetrics;
+  const prevValidBands = prevBands.filter((d) => !isNaN(d.metrics.avgBotCPL) && !isNaN(d.metrics.avgActualCPL));
+  const currValidBands = currBands.filter((d) => !isNaN(d.metrics.avgBotCPL) && !isNaN(d.metrics.avgActualCPL));
   const prevAvgGap =
-    prevBands.length > 0
-      ? prevBands.reduce((s, d) => s + Math.abs(d.metrics.avgBotCPL - d.metrics.avgActualCPL), 0) /
-        prevBands.length
-      : 0;
+    prevValidBands.length > 0
+      ? prevValidBands.reduce((s, d) => s + Math.abs(d.metrics.avgBotCPL - d.metrics.avgActualCPL), 0) /
+        prevValidBands.length
+      : NaN;
   const currAvgGap =
-    currBands.length > 0
-      ? currBands.reduce((s, d) => s + Math.abs(d.metrics.avgBotCPL - d.metrics.avgActualCPL), 0) /
-        currBands.length
-      : 0;
-  const gapDelta = prevAvgGap - currAvgGap;
+    currValidBands.length > 0
+      ? currValidBands.reduce((s, d) => s + Math.abs(d.metrics.avgBotCPL - d.metrics.avgActualCPL), 0) /
+        currValidBands.length
+      : NaN;
+  const gapDelta = (!isNaN(prevAvgGap) && !isNaN(currAvgGap)) ? prevAvgGap - currAvgGap : 0;
 
   // ── Config diffs ──
   const configDiffs = extractConfigDiffs(completedCycles, previousCycle, currentCycle);
@@ -294,8 +309,10 @@ export function printRegressionReport(report: RegressionReport): void {
   // Strength calibration
   console.log("  ── Strength Calibration ──");
   const sc = report.strengthCalibration;
+  const prevGapStr = isNaN(sc.previousAvgGap) ? "N/A" : sc.previousAvgGap.toFixed(1);
+  const currGapStr = isNaN(sc.currentAvgGap) ? "N/A" : sc.currentAvgGap.toFixed(1);
   console.log(
-    `    Avg |botCPL - actualCPL|: ${sc.previousAvgGap.toFixed(1)} → ${sc.currentAvgGap.toFixed(1)}  ${sc.direction}\n`
+    `    Avg |botCPL - actualCPL|: ${prevGapStr} → ${currGapStr}  ${sc.direction}\n`
   );
 
   // Config changes
@@ -499,14 +516,17 @@ function generateResearcherNotes(
       }
     }
 
-    // Check cplDelta for consecutive increases (worse)
+    // Check cplDelta for consecutive increases (worse) — skip NaN values
     let cplDeclines = 0;
     const baselines = [...allHistoricalBaselines.map((h) => h.baseline), currentBaseline];
     for (let i = 1; i < baselines.length; i++) {
-      if (
-        baselines[i].aggregatedMetrics.cplDelta >
-        baselines[i - 1].aggregatedMetrics.cplDelta
-      ) {
+      const currDelta = baselines[i].aggregatedMetrics.cplDelta;
+      const prevDelta = baselines[i - 1].aggregatedMetrics.cplDelta;
+      if (isNaN(currDelta) || isNaN(prevDelta)) {
+        cplDeclines = 0; // Reset on missing data
+        continue;
+      }
+      if (currDelta > prevDelta) {
         cplDeclines++;
       } else {
         cplDeclines = 0;

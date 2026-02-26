@@ -11,6 +11,11 @@ import { formatStrength } from "../scoring/composite-score";
 import type { RegressionReport } from "./regression-check";
 import { formatRegressionForPrompt } from "./regression-check";
 
+/** Format a number for display, returning "N/A" for NaN */
+function fmtNum(n: number, decimals: number): string {
+  return isNaN(n) ? "N/A" : n.toFixed(decimals);
+}
+
 function formatMetricsRow(label: string, r: AggregatedResult): string {
   const m = r.aggregatedMetrics;
   return [
@@ -18,9 +23,9 @@ function formatMetricsRow(label: string, r: AggregatedResult): string {
     (m.matchRate * 100).toFixed(1).padStart(7) + "%",
     (m.topNRate * 100).toFixed(1).padStart(7) + "%",
     (m.bookCoverage * 100).toFixed(1).padStart(7) + "%",
-    m.avgActualCPL.toFixed(1).padStart(7),
-    m.avgBotCPL.toFixed(1).padStart(7),
-    m.cplDelta.toFixed(1).padStart(7),
+    fmtNum(m.avgActualCPL, 1).padStart(7),
+    fmtNum(m.avgBotCPL, 1).padStart(7),
+    fmtNum(m.cplDelta, 1).padStart(7),
     (r.compositeScore * 100).toFixed(2).padStart(8) + "%",
     (r.scoreDelta >= 0 ? "+" : "") + (r.scoreDelta * 100).toFixed(2).padStart(7) + "%",
   ].join("  ");
@@ -126,9 +131,9 @@ function formatMetricsProgression(
       ((m.matchRate * 100).toFixed(1) + "%").padStart(8),
       ((m.topNRate * 100).toFixed(1) + "%").padStart(8),
       ((m.bookCoverage * 100).toFixed(1) + "%").padStart(8),
-      m.avgActualCPL.toFixed(1).padStart(7),
-      m.avgBotCPL.toFixed(1).padStart(7),
-      m.cplDelta.toFixed(1).padStart(7),
+      fmtNum(m.avgActualCPL, 1).padStart(7),
+      fmtNum(m.avgBotCPL, 1).padStart(7),
+      fmtNum(m.cplDelta, 1).padStart(7),
       formatStrength(m.avgActualCPL, m.avgBotCPL),
     ].join("  ");
   }
@@ -179,7 +184,7 @@ function formatStrengthProgression(
       const match = h.baseline.datasetMetrics.find((d) => d.dataset === ds.dataset);
       if (match) {
         cells.push(
-          `${match.metrics.avgBotCPL.toFixed(1)}/${match.metrics.avgActualCPL.toFixed(1)}`.padStart(colWidth)
+          `${fmtNum(match.metrics.avgBotCPL, 1)}/${fmtNum(match.metrics.avgActualCPL, 1)}`.padStart(colWidth)
         );
       } else {
         cells.push("—".padStart(colWidth));
@@ -188,7 +193,7 @@ function formatStrengthProgression(
 
     // Current
     cells.push(
-      `${ds.metrics.avgBotCPL.toFixed(1)}/${ds.metrics.avgActualCPL.toFixed(1)}`.padStart(colWidth)
+      `${fmtNum(ds.metrics.avgBotCPL, 1)}/${fmtNum(ds.metrics.avgActualCPL, 1)}`.padStart(colWidth)
     );
 
     rows.push(cells.join("  "));
@@ -239,7 +244,7 @@ ${baseline.datasetMetrics
   .sort((a, b) => a.elo - b.elo)
   .map(
     (dm) =>
-      `  ${dm.dataset} (Elo ${dm.elo}): botCPL=${dm.metrics.avgBotCPL.toFixed(1)} playerCPL=${dm.metrics.avgActualCPL.toFixed(1)} → ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)}`
+      `  ${dm.dataset} (Elo ${dm.elo}): botCPL=${fmtNum(dm.metrics.avgBotCPL, 1)} playerCPL=${fmtNum(dm.metrics.avgActualCPL, 1)} → ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)}`
   )
   .join("\n")}
 
@@ -270,7 +275,7 @@ ${experiments
       exp.datasetMetrics
         .map(
           (dm) =>
-            `  ${dm.dataset} (Elo ${dm.elo}): match=${(dm.metrics.matchRate * 100).toFixed(1)}% top4=${(dm.metrics.topNRate * 100).toFixed(1)}% cplΔ=${dm.metrics.cplDelta.toFixed(1)} → ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)}`
+            `  ${dm.dataset} (Elo ${dm.elo}): match=${(dm.metrics.matchRate * 100).toFixed(1)}% top4=${(dm.metrics.topNRate * 100).toFixed(1)}% cplΔ=${fmtNum(dm.metrics.cplDelta, 1)} → ${formatStrength(dm.metrics.avgActualCPL, dm.metrics.avgBotCPL)}`
         )
         .join("\n")
   )

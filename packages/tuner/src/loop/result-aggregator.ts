@@ -22,19 +22,28 @@ export function averageMetrics(
       matchRate: 0,
       topNRate: 0,
       bookCoverage: 0,
-      avgActualCPL: 0,
-      avgBotCPL: 0,
-      cplDelta: 0,
+      avgActualCPL: NaN,
+      avgBotCPL: NaN,
+      cplDelta: NaN,
       byPhase: {
-        opening: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: 0, botAvgCPL: 0 },
-        middlegame: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: 0, botAvgCPL: 0 },
-        endgame: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: 0, botAvgCPL: 0 },
+        opening: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: NaN, botAvgCPL: NaN },
+        middlegame: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: NaN, botAvgCPL: NaN },
+        endgame: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: NaN, botAvgCPL: NaN },
       },
     };
   }
 
   const avg = (fn: (m: Metrics) => number) =>
     results.reduce((sum, r) => sum + fn(r.metrics) * r.weight, 0) / totalWeight;
+
+  // NaN-safe weighted average: skips datasets where the value is NaN.
+  // Returns NaN if ALL values are NaN (no data at all).
+  const avgNaN = (fn: (m: Metrics) => number) => {
+    const valid = results.filter((r) => !isNaN(fn(r.metrics)));
+    if (valid.length === 0) return NaN;
+    const w = valid.reduce((sum, r) => sum + r.weight, 0);
+    return valid.reduce((sum, r) => sum + fn(r.metrics) * r.weight, 0) / w;
+  };
 
   const totalPositions = results.reduce((sum, r) => sum + r.metrics.totalPositions, 0);
 
@@ -43,30 +52,30 @@ export function averageMetrics(
     matchRate: avg((m) => m.matchRate),
     topNRate: avg((m) => m.topNRate),
     bookCoverage: avg((m) => m.bookCoverage),
-    avgActualCPL: avg((m) => m.avgActualCPL),
-    avgBotCPL: avg((m) => m.avgBotCPL),
-    cplDelta: avg((m) => m.cplDelta),
+    avgActualCPL: avgNaN((m) => m.avgActualCPL),
+    avgBotCPL: avgNaN((m) => m.avgBotCPL),
+    cplDelta: avgNaN((m) => m.cplDelta),
     byPhase: {
       opening: {
         positions: results.reduce((s, r) => s + r.metrics.byPhase.opening.positions, 0),
         matchRate: avg((m) => m.byPhase.opening.matchRate),
         topNRate: avg((m) => m.byPhase.opening.topNRate),
-        avgCPL: avg((m) => m.byPhase.opening.avgCPL),
-        botAvgCPL: avg((m) => m.byPhase.opening.botAvgCPL),
+        avgCPL: avgNaN((m) => m.byPhase.opening.avgCPL),
+        botAvgCPL: avgNaN((m) => m.byPhase.opening.botAvgCPL),
       },
       middlegame: {
         positions: results.reduce((s, r) => s + r.metrics.byPhase.middlegame.positions, 0),
         matchRate: avg((m) => m.byPhase.middlegame.matchRate),
         topNRate: avg((m) => m.byPhase.middlegame.topNRate),
-        avgCPL: avg((m) => m.byPhase.middlegame.avgCPL),
-        botAvgCPL: avg((m) => m.byPhase.middlegame.botAvgCPL),
+        avgCPL: avgNaN((m) => m.byPhase.middlegame.avgCPL),
+        botAvgCPL: avgNaN((m) => m.byPhase.middlegame.botAvgCPL),
       },
       endgame: {
         positions: results.reduce((s, r) => s + r.metrics.byPhase.endgame.positions, 0),
         matchRate: avg((m) => m.byPhase.endgame.matchRate),
         topNRate: avg((m) => m.byPhase.endgame.topNRate),
-        avgCPL: avg((m) => m.byPhase.endgame.avgCPL),
-        botAvgCPL: avg((m) => m.byPhase.endgame.botAvgCPL),
+        avgCPL: avgNaN((m) => m.byPhase.endgame.avgCPL),
+        botAvgCPL: avgNaN((m) => m.byPhase.endgame.botAvgCPL),
       },
     },
   };

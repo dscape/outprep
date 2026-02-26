@@ -41,7 +41,8 @@
       "Bash(git -C /Users/dscape/Desktop/outprep log --oneline --all)",
       "Bash(git -C /Users/dscape/Desktop/outprep diff HEAD~2 HEAD -- packages/tuner/src/loop/experiment-runner.ts)",
       "Bash(jq:*)",
-      "Bash(git rev-list:*)"
+      "Bash(git rev-list:*)",
+      "WebFetch(domain:theweekinchess.com)"
     ]
   }
 }
