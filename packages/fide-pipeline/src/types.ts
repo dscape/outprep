@@ -33,11 +33,11 @@ export interface OpeningStats {
 
 /** Aggregated player profile for a single FIDE player. */
 export interface FIDEPlayer {
-  name: string; // "Carlsen,M" or "Carlsen,Magnus"
-  slug: string; // "m-carlsen-1503014" (firstname-lastname-fideId)
+  name: string; // "Carlsen, Magnus" (FIDE full name after enrichment)
+  slug: string; // "magnus-carlsen-1503014" (firstname-lastname-fideId)
   fideId: string; // FIDE ID (e.g. "2020009") — required, players without are dropped
   aliases: string[]; // Alternative slugs that 301 redirect to this player's canonical slug
-  fideRating: number; // Most recent Elo observed
+  fideRating: number; // Most recent Elo observed in TWIC games
   title: string | null; // "GM" | "IM" | "FM" | etc.
   gameCount: number;
   recentEvents: string[]; // Last 5 unique events
@@ -49,6 +49,12 @@ export interface FIDEPlayer {
   winRate: number; // 0-100
   drawRate: number;
   lossRate: number;
+  // Official FIDE ratings (from FIDE rating list enrichment)
+  federation?: string; // "USA", "NOR", etc.
+  birthYear?: number; // e.g. 1992
+  standardRating?: number; // Official FIDE Standard rating
+  rapidRating?: number; // Official FIDE Rapid rating
+  blitzRating?: number; // Official FIDE Blitz rating
 }
 
 /** Compact player entry for the master index (sitemap + listing). */
@@ -60,6 +66,10 @@ export interface PlayerIndexEntry {
   fideRating: number;
   title: string | null;
   gameCount: number;
+  federation?: string;
+  standardRating?: number;
+  rapidRating?: number;
+  blitzRating?: number;
 }
 
 /** Master index stored in Vercel Blob. */

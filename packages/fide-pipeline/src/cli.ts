@@ -13,8 +13,9 @@ import {
   normalizePlayerName,
 } from "./aggregate";
 import { uploadAllFromDisk } from "./upload";
+import { loadFideData, enrichPlayers } from "./fide-enrichment";
 import type { TWICGameHeader, FIDEPlayer } from "./types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 // ─── Load .env from project root ────────────────────────────────────────────
@@ -47,6 +48,7 @@ loadEnvFile();
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const PROCESSED_DIR = join(DATA_DIR, "processed");
 const GAMES_DIR = join(PROCESSED_DIR, "games");
+const RATINGS_DIR = join(DATA_DIR, "ratings");
 
 function ensureDirs(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
@@ -121,8 +123,11 @@ function writePlayerGames(
     }
   }
 
-  // Write each player's games to an individual file
-  if (!existsSync(gamesDir)) mkdirSync(gamesDir, { recursive: true });
+  // Clean old game files first to avoid stale slugs (e.g. f-caruana → fabiano-caruana)
+  if (existsSync(gamesDir)) {
+    rmSync(gamesDir, { recursive: true });
+  }
+  mkdirSync(gamesDir, { recursive: true });
 
   let written = 0;
   for (const [slug, pgns] of gamesBySlug) {
@@ -168,6 +173,15 @@ program
     const players = aggregatePlayers(games, 1); // min 1 game for smoke test
     console.log(`  Players: ${players.length} unique rated players`);
 
+    // 3b. Enrich with FIDE names + ratings
+    console.log("\n  Enriching with FIDE rating list...");
+    const fideData = loadFideData(RATINGS_DIR);
+    const enrichedCount = enrichPlayers(players, fideData);
+    console.log(`  Enriched ${enrichedCount}/${players.length} players with full names + ratings`);
+
+    // Re-sort by rating after enrichment
+    players.sort((a, b) => b.fideRating - a.fideRating);
+
     // Show some sample data
     const topPlayers = players.slice(0, 5);
     console.log("\n  Top players by rating:");
@@ -177,7 +191,7 @@ program
       );
     }
 
-    // 4. Build index + aliases
+    // 4. Build index + aliases (after enrichment so slugs are final)
     const index = buildPlayerIndex(players);
     const aliasMap = buildAliasMap(players);
 
@@ -323,7 +337,14 @@ program
     const players = aggregatePlayers(allGames, minGames);
     console.log(`  ${players.length} players with ${minGames}+ games`);
 
-    // Build index + aliases
+    // Enrich with FIDE names + ratings
+    console.log("\nEnriching with FIDE rating list...");
+    const fideData = loadFideData(RATINGS_DIR);
+    const enrichedCount = enrichPlayers(players, fideData);
+    console.log(`  Enriched ${enrichedCount}/${players.length} players`);
+    players.sort((a, b) => b.fideRating - a.fideRating);
+
+    // Build index + aliases (after enrichment)
     const index = buildPlayerIndex(players);
     const aliasMap = buildAliasMap(players);
 
@@ -441,6 +462,13 @@ program
 
     const players = aggregatePlayers(allGames, minGames);
     console.log(`  Players with ${minGames}+ games: ${players.length}`);
+
+    // Enrich with FIDE names + ratings
+    console.log("\n  Enriching with FIDE rating list...");
+    const fideData = loadFideData(RATINGS_DIR);
+    const enrichedCount = enrichPlayers(players, fideData);
+    console.log(`  Enriched ${enrichedCount}/${players.length} players`);
+    players.sort((a, b) => b.fideRating - a.fideRating);
 
     const index = buildPlayerIndex(players);
     const aliasMap = buildAliasMap(players);

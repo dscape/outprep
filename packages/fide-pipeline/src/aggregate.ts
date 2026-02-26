@@ -394,6 +394,10 @@ export function buildPlayerIndex(players: FIDEPlayer[]): PlayerIndex {
         fideRating: p.fideRating,
         title: p.title,
         gameCount: p.gameCount,
+        ...(p.federation ? { federation: p.federation } : {}),
+        ...(p.standardRating ? { standardRating: p.standardRating } : {}),
+        ...(p.rapidRating ? { rapidRating: p.rapidRating } : {}),
+        ...(p.blitzRating ? { blitzRating: p.blitzRating } : {}),
       })
     ),
   };

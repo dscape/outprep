@@ -36,7 +36,16 @@ export async function generateMetadata({
 
   const name = formatPlayerName(player.name);
   const titleBadge = player.title ? `${player.title} ` : "";
-  const description = `Prepare against ${name}. Study their openings and practice against an AI trained on ${player.gameCount} OTB games.`;
+
+  // Build rating summary for SEO
+  const ratings: string[] = [];
+  if (player.standardRating) ratings.push(`Standard ${player.standardRating}`);
+  if (player.rapidRating) ratings.push(`Rapid ${player.rapidRating}`);
+  if (player.blitzRating) ratings.push(`Blitz ${player.blitzRating}`);
+  const ratingSummary = ratings.length > 0 ? ratings.join(" · ") : `FIDE ${player.fideRating}`;
+  const federationTag = player.federation ? ` (${player.federation})` : "";
+
+  const description = `Prepare against ${titleBadge}${name}${federationTag}. ${ratingSummary}. Study their openings and practice against an AI trained on ${player.gameCount} OTB games.`;
 
   return {
     title: `${name} (${titleBadge}${player.fideRating}) - Chess Preparation`,
@@ -44,7 +53,7 @@ export async function generateMetadata({
     alternates: { canonical: `https://outprep.xyz/player/${slug}` },
     openGraph: {
       title: `Prepare Against ${name}`,
-      description: `${titleBadge}${player.fideRating} FIDE | ${player.gameCount} games analyzed`,
+      description: `${titleBadge}${ratingSummary} | ${player.gameCount} games analyzed`,
       type: "profile",
       url: `https://outprep.xyz/player/${slug}`,
       siteName: "outprep",
@@ -52,7 +61,7 @@ export async function generateMetadata({
     twitter: {
       card: "summary",
       title: `Prepare Against ${name}`,
-      description: `${titleBadge}${player.fideRating} FIDE | ${player.gameCount} games analyzed`,
+      description: `${titleBadge}${ratingSummary} | ${player.gameCount} games analyzed`,
     },
   };
 }
@@ -157,17 +166,32 @@ export default async function PlayerPage({
   const totalResults = player.winRate + player.drawRate + player.lossRate;
 
   // JSON-LD structured data
+  const personDescription = [
+    player.title ? `${player.title}` : null,
+    player.standardRating ? `Standard ${player.standardRating}` : null,
+    player.rapidRating ? `Rapid ${player.rapidRating}` : null,
+    player.blitzRating ? `Blitz ${player.blitzRating}` : null,
+    !player.standardRating && !player.rapidRating && !player.blitzRating
+      ? `FIDE ${player.fideRating}`
+      : null,
+    player.federation ? `Federation: ${player.federation}` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
       {
         "@type": "Person",
         name: name,
-        description: player.title
-          ? `${player.title}, FIDE ${player.fideRating}`
-          : `FIDE ${player.fideRating}`,
+        description: personDescription,
         url: `https://outprep.xyz/player/${slug}`,
         knowsAbout: "Chess",
+        ...(player.federation ? { nationality: player.federation } : {}),
+        ...(player.birthYear
+          ? { birthDate: String(player.birthYear) }
+          : {}),
         ...(player.fideId
           ? {
               sameAs: [
@@ -213,6 +237,10 @@ export default async function PlayerPage({
                   {player.title && <TitleBadge title={player.title} />}
                 </div>
                 <p className="text-sm text-zinc-400 mt-1">
+                  {player.federation && (
+                    <span className="text-zinc-300 font-medium">{player.federation}</span>
+                  )}
+                  {player.federation && " · "}
                   {player.gameCount.toLocaleString()} OTB games analyzed
                   {player.fideId && (
                     <>
@@ -230,12 +258,49 @@ export default async function PlayerPage({
                 </p>
               </div>
               <div className="text-right">
-                <div className="text-3xl font-bold text-green-400">
-                  {player.fideRating}
-                </div>
-                <div className="text-xs text-zinc-500 uppercase tracking-wide">
-                  FIDE Rating
-                </div>
+                {(player.standardRating || player.rapidRating || player.blitzRating) ? (
+                  <div className="flex gap-4">
+                    {player.standardRating && (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-green-400">
+                          {player.standardRating}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 uppercase tracking-wide">
+                          Standard
+                        </div>
+                      </div>
+                    )}
+                    {player.rapidRating && (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-blue-400">
+                          {player.rapidRating}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 uppercase tracking-wide">
+                          Rapid
+                        </div>
+                      </div>
+                    )}
+                    {player.blitzRating && (
+                      <div className="text-center">
+                        <div className="text-2xl font-bold text-amber-400">
+                          {player.blitzRating}
+                        </div>
+                        <div className="text-[10px] text-zinc-500 uppercase tracking-wide">
+                          Blitz
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <div>
+                    <div className="text-3xl font-bold text-green-400">
+                      {player.fideRating}
+                    </div>
+                    <div className="text-xs text-zinc-500 uppercase tracking-wide">
+                      FIDE Rating
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

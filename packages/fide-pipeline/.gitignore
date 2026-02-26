@@ -1,1 +1,4 @@
 data/
+
+# FIDE rating TXT files are extracted to /tmp at runtime — only keep the zip
+data/ratings/*.txt

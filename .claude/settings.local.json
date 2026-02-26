@@ -44,7 +44,9 @@
       "Bash(git rev-list:*)",
       "WebFetch(domain:theweekinchess.com)",
       "WebFetch(domain:www.saremba.de)",
-      "Bash(test:*)"
+      "Bash(test:*)",
+      "WebFetch(domain:ratings.fide.com)",
+      "Bash(unzip:*)"
     ]
   }
 }
