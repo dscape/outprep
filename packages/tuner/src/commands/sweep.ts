@@ -66,21 +66,46 @@ export async function sweep(options: SweepOptions) {
   console.log("  ║          Running Parameter Sweep         ║");
   console.log("  ╚══════════════════════════════════════════╝\n");
 
-  // Load all datasets
-  const datasetPairs: { ref: DatasetRef; dataset: Dataset }[] = [];
+  // Load all datasets and filter by eval coverage
+  const MIN_EVAL_COVERAGE = 0.20; // Skip datasets with <20% games having Lichess evals
+  const allLoadedPairs: { ref: DatasetRef; dataset: Dataset }[] = [];
   for (const ref of state.datasets) {
     const ds = loadDataset(ref);
-    if (ds) datasetPairs.push({ ref, dataset: ds });
+    if (ds) allLoadedPairs.push({ ref, dataset: ds });
   }
 
-  if (datasetPairs.length === 0) {
+  if (allLoadedPairs.length === 0) {
     console.error("  No datasets could be loaded.\n");
     state.phase = "idle";
     saveState(state);
     return;
   }
 
-  console.log(`  Datasets: ${datasetPairs.length}`);
+  // Gate: skip datasets with low eval coverage (CPL metrics are unreliable without evals)
+  const datasetPairs: { ref: DatasetRef; dataset: Dataset }[] = [];
+  for (const pair of allLoadedPairs) {
+    const coverage = pair.dataset.gameCount > 0
+      ? pair.dataset.gamesWithEvals / pair.dataset.gameCount
+      : 0;
+    if (coverage < MIN_EVAL_COVERAGE) {
+      console.warn(
+        `  ⚠ Skipping ${pair.ref.name} (${pair.ref.elo} Elo): ` +
+        `eval coverage ${(coverage * 100).toFixed(0)}% < ${(MIN_EVAL_COVERAGE * 100).toFixed(0)}% minimum ` +
+        `(${pair.dataset.gamesWithEvals}/${pair.dataset.gameCount} games with evals)`
+      );
+    } else {
+      datasetPairs.push(pair);
+    }
+  }
+
+  if (datasetPairs.length === 0) {
+    console.error("  No datasets meet minimum eval coverage. Run `npm run tuner -- gather` to fetch higher-quality data.\n");
+    state.phase = "idle";
+    saveState(state);
+    return;
+  }
+
+  console.log(`  Datasets: ${datasetPairs.length} (of ${allLoadedPairs.length} loaded, ${allLoadedPairs.length - datasetPairs.length} skipped for low eval coverage)`);
   console.log(`  Max experiments: ${maxExperiments}`);
   console.log(`  Triage positions: ${triagePositions}`);
   console.log(`  Full positions: ${fullPositions ?? "unlimited"}\n`);

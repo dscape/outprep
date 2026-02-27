@@ -338,12 +338,10 @@ export async function runAccuracyTest(
             );
             if (playerCandidate) {
               actualCPL = Math.max(0, bestScore - playerCandidate.score);
-            } else {
-              // Player's move is worse than ALL candidates — use worst candidate
-              // gap as a conservative lower bound for their CPL
-              const worstScore = candidates[candidates.length - 1].score;
-              actualCPL = Math.max(0, bestScore - worstScore);
             }
+            // If player's move isn't in candidates, leave actualCPL undefined.
+            // The previous heuristic (bestScore - worstScore) produced extreme
+            // values (2200+ cp) when the top-4 spread was wide.
           }
 
           // Bot CPL from candidate scores (full mode only — triage mode
@@ -402,6 +400,18 @@ export async function runAccuracyTest(
       }
 
       gameIndex++;
+    }
+
+    // Sanity check: in triage mode, no position should have botCPL
+    // (triage uses the weakened engine's candidates — scores are unreliable)
+    if (runConfig.skipTopN) {
+      const leakedBotCPL = positions.filter(p => p.botCPL !== undefined);
+      if (leakedBotCPL.length > 0) {
+        console.warn(
+          `\n  WARNING: ${leakedBotCPL.length} positions have botCPL in triage mode (should be 0). ` +
+          `This indicates a code path is bypassing the skipTopN guard.`
+        );
+      }
     }
 
     // 4. Compute aggregate metrics

@@ -36,7 +36,7 @@ export function createSweepPlan(
     configOverride: variant.override,
     datasets: datasetNames,
     maxPositions: options.triagePositions,
-    seed: options.baseSeed + index,
+    seed: options.baseSeed,  // same seed as baseline → same positions → apples-to-apples comparison
     status: "pending" as const,
   }));
 

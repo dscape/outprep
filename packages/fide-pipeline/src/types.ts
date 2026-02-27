@@ -55,6 +55,16 @@ export interface FIDEPlayer {
   standardRating?: number; // Official FIDE Standard rating
   rapidRating?: number; // Official FIDE Rapid rating
   blitzRating?: number; // Official FIDE Blitz rating
+  recentGames?: Array<{
+    slug: string;
+    opponentName: string;
+    opponentElo: number;
+    result: "Won" | "Lost" | "Draw";
+    event: string;
+    date: string;
+    opening: string | null;
+    isWhite: boolean;
+  }>; // Inline display data for Notable Games on player page (avoids extra fetch)
 }
 
 /** Compact player entry for the master index (sitemap + listing). */
@@ -97,4 +107,53 @@ export interface PlayerAccumulator {
   whiteEcos: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>;
   /** ECO counts as black */
   blackEcos: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>;
+}
+
+// ─── Game types ──────────────────────────────────────────────────────────────
+
+/** Individual game detail for SEO pages. Stored in Blob as individual JSON files. */
+export interface GameDetail {
+  slug: string;
+  whiteName: string; // Enriched FIDE full name
+  blackName: string;
+  whiteSlug: string; // Links to /player/{slug}
+  blackSlug: string;
+  whiteFideId: string;
+  blackFideId: string;
+  whiteElo: number;
+  blackElo: number;
+  whiteTitle: string | null;
+  blackTitle: string | null;
+  event: string;
+  site: string | null;
+  date: string; // "2022.04.20"
+  round: string | null;
+  eco: string | null;
+  opening: string | null; // From PGN [Opening] header
+  variation: string | null; // From PGN [Variation] header
+  result: string; // "1-0" | "0-1" | "1/2-1/2"
+  pgn: string; // Full raw PGN for replay/practice
+}
+
+/** Compact entry for the game index (sitemap + listing). No PGN. */
+export interface GameIndexEntry {
+  slug: string;
+  whiteName: string;
+  blackName: string;
+  whiteSlug: string;
+  blackSlug: string;
+  whiteElo: number;
+  blackElo: number;
+  event: string;
+  date: string;
+  result: string;
+  eco: string | null;
+  opening: string | null;
+}
+
+/** Master game index stored in Vercel Blob. */
+export interface GameIndex {
+  generatedAt: string; // ISO timestamp
+  totalGames: number;
+  games: GameIndexEntry[];
 }

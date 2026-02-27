@@ -18,11 +18,16 @@ export type {
   PlayerIndex,
   PlayerIndexEntry,
   OpeningStats,
+  GameDetail,
+  GameIndex,
+  GameIndexEntry,
 } from "../../packages/fide-pipeline/src/types";
 
 import type {
   FIDEPlayer,
   PlayerIndex,
+  GameDetail,
+  GameIndex,
 } from "../../packages/fide-pipeline/src/types";
 
 const PREFIX = "fide";
@@ -32,6 +37,8 @@ const IS_DEV = process.env.NODE_ENV === "development";
 let cachedIndex: { data: PlayerIndex; fetchedAt: number } | null = null;
 // In-memory cache for the alias map (alias slug → canonical slug)
 let cachedAliases: { data: Record<string, string>; fetchedAt: number } | null = null;
+// In-memory cache for the game index
+let cachedGameIndex: { data: GameIndex; fetchedAt: number } | null = null;
 const INDEX_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 // ─── Local file fallback for development ──────────────────────────────────────
@@ -255,4 +262,66 @@ export function formatPlayerName(name: string): string {
     return name.replace(",", ", ");
   }
   return name;
+}
+
+// ─── Game API ────────────────────────────────────────────────────────────────
+
+/**
+ * Get the game index (all games for sitemap + listing).
+ * Cached in memory for 1 hour.
+ */
+export async function getGameIndex(): Promise<GameIndex | null> {
+  if (cachedGameIndex && Date.now() - cachedGameIndex.fetchedAt < INDEX_CACHE_TTL) {
+    return cachedGameIndex.data;
+  }
+
+  // Dev fallback
+  if (IS_DEV) {
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const gameIndexPath = path.join(
+        process.cwd(),
+        "packages/fide-pipeline/data/processed/game-index.json"
+      );
+      if (fs.existsSync(gameIndexPath)) {
+        const data = JSON.parse(fs.readFileSync(gameIndexPath, "utf-8"));
+        cachedGameIndex = { data, fetchedAt: Date.now() };
+        return data;
+      }
+    } catch {
+      // fall through to Blob
+    }
+  }
+
+  const index = await fetchBlobJson<GameIndex>(`${PREFIX}/game-index.json`);
+  if (index) {
+    cachedGameIndex = { data: index, fetchedAt: Date.now() };
+  }
+  return index;
+}
+
+/**
+ * Get a single game detail by slug.
+ */
+export async function getGame(slug: string): Promise<GameDetail | null> {
+  // Dev fallback: read single game detail file from disk
+  if (IS_DEV) {
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const gameFile = path.join(
+        process.cwd(),
+        "packages/fide-pipeline/data/processed/game-details",
+        `${slug}.json`
+      );
+      if (fs.existsSync(gameFile)) {
+        return JSON.parse(fs.readFileSync(gameFile, "utf-8"));
+      }
+    } catch {
+      // fall through to Blob
+    }
+  }
+
+  return fetchBlobJson<GameDetail>(`${PREFIX}/game-details/${slug}.json`);
 }

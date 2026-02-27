@@ -38,7 +38,7 @@ export function normalizePlayerName(name: string): string {
 /**
  * Slugify a string: lowercase, strip accents, replace non-alphanumeric with hyphens.
  */
-function slugify(str: string): string {
+export function slugify(str: string): string {
   return str
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
@@ -52,7 +52,7 @@ function slugify(str: string): string {
 /**
  * Parse TWIC name "LastName,FirstName" into parts.
  */
-function parseNameParts(name: string): { lastName: string; firstName: string } {
+export function parseNameParts(name: string): { lastName: string; firstName: string } {
   const commaIdx = name.indexOf(",");
   if (commaIdx === -1) {
     return { lastName: name.trim(), firstName: "" };

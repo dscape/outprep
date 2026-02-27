@@ -19,7 +19,7 @@ function fmtNum(n: number, decimals: number): string {
 function formatMetricsRow(label: string, r: AggregatedResult): string {
   const m = r.aggregatedMetrics;
   return [
-    label.padEnd(40),
+    label.padEnd(55),
     (m.matchRate * 100).toFixed(1).padStart(7) + "%",
     (m.topNRate * 100).toFixed(1).padStart(7) + "%",
     (m.bookCoverage * 100).toFixed(1).padStart(7) + "%",
@@ -36,7 +36,7 @@ function formatExperimentsTable(
   experiments: AggregatedResult[]
 ): string {
   const header = [
-    "Experiment".padEnd(40),
+    "Experiment".padEnd(55),
     "Match%".padStart(8),
     "Top4%".padStart(8),
     "Book%".padStart(8),
@@ -56,7 +56,7 @@ function formatExperimentsTable(
     separator,
     ...experiments
       .sort((a, b) => b.scoreDelta - a.scoreDelta)
-      .map((exp) => formatMetricsRow(exp.description.slice(0, 40), exp)),
+      .map((exp) => formatMetricsRow(exp.description.slice(0, 55), exp)),
   ];
 
   return rows.join("\n");

@@ -252,7 +252,7 @@ function generateMarkdown(proposal: Proposal): string {
       const m = exp.aggregatedMetrics;
       const cplStr = isNullOrNaN(m.cplDelta) ? "N/A" : m.cplDelta.toFixed(1);
       lines.push(
-        `| ${exp.description.slice(0, 35)} | ${(m.matchRate * 100).toFixed(1)}% | ${(m.topNRate * 100).toFixed(1)}% | ${cplStr} | ${formatScore(exp.compositeScore)} | ${formatDelta(exp.scoreDelta)} |`
+        `| ${exp.description.slice(0, 50)} | ${(m.matchRate * 100).toFixed(1)}% | ${(m.topNRate * 100).toFixed(1)}% | ${cplStr} | ${formatScore(exp.compositeScore)} | ${formatDelta(exp.scoreDelta)} |`
       );
     }
     lines.push(``);

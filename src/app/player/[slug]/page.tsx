@@ -8,6 +8,7 @@ import {
   formatPlayerName,
 } from "@/lib/fide-blob";
 import type { FIDEPlayer, OpeningStats } from "@/lib/fide-blob";
+import { TitleBadge } from "@/components/title-badge";
 import PracticeLoader from "./practice-loader";
 
 export const revalidate = 604800; // 7 days
@@ -66,28 +67,6 @@ export async function generateMetadata({
   };
 }
 
-function TitleBadge({ title }: { title: string }) {
-  const colors: Record<string, string> = {
-    GM: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-    IM: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-    FM: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-    CM: "bg-purple-500/20 text-purple-400 border-purple-500/30",
-    WGM: "bg-yellow-500/20 text-yellow-400 border-yellow-500/30",
-    WIM: "bg-orange-500/20 text-orange-400 border-orange-500/30",
-    WFM: "bg-blue-500/20 text-blue-400 border-blue-500/30",
-  };
-
-  return (
-    <span
-      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-bold uppercase tracking-wider ${
-        colors[title] || "bg-zinc-700/50 text-zinc-400 border-zinc-600/30"
-      }`}
-    >
-      {title}
-    </span>
-  );
-}
-
 function OpeningTable({
   title,
   openings,
@@ -140,6 +119,83 @@ function OpeningTable({
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+async function NotableGames({
+  playerSlug,
+  playerName,
+  recentGameSlugs,
+}: {
+  playerSlug: string;
+  playerName: string;
+  recentGameSlugs?: string[];
+}) {
+  if (!recentGameSlugs || recentGameSlugs.length === 0) return null;
+
+  // Look up game details from the game index
+  const gameIndex = await getGameIndex();
+  if (!gameIndex) return null;
+
+  const gameMap = new Map(gameIndex.games.map((g) => [g.slug, g]));
+  const games = recentGameSlugs
+    .map((slug) => gameMap.get(slug))
+    .filter((g): g is GameIndexEntry => !!g);
+
+  if (games.length === 0) return null;
+
+  return (
+    <div className="mt-8">
+      <h2 className="text-lg font-semibold text-white mb-4">Notable Games</h2>
+      <div className="space-y-2">
+        {games.map((g) => {
+          const isWhite = g.whiteSlug === playerSlug;
+          const opponentName = formatPlayerName(isWhite ? g.blackName : g.whiteName);
+          const opponentElo = isWhite ? g.blackElo : g.whiteElo;
+          const resultText =
+            g.result === "1/2-1/2"
+              ? "Draw"
+              : (g.result === "1-0" && isWhite) || (g.result === "0-1" && !isWhite)
+                ? "Won"
+                : "Lost";
+          const resultColor =
+            resultText === "Won"
+              ? "text-green-400"
+              : resultText === "Lost"
+                ? "text-red-400"
+                : "text-zinc-400";
+
+          // Format date: "2022.04.20" → "Apr 2022"
+          const [y, m] = g.date.split(".");
+          const dateLabel = y && m
+            ? new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString("en-US", {
+                month: "short",
+                year: "numeric",
+              })
+            : g.date;
+
+          return (
+            <a
+              key={g.slug}
+              href={`/game/${g.slug}`}
+              className="flex items-center gap-3 rounded-lg border border-zinc-800/50 bg-zinc-900/30 px-4 py-3 hover:bg-zinc-800/50 hover:border-zinc-700/50 transition-all text-sm group"
+            >
+              <span className={`font-medium ${resultColor} w-10`}>{resultText}</span>
+              <span className="text-zinc-300 group-hover:text-white transition-colors flex-1 truncate">
+                vs {opponentName} ({opponentElo})
+              </span>
+              {g.opening && (
+                <span className="text-zinc-500 hidden sm:inline truncate max-w-[140px]">
+                  {g.opening}
+                </span>
+              )}
+              <span className="text-zinc-600 text-xs whitespace-nowrap">{dateLabel}</span>
+              <span className="text-zinc-600 group-hover:text-zinc-400">&rarr;</span>
+            </a>
+          );
+        })}
       </div>
     </div>
   );
@@ -373,6 +429,13 @@ export default async function PlayerPage({
                 </p>
               )}
           </div>
+
+          {/* Notable Games */}
+          <NotableGames
+            playerSlug={slug}
+            playerName={name}
+            recentGameSlugs={player.recentGameSlugs}
+          />
 
           {/* Practice CTA */}
           <div className="mt-10 flex flex-col items-center gap-3 pb-8">

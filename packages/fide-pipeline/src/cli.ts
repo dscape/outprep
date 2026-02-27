@@ -14,7 +14,8 @@ import {
 } from "./aggregate";
 import { uploadAllFromDisk } from "./upload";
 import { loadFideData, enrichPlayers } from "./fide-enrichment";
-import type { TWICGameHeader, FIDEPlayer } from "./types";
+import { buildGameDetails, buildGameIndex, buildPlayerRecentGames, writeGameFiles } from "./game-indexer";
+import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -48,12 +49,14 @@ loadEnvFile();
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const PROCESSED_DIR = join(DATA_DIR, "processed");
 const GAMES_DIR = join(PROCESSED_DIR, "games");
+const GAME_DETAILS_DIR = join(PROCESSED_DIR, "game-details");
 const RATINGS_DIR = join(DATA_DIR, "ratings");
 
 function ensureDirs(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   if (!existsSync(PROCESSED_DIR)) mkdirSync(PROCESSED_DIR, { recursive: true });
   if (!existsSync(GAMES_DIR)) mkdirSync(GAMES_DIR, { recursive: true });
+  if (!existsSync(GAME_DETAILS_DIR)) mkdirSync(GAME_DETAILS_DIR, { recursive: true });
 }
 
 const program = new Command()
@@ -199,7 +202,20 @@ program
     ensureDirs();
     const gameFilesWritten = writePlayerGames(games, players, GAMES_DIR);
 
-    // Save index + players + aliases
+    // 5b. Build game detail pages (min Elo 0 for smoke — include all games)
+    console.log("\n  Building game detail pages...");
+    const gameDetails = buildGameDetails(games, players, { minElo: 0 });
+    const gameIndex = buildGameIndex(gameDetails);
+    const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
+    console.log(`  ${gameDetailFilesWritten} game pages generated`);
+
+    // 5c. Cross-link players with their recent games (inline display data)
+    const playerRecentGames = buildPlayerRecentGames(gameDetails);
+    for (const p of players) {
+      p.recentGames = playerRecentGames.get(p.slug) ?? [];
+    }
+
+    // Save index + players + aliases + game index
     writeFileSync(
       join(PROCESSED_DIR, "smoke-index.json"),
       JSON.stringify(index, null, 2)
@@ -220,8 +236,12 @@ program
       join(PROCESSED_DIR, "aliases.json"),
       JSON.stringify(aliasMap, null, 2)
     );
+    writeFileSync(
+      join(PROCESSED_DIR, "game-index.json"),
+      JSON.stringify(gameIndex)
+    );
 
-    console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${gameFilesWritten} game files, ${Object.keys(aliasMap).length} aliases)`);
+    console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${gameFilesWritten} game files, ${gameDetailFilesWritten} game pages, ${Object.keys(aliasMap).length} aliases)`);
 
     // 6. Upload (optional)
     if (!opts.skipUpload) {
@@ -239,6 +259,8 @@ program
 
       const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
         prefix: "fide-smoke",
+        gameDetailsDir: GAME_DETAILS_DIR,
+        gameIndex,
         onProgress: (uploaded, total) => {
           if (uploaded % 100 === 0 || uploaded === total) {
             console.log(`  Uploaded ${uploaded}/${total}`);
@@ -249,6 +271,7 @@ program
       console.log(`\n  Index URL: ${result.indexUrl}`);
       console.log(`  Players uploaded: ${result.playersUploaded}`);
       console.log(`  Game files uploaded: ${result.gamesUploaded}`);
+      console.log(`  Game pages uploaded: ${result.gameDetailsUploaded}`);
     } else {
       console.log("\nStep 4: Upload skipped (--skip-upload)");
     }
@@ -303,8 +326,10 @@ program
   .command("process")
   .description("Process downloaded PGNs into player data")
   .option("--min-games <n>", "Minimum games per player", "3")
+  .option("--min-elo <n>", "Minimum Elo for game page indexing", "2000")
   .action(async (opts) => {
     const minGames = parseInt(opts.minGames);
+    const minElo = parseInt(opts.minElo);
     ensureDirs();
 
     // Find all downloaded PGN files
@@ -353,19 +378,35 @@ program
     const gameFilesWritten = writePlayerGames(allGames, players, GAMES_DIR);
     console.log(`  ${gameFilesWritten} game files written`);
 
+    // Build game detail pages
+    console.log(`\nBuilding game detail pages (min Elo ${minElo})...`);
+    const gameDetails = buildGameDetails(allGames, players, { minElo });
+    const gameIndex = buildGameIndex(gameDetails);
+    const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
+    console.log(`  ${gameDetailFilesWritten} game pages generated`);
+
+    // Cross-link players with their recent games (inline display data)
+    const playerRecentGames = buildPlayerRecentGames(gameDetails);
+    for (const p of players) {
+      p.recentGames = playerRecentGames.get(p.slug) ?? [];
+    }
+
     // Free allGames memory before writing remaining files
     allGames = [];
 
-    // Save index, players, aliases
+    // Save index, players, aliases, game index
     writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
     writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
     writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
+    writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
 
     console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
-    console.log(`  index.json:   ${index.totalPlayers} players`);
-    console.log(`  players.json: ${players.length} player profiles`);
-    console.log(`  games/:       ${gameFilesWritten} game files`);
-    console.log(`  aliases.json: ${Object.keys(aliasMap).length} aliases\n`);
+    console.log(`  index.json:      ${index.totalPlayers} players`);
+    console.log(`  players.json:    ${players.length} player profiles`);
+    console.log(`  games/:          ${gameFilesWritten} game files`);
+    console.log(`  game-details/:   ${gameDetailFilesWritten} game pages`);
+    console.log(`  game-index.json: ${gameIndex.totalGames} games indexed`);
+    console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases\n`);
   });
 
 // ─── upload ───────────────────────────────────────────────────────────────────
@@ -407,12 +448,23 @@ program
 
     const gameFileCount = readdirSync(GAMES_DIR).filter(f => f.endsWith(".json")).length;
 
+    // Load game index if available
+    const gameIndexPath = join(PROCESSED_DIR, "game-index.json");
+    const gameIndex: GameIndex | undefined = existsSync(gameIndexPath)
+      ? JSON.parse(readFileSync(gameIndexPath, "utf-8"))
+      : undefined;
+    const gameDetailCount = existsSync(GAME_DETAILS_DIR)
+      ? readdirSync(GAME_DETAILS_DIR).filter(f => f.endsWith(".json")).length
+      : 0;
+
     console.log(`\nUploading to Vercel Blob (prefix: ${opts.prefix}/)`);
-    console.log(`  ${index.totalPlayers} players, ${gameFileCount} game files, ${Object.keys(aliases).length} aliases\n`);
+    console.log(`  ${index.totalPlayers} players, ${gameFileCount} game files, ${gameDetailCount} game pages, ${Object.keys(aliases).length} aliases\n`);
 
     const start = Date.now();
     const result = await uploadAllFromDisk(players, index, aliases, GAMES_DIR, {
       prefix: opts.prefix,
+      gameDetailsDir: existsSync(GAME_DETAILS_DIR) ? GAME_DETAILS_DIR : undefined,
+      gameIndex,
       onProgress: (uploaded, total) => {
         if (uploaded % 200 === 0 || uploaded === total) {
           const pct = Math.round((uploaded / total) * 100);
@@ -425,7 +477,8 @@ program
     console.log(`\nUpload complete in ${elapsed}s`);
     console.log(`  Index URL:        ${result.indexUrl}`);
     console.log(`  Players uploaded:  ${result.playersUploaded}`);
-    console.log(`  Game files:        ${result.gamesUploaded}\n`);
+    console.log(`  Game files:        ${result.gamesUploaded}`);
+    console.log(`  Game pages:        ${result.gameDetailsUploaded}\n`);
   });
 
 // ─── full ─────────────────────────────────────────────────────────────────────
@@ -436,12 +489,14 @@ program
   .requiredOption("--from <n>", "First TWIC issue number")
   .requiredOption("--to <n>", "Last TWIC issue number")
   .option("--min-games <n>", "Minimum games per player", "3")
+  .option("--min-elo <n>", "Minimum Elo for game page indexing", "2000")
   .option("--prefix <p>", "Blob path prefix", "fide")
   .option("--delay <ms>", "Delay between downloads in ms", "500")
   .action(async (opts) => {
     const from = parseInt(opts.from);
     const to = parseInt(opts.to);
     const minGames = parseInt(opts.minGames);
+    const minElo = parseInt(opts.minElo);
 
     console.log(`\n═══ Full Pipeline: TWIC ${from}–${to} ═══\n`);
 
@@ -479,13 +534,27 @@ program
     const gameFilesWritten = writePlayerGames(allGames, players, GAMES_DIR);
     console.log(`  ${gameFilesWritten} game files written`);
 
+    // Build game detail pages
+    console.log(`\n  Building game detail pages (min Elo ${minElo})...`);
+    const gameDetails = buildGameDetails(allGames, players, { minElo });
+    const gameIndex = buildGameIndex(gameDetails);
+    const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
+    console.log(`  ${gameDetailFilesWritten} game pages generated`);
+
+    // Cross-link players with their recent games (inline display data)
+    const playerRecentGames = buildPlayerRecentGames(gameDetails);
+    for (const p of players) {
+      p.recentGames = playerRecentGames.get(p.slug) ?? [];
+    }
+
     // Free allGames memory before upload/save
     allGames = [];
 
-    // Save index, players, aliases to disk (useful for dev mode and as backup)
+    // Save index, players, aliases, game index to disk
     writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
     writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
     writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
+    writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
 
     // Step 3: Upload
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
@@ -498,6 +567,8 @@ program
 
     const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
       prefix: opts.prefix,
+      gameDetailsDir: GAME_DETAILS_DIR,
+      gameIndex,
       onProgress: (uploaded, total) => {
         if (uploaded % 500 === 0 || uploaded === total) {
           const pct = Math.round((uploaded / total) * 100);
@@ -508,9 +579,11 @@ program
 
     console.log(`\n═══ Pipeline Complete ═══`);
     console.log(`  Players:          ${players.length}`);
+    console.log(`  Game pages:       ${gameDetailFilesWritten}`);
     console.log(`  Index URL:        ${result.indexUrl}`);
     console.log(`  Players uploaded:  ${result.playersUploaded}`);
-    console.log(`  Game files:        ${result.gamesUploaded}\n`);
+    console.log(`  Game files:        ${result.gamesUploaded}`);
+    console.log(`  Game pages:        ${result.gameDetailsUploaded}\n`);
   });
 
 program.parse();
