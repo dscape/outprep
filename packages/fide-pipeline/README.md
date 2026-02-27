@@ -38,10 +38,10 @@ The only variable needed is `BLOB_READ_WRITE_TOKEN` (for uploading to Vercel Blo
 
 Download the official FIDE rating list from [ratings.fide.com](https://ratings.fide.com/download_lists.phtml):
 
-1. Download the zip containing all 3 rating lists (Standard, Rapid, Blitz)
-2. Place it at `packages/fide-pipeline/data/ratings/fide_ratings_and_names.zip`
+1. Download the combined TXT zip (https://ratings.fide.com/download/players_list.zip) — a single file containing all ratings (Standard, Rapid, Blitz) per player
+2. Place it at `packages/fide-pipeline/data/ratings/players_list.zip`
 
-The pipeline unzips to `/tmp` at runtime — the raw `.txt` files are never stored in the repo.
+The zip contains one file (`players_list_foa.txt`) in fixed-width format with all three rating types per player row. The pipeline unzips to `/tmp` at runtime — the raw `.txt` file is never stored in the repo.
 
 > **Without the FIDE zip**, the pipeline still works but uses abbreviated TWIC names
 > (e.g. "Caruana,F" instead of "Caruana, Fabiano") and won't have official ratings.
@@ -275,7 +275,7 @@ The upload automatically retries with backoff when Vercel Blob returns `BlobServ
 
 ### "Zip not found" for FIDE enrichment
 
-If you see `[fide-enrichment] Zip not found`, download the FIDE rating list zip and place it at `data/ratings/fide_ratings_and_names.zip`. The pipeline still works without it, just with abbreviated names.
+If you see `[fide-enrichment] Zip not found`, download the FIDE rating list zip and place it at `data/ratings/players_list.zip`. The pipeline still works without it, just with abbreviated names.
 
 ### Large data directory
 

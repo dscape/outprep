@@ -1,37 +1,43 @@
 /**
  * FIDE name & rating enrichment.
  *
- * Parses official FIDE rating list TXT files (fixed-width format) and enriches
- * pipeline player data with full names, official ratings (Standard/Rapid/Blitz),
- * federation, and birth year.
+ * Parses the official FIDE unified rating list TXT file (fixed-width format)
+ * and enriches pipeline player data with full names, official ratings
+ * (Standard/Rapid/Blitz), federation, and birth year.
  *
- * FIDE TXT column layout:
- *   Cols 1-15:    ID Number (FIDE ID)
- *   Cols 16-76:   Name ("Caruana, Fabiano")
- *   Cols 77-79:   Federation ("USA")
- *   Col  81:      Sex
- *   Cols 85-88:   Title ("GM  ")
- *   Cols 113-118: Rating
- *   Cols 125-128: Birth year
+ * FIDE distributes a single file (players_list_foa.txt) inside players_list.zip
+ * containing all three rating types per player.
+ *
+ * FIDE TXT column layout (players_list_foa.txt):
+ *   Cols 0-14:    ID Number (FIDE ID)
+ *   Cols 15-75:   Name ("Caruana, Fabiano")
+ *   Cols 76-78:   Federation ("USA")
+ *   Col  80:      Sex
+ *   Cols 84-87:   Title ("GM  ")
+ *   Cols 89-92:   Women's Title
+ *   Cols 94-108:  Other Title
+ *   Cols 109-111: FOA
+ *   Cols 113-117: Standard Rating (SRtng)
+ *   Cols 119-121: Standard Games (SGm)
+ *   Cols 123-124: Standard K-factor (SK)
+ *   Cols 126-130: Rapid Rating (RRtng)
+ *   Cols 132-134: Rapid Games (RGm)
+ *   Cols 136-137: Rapid K-factor (Rk)
+ *   Cols 139-143: Blitz Rating (BRtng)
+ *   Cols 145-147: Blitz Games (BGm)
+ *   Cols 149-150: Blitz K-factor (BK)
+ *   Cols 152-155: Birth year (B-day)
+ *   Cols 158-161: Flag
  */
 
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { generateSlug, generateAliases } from "./aggregate";
 import type { FIDEPlayer } from "./types";
 
-/** A single record from one FIDE rating list. */
-export interface FideRecord {
-  name: string; // "Caruana, Fabiano"
-  federation: string; // "USA"
-  title: string | null; // "GM", "IM", etc.
-  rating: number | null;
-  birthYear: number | null;
-}
-
-/** Merged record across Standard, Rapid, and Blitz lists. */
+/** Player record from the unified FIDE rating list (all 3 rating types). */
 export interface MergedFideRecord {
   name: string;
   federation: string;
@@ -43,13 +49,14 @@ export interface MergedFideRecord {
 }
 
 /**
- * Parse a single FIDE rating list TXT file (fixed-width format).
- * Returns a Map of FIDE ID → FideRecord.
+ * Parse the unified FIDE rating list TXT file (fixed-width format).
+ * All 3 rating types (Standard, Rapid, Blitz) are in a single row per player.
+ * Returns a Map of FIDE ID → MergedFideRecord.
  */
-export function parseFideRatingList(txtPath: string): Map<string, FideRecord> {
+export function parseFideUnifiedList(txtPath: string): Map<string, MergedFideRecord> {
   const content = readFileSync(txtPath, "utf-8");
   const lines = content.split("\n");
-  const result = new Map<string, FideRecord>();
+  const result = new Map<string, MergedFideRecord>();
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -62,17 +69,21 @@ export function parseFideRatingList(txtPath: string): Map<string, FideRecord> {
     const name = line.slice(15, 76).trim();
     const federation = line.slice(76, 79).trim();
     const title = line.slice(84, 88).trim() || null;
-    const ratingStr = line.slice(112, 118).trim();
-    const rating = ratingStr ? parseInt(ratingStr, 10) : null;
-    const birthStr = line.slice(124, 128).trim();
+
+    const sRtng = parseInt(line.slice(113, 119).trim(), 10);
+    const rRtng = parseInt(line.slice(126, 132).trim(), 10);
+    const bRtng = parseInt(line.slice(139, 145).trim(), 10);
+    const birthStr = line.slice(152, 156).trim();
     const birthYear = birthStr ? parseInt(birthStr, 10) : null;
 
     result.set(fideId, {
       name,
       federation,
       title,
-      rating: rating && !isNaN(rating) ? rating : null,
       birthYear: birthYear && !isNaN(birthYear) ? birthYear : null,
+      standardRating: sRtng && !isNaN(sRtng) ? sRtng : null,
+      rapidRating: rRtng && !isNaN(rRtng) ? rRtng : null,
+      blitzRating: bRtng && !isNaN(bRtng) ? bRtng : null,
     });
   }
 
@@ -80,13 +91,14 @@ export function parseFideRatingList(txtPath: string): Map<string, FideRecord> {
 }
 
 /**
- * Load and merge all 3 FIDE rating lists from a zip file.
+ * Load the unified FIDE rating list from a zip file.
  *
- * Unzips to a temp directory to avoid polluting the repo.
+ * The zip contains a single file (players_list_foa.txt) with all 3 rating
+ * types per player. Unzips to a temp directory to avoid polluting the repo.
  * Returns a Map of FIDE ID → MergedFideRecord.
  */
 export function loadFideData(ratingsDir: string): Map<string, MergedFideRecord> {
-  const zipPath = join(ratingsDir, "fide_ratings_and_names.zip");
+  const zipPath = join(ratingsDir, "players_list.zip");
   if (!existsSync(zipPath)) {
     console.warn(`[fide-enrichment] Zip not found: ${zipPath}. Skipping enrichment.`);
     return new Map();
@@ -96,67 +108,21 @@ export function loadFideData(ratingsDir: string): Map<string, MergedFideRecord> 
   const tmpDir = join(tmpdir(), "fide-ratings-" + Date.now());
   mkdirSync(tmpDir, { recursive: true });
 
-  console.log(`  Unzipping FIDE rating lists to ${tmpDir}...`);
+  console.log(`  Unzipping FIDE rating list to ${tmpDir}...`);
   execSync(`unzip -o -q "${zipPath}" -d "${tmpDir}"`, { stdio: "pipe" });
 
-  const standardPath = join(tmpDir, "standard_rating_list.txt");
-  const rapidPath = join(tmpDir, "rapid_rating_list.txt");
-  const blitzPath = join(tmpDir, "blitz_rating_list.txt");
-
-  // Parse each list that exists
-  const standardMap = existsSync(standardPath) ? parseFideRatingList(standardPath) : new Map<string, FideRecord>();
-  const rapidMap = existsSync(rapidPath) ? parseFideRatingList(rapidPath) : new Map<string, FideRecord>();
-  const blitzMap = existsSync(blitzPath) ? parseFideRatingList(blitzPath) : new Map<string, FideRecord>();
-
-  console.log(`  Parsed: standard=${standardMap.size}, rapid=${rapidMap.size}, blitz=${blitzMap.size}`);
-
-  // Merge: standard is primary source for name/federation/title/birthYear
-  const merged = new Map<string, MergedFideRecord>();
-
-  // Start with all standard players
-  for (const [id, rec] of standardMap) {
-    merged.set(id, {
-      name: rec.name,
-      federation: rec.federation,
-      title: rec.title,
-      birthYear: rec.birthYear,
-      standardRating: rec.rating,
-      rapidRating: rapidMap.get(id)?.rating ?? null,
-      blitzRating: blitzMap.get(id)?.rating ?? null,
-    });
+  // Find the single .txt file in the extracted contents
+  const txtFile = readdirSync(tmpDir).find((f) => f.endsWith(".txt"));
+  if (!txtFile) {
+    console.warn(`[fide-enrichment] No .txt file found in zip. Skipping enrichment.`);
+    return new Map();
   }
 
-  // Add rapid-only players (not in standard)
-  for (const [id, rec] of rapidMap) {
-    if (!merged.has(id)) {
-      merged.set(id, {
-        name: rec.name,
-        federation: rec.federation,
-        title: rec.title,
-        birthYear: rec.birthYear,
-        standardRating: null,
-        rapidRating: rec.rating,
-        blitzRating: blitzMap.get(id)?.rating ?? null,
-      });
-    }
-  }
+  const txtPath = join(tmpDir, txtFile);
+  console.log(`  Parsing unified FIDE rating list: ${txtFile}...`);
+  const fideData = parseFideUnifiedList(txtPath);
 
-  // Add blitz-only players (not in standard or rapid)
-  for (const [id, rec] of blitzMap) {
-    if (!merged.has(id)) {
-      merged.set(id, {
-        name: rec.name,
-        federation: rec.federation,
-        title: rec.title,
-        birthYear: rec.birthYear,
-        standardRating: null,
-        rapidRating: null,
-        blitzRating: rec.rating,
-      });
-    }
-  }
-
-  console.log(`  Merged: ${merged.size} total FIDE players`);
+  console.log(`  Parsed: ${fideData.size} total FIDE players`);
 
   // Clean up temp dir (best effort)
   try {
@@ -165,7 +131,7 @@ export function loadFideData(ratingsDir: string): Map<string, MergedFideRecord> 
     // Non-fatal
   }
 
-  return merged;
+  return fideData;
 }
 
 /**
