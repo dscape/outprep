@@ -122,6 +122,9 @@ export function generateAliases(
     }
   }
 
+  // Bare FIDE ID — allows /player/2020009 → /player/fabiano-caruana-2020009
+  aliases.add(fideId);
+
   // Remove canonical from aliases (it's not an alias of itself)
   aliases.delete(canonicalSlug);
 

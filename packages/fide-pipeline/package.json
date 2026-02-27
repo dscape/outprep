@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "pipeline": "tsx src/cli.ts",
+    "fide-pipeline": "tsx src/cli.ts",
     "build": "echo 'fide-pipeline uses tsx, no build step'",
     "typecheck": "tsc --noEmit"
   },

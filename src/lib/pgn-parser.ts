@@ -142,8 +142,10 @@ export function inferPlayer(games: OTBGame[]): InferResult {
  */
 export function splitPGN(pgnText: string): string[] {
   const games: string[] = [];
+  // Normalize Windows (\r\n) line endings before splitting
+  const normalized = pgnText.replace(/\r/g, "");
   // Split on double newlines followed by [Event tag
-  const parts = pgnText.split(/\n\n(?=\[Event )/);
+  const parts = normalized.split(/\n\n(?=\[Event )/);
   for (const part of parts) {
     const trimmed = part.trim();
     if (trimmed) games.push(trimmed);

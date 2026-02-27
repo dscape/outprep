@@ -14,8 +14,16 @@ import {
 } from "./aggregate";
 import { uploadAllFromDisk } from "./upload";
 import { loadFideData, enrichPlayers } from "./fide-enrichment";
-import { buildGameDetails, buildGameIndex, buildPlayerRecentGames, writeGameFiles } from "./game-indexer";
-import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
+import {
+  buildGameDetails,
+  buildGameIndex,
+  buildPlayerRecentGames,
+  writeGameFiles,
+  createGameProcessingState,
+  processGameDetailsChunk,
+  finalizeGameProcessing,
+} from "./game-indexer";
+import type { TWICGameHeader, FIDEPlayer, GameIndex, PlayerIndex } from "./types";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
@@ -141,6 +149,131 @@ function writePlayerGames(
   }
 
   return written;
+}
+
+/**
+ * Two-pass pipeline: aggregate without rawPgn (low memory), then process
+ * games one PGN file at a time with rawPgn. Prevents OOM on large datasets.
+ */
+async function processTwoPass(
+  pgnFiles: { name: string; path: string }[],
+  opts: { minGames: number; minElo: number }
+) {
+  // ── PASS 1: Parse without rawPgn, aggregate, enrich ──
+  console.log("\nPass 1: Aggregate players (lightweight, no PGN text)...\n");
+
+  let allHeaders: TWICGameHeader[] = [];
+  for (const file of pgnFiles) {
+    const pgn = readFileSync(file.path, "utf-8");
+    const start = Date.now();
+    const games = parseHeaders(pgn, { skipRawPgn: true });
+    const ms = Date.now() - start;
+    console.log(`  ${file.name}: ${games.length} games (${ms}ms)`);
+    allHeaders = allHeaders.concat(games);
+  }
+  console.log(`\nTotal games: ${allHeaders.length}`);
+
+  console.log("\nAggregating players...");
+  const players = aggregatePlayers(allHeaders, opts.minGames);
+  console.log(`  ${players.length} players with ${opts.minGames}+ games`);
+
+  // Free headers — they held no rawPgn but still many objects
+  allHeaders = [];
+
+  console.log("\nEnriching with FIDE rating list...");
+  let fideData = loadFideData(RATINGS_DIR);
+  const enrichedCount = enrichPlayers(players, fideData);
+  console.log(`  Enriched ${enrichedCount}/${players.length} players`);
+  players.sort((a, b) => b.fideRating - a.fideRating);
+
+  // Free FIDE data before Pass 2
+  fideData = new Map() as typeof fideData;
+
+  const index = buildPlayerIndex(players);
+  const aliasMap = buildAliasMap(players);
+
+  // ── PASS 2: Process games one PGN file at a time (with rawPgn) ──
+  console.log("\nPass 2: Build player games + game details (one file at a time)...\n");
+
+  // Build lookups for player game collection
+  const fideIdToSlug = new Map<string, string>();
+  const nameToSlug = new Map<string, string>();
+  for (const p of players) {
+    if (p.fideId) fideIdToSlug.set(p.fideId, p.slug);
+    nameToSlug.set(normalizePlayerName(p.name), p.slug);
+  }
+
+  const gamesBySlug = new Map<string, string[]>();
+  for (const p of players) {
+    gamesBySlug.set(p.slug, []);
+  }
+
+  // Clean game-details dir before incremental writes
+  if (existsSync(GAME_DETAILS_DIR)) rmSync(GAME_DETAILS_DIR, { recursive: true });
+  mkdirSync(GAME_DETAILS_DIR, { recursive: true });
+
+  const gameState = createGameProcessingState(players, { minElo: opts.minElo });
+
+  for (const file of pgnFiles) {
+    const pgn = readFileSync(file.path, "utf-8");
+    const games = parseHeaders(pgn); // WITH rawPgn
+    console.log(`  ${file.name}: processing ${games.length} games...`);
+
+    // Collect player games
+    for (const game of games) {
+      const whiteSlug =
+        (game.whiteFideId && fideIdToSlug.get(game.whiteFideId)) ||
+        nameToSlug.get(normalizePlayerName(game.white));
+      const blackSlug =
+        (game.blackFideId && fideIdToSlug.get(game.blackFideId)) ||
+        nameToSlug.get(normalizePlayerName(game.black));
+      if (whiteSlug && gamesBySlug.has(whiteSlug)) {
+        gamesBySlug.get(whiteSlug)!.push(game.rawPgn);
+      }
+      if (blackSlug && gamesBySlug.has(blackSlug)) {
+        gamesBySlug.get(blackSlug)!.push(game.rawPgn);
+      }
+    }
+
+    // Write game detail files immediately (no accumulation)
+    processGameDetailsChunk(games, gameState, GAME_DETAILS_DIR);
+    // games for this file freed at next iteration
+  }
+
+  // Flush player game files
+  console.log("\nWriting per-player game files...");
+  if (existsSync(GAMES_DIR)) rmSync(GAMES_DIR, { recursive: true });
+  mkdirSync(GAMES_DIR, { recursive: true });
+  let gameFilesWritten = 0;
+  for (const [slug, pgns] of gamesBySlug) {
+    if (pgns.length > 0) {
+      writeFileSync(join(GAMES_DIR, `${slug}.json`), JSON.stringify(pgns));
+      gameFilesWritten++;
+    }
+  }
+  console.log(`  ${gameFilesWritten} game files written`);
+
+  // Finalize game index + recent games
+  const { gameIndex, playerRecentGames } = finalizeGameProcessing(gameState);
+  for (const p of players) {
+    p.recentGames = playerRecentGames.get(p.slug) ?? [];
+  }
+
+  // Save index, players, aliases, game index
+  writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
+  writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
+  writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
+  writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
+
+  console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
+  console.log(`  index.json:      ${index.totalPlayers} players`);
+  console.log(`  players.json:    ${players.length} player profiles`);
+  console.log(`  games/:          ${gameFilesWritten} game files`);
+  console.log(`  game-details/:   ${gameState.filesWritten} game pages`);
+  console.log(`  game-index.json: ${gameIndex.totalGames} games indexed`);
+  console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases\n`);
+
+  return { players, index, aliasMap, gameIndex, gameFilesWritten, gameDetailFilesWritten: gameState.filesWritten };
 }
 
 // ─── smoke ────────────────────────────────────────────────────────────────────
@@ -333,80 +466,19 @@ program
     ensureDirs();
 
     // Find all downloaded PGN files
-    const pgnFiles = readdirSync(DATA_DIR)
+    const pgnFileNames = readdirSync(DATA_DIR)
       .filter((f) => f.endsWith(".pgn"))
       .sort();
 
-    if (pgnFiles.length === 0) {
+    if (pgnFileNames.length === 0) {
       console.error("No PGN files found in data/. Run 'download' first.");
       process.exit(1);
     }
 
-    console.log(`\nProcessing ${pgnFiles.length} PGN files (min ${minGames} games/player)\n`);
+    console.log(`\nProcessing ${pgnFileNames.length} PGN files (min ${minGames} games/player)\n`);
 
-    // Parse all PGN files
-    let allGames: TWICGameHeader[] = [];
-    for (const file of pgnFiles) {
-      const pgn = readFileSync(join(DATA_DIR, file), "utf-8");
-      const start = Date.now();
-      const games = parseHeaders(pgn);
-      const ms = Date.now() - start;
-      console.log(`  ${file}: ${games.length} games (${ms}ms)`);
-      allGames = allGames.concat(games);
-    }
-
-    console.log(`\nTotal games: ${allGames.length}`);
-
-    // Aggregate (lightweight — no raw PGNs stored in accumulators)
-    console.log("\nAggregating players...");
-    const players = aggregatePlayers(allGames, minGames);
-    console.log(`  ${players.length} players with ${minGames}+ games`);
-
-    // Enrich with FIDE names + ratings
-    console.log("\nEnriching with FIDE rating list...");
-    const fideData = loadFideData(RATINGS_DIR);
-    const enrichedCount = enrichPlayers(players, fideData);
-    console.log(`  Enriched ${enrichedCount}/${players.length} players`);
-    players.sort((a, b) => b.fideRating - a.fideRating);
-
-    // Build index + aliases (after enrichment)
-    const index = buildPlayerIndex(players);
-    const aliasMap = buildAliasMap(players);
-
-    // Write per-player game files to disk (one file per player)
-    console.log("\nWriting per-player game files...");
-    const gameFilesWritten = writePlayerGames(allGames, players, GAMES_DIR);
-    console.log(`  ${gameFilesWritten} game files written`);
-
-    // Build game detail pages
-    console.log(`\nBuilding game detail pages (min Elo ${minElo})...`);
-    const gameDetails = buildGameDetails(allGames, players, { minElo });
-    const gameIndex = buildGameIndex(gameDetails);
-    const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
-    console.log(`  ${gameDetailFilesWritten} game pages generated`);
-
-    // Cross-link players with their recent games (inline display data)
-    const playerRecentGames = buildPlayerRecentGames(gameDetails);
-    for (const p of players) {
-      p.recentGames = playerRecentGames.get(p.slug) ?? [];
-    }
-
-    // Free allGames memory before writing remaining files
-    allGames = [];
-
-    // Save index, players, aliases, game index
-    writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
-    writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
-    writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
-    writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
-
-    console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
-    console.log(`  index.json:      ${index.totalPlayers} players`);
-    console.log(`  players.json:    ${players.length} player profiles`);
-    console.log(`  games/:          ${gameFilesWritten} game files`);
-    console.log(`  game-details/:   ${gameDetailFilesWritten} game pages`);
-    console.log(`  game-index.json: ${gameIndex.totalGames} games indexed`);
-    console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases\n`);
+    const pgnFiles = pgnFileNames.map((f) => ({ name: f, path: join(DATA_DIR, f) }));
+    await processTwoPass(pgnFiles, { minGames, minElo });
   });
 
 // ─── upload ───────────────────────────────────────────────────────────────────
@@ -500,61 +572,22 @@ program
 
     console.log(`\n═══ Full Pipeline: TWIC ${from}–${to} ═══\n`);
 
-    // Step 1: Download
+    // Step 1: Download (PGNs are saved to disk by downloadTWIC)
     console.log("Step 1/3: Download\n");
-    const pgns = await downloadRange(from, to, { delayMs: parseInt(opts.delay) });
-    console.log(`\n  Downloaded ${pgns.size} issues\n`);
+    await downloadRange(from, to, { delayMs: parseInt(opts.delay) });
+    // Don't hold returned Map — PGNs are already cached on disk
 
-    // Step 2: Parse + aggregate
-    console.log("Step 2/3: Parse & Aggregate\n");
-    let allGames: TWICGameHeader[] = [];
-    for (const [issue, pgn] of pgns) {
-      const games = parseHeaders(pgn);
-      console.log(`  TWIC ${issue}: ${games.length} games`);
-      allGames = allGames.concat(games);
-    }
-    console.log(`\n  Total games: ${allGames.length}`);
-
-    const players = aggregatePlayers(allGames, minGames);
-    console.log(`  Players with ${minGames}+ games: ${players.length}`);
-
-    // Enrich with FIDE names + ratings
-    console.log("\n  Enriching with FIDE rating list...");
-    const fideData = loadFideData(RATINGS_DIR);
-    const enrichedCount = enrichPlayers(players, fideData);
-    console.log(`  Enriched ${enrichedCount}/${players.length} players`);
-    players.sort((a, b) => b.fideRating - a.fideRating);
-
-    const index = buildPlayerIndex(players);
-    const aliasMap = buildAliasMap(players);
-
-    // Write per-player game files to disk
+    // Step 2: Process using two-pass architecture
+    console.log("\nStep 2/3: Process\n");
     ensureDirs();
-    console.log("\n  Writing per-player game files...");
-    const gameFilesWritten = writePlayerGames(allGames, players, GAMES_DIR);
-    console.log(`  ${gameFilesWritten} game files written`);
 
-    // Build game detail pages
-    console.log(`\n  Building game detail pages (min Elo ${minElo})...`);
-    const gameDetails = buildGameDetails(allGames, players, { minElo });
-    const gameIndex = buildGameIndex(gameDetails);
-    const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
-    console.log(`  ${gameDetailFilesWritten} game pages generated`);
+    const pgnFileNames = readdirSync(DATA_DIR)
+      .filter((f) => f.endsWith(".pgn"))
+      .sort();
 
-    // Cross-link players with their recent games (inline display data)
-    const playerRecentGames = buildPlayerRecentGames(gameDetails);
-    for (const p of players) {
-      p.recentGames = playerRecentGames.get(p.slug) ?? [];
-    }
-
-    // Free allGames memory before upload/save
-    allGames = [];
-
-    // Save index, players, aliases, game index to disk
-    writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
-    writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
-    writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
-    writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
+    const pgnFiles = pgnFileNames.map((f) => ({ name: f, path: join(DATA_DIR, f) }));
+    const { players, index, aliasMap, gameIndex, gameDetailFilesWritten } =
+      await processTwoPass(pgnFiles, { minGames, minElo });
 
     // Step 3: Upload
     if (!process.env.BLOB_READ_WRITE_TOKEN) {

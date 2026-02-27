@@ -42,7 +42,10 @@ export function extractHeaders(pgn: string): Record<string, string> {
  * Parse a PGN string into game headers without move validation.
  * Skips games with no player names or with result "*" (unfinished).
  */
-export function parseHeaders(pgnText: string): TWICGameHeader[] {
+export function parseHeaders(
+  pgnText: string,
+  opts?: { skipRawPgn?: boolean }
+): TWICGameHeader[] {
   const rawGames = splitPGN(pgnText);
   const results: TWICGameHeader[] = [];
 
@@ -77,7 +80,7 @@ export function parseHeaders(pgnText: string): TWICGameHeader[] {
       site: h["Site"] || null,
       date: h["Date"] || null,
       result,
-      rawPgn,
+      rawPgn: opts?.skipRawPgn ? "" : rawPgn,
     });
   }
 
