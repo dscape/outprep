@@ -25,7 +25,6 @@ import PrepTipsTab from "@/components/PrepTipsTab";
 import OTBUploader from "@/components/OTBUploader";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
 import ErrorProfileCard from "@/components/ErrorProfileCard";
-import LoadingStages from "@/components/LoadingStages";
 import {
   GameForDrilldown,
   otbGamesToDrilldown,
@@ -205,7 +204,12 @@ export default function ScoutPage() {
   const isPGNMode = searchParams.get("source") === "pgn";
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [basicData, setBasicData] = useState<{
+    username: string;
+    ratings: Record<string, number | undefined>;
+    totalGames: number;
+  } | null>(null);
+  const [fullLoading, setFullLoading] = useState(true);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("openings");
   const [selectedSpeeds, setSelectedSpeeds] = useState<string[]>([]);
@@ -270,11 +274,26 @@ export default function ScoutPage() {
       } catch {
         setError("Failed to load PGN data.");
       }
-      setLoading(false);
+      setFullLoading(false);
       return;
     }
 
-    async function loadProfile() {
+    // Phase 1: Fast basic data (username + ratings)
+    async function loadBasic() {
+      try {
+        const res = await fetch(
+          `/api/profile-basic/${encodeURIComponent(username)}`
+        );
+        if (res.ok) {
+          setBasicData(await res.json());
+        }
+      } catch {
+        // Non-fatal: full profile will provide this data
+      }
+    }
+
+    // Phase 2: Full profile with analysis
+    async function loadFullProfile() {
       try {
         const res = await fetch(
           `/api/profile/${encodeURIComponent(username)}`
@@ -283,7 +302,7 @@ export default function ScoutPage() {
         if (!res.ok) {
           const data = await res.json();
           setError(data.error || "Failed to load profile");
-          setLoading(false);
+          setFullLoading(false);
           return;
         }
 
@@ -298,11 +317,12 @@ export default function ScoutPage() {
       } catch {
         setError("Network error. Please try again.");
       } finally {
-        setLoading(false);
+        setFullLoading(false);
       }
     }
 
-    loadProfile();
+    loadBasic();
+    loadFullProfile();
   }, [username, isPGNMode]);
 
   // Cleanup on unmount
@@ -623,7 +643,27 @@ export default function ScoutPage() {
   const displayedTotalGames =
     totalGameCount ?? filteredData?.games ?? undefined;
 
-  if (loading) {
+  const handlePracticeClick = useCallback(() => {
+    if (isUpgrading) {
+      setShowPlayConfirm(true);
+      return;
+    }
+    if (enhancedErrorProfile) {
+      try {
+        sessionStorage.setItem(
+          `enhanced-profile:${username}`,
+          JSON.stringify(enhancedErrorProfile)
+        );
+      } catch {
+        // Storage full — non-fatal
+      }
+    }
+    router.push(
+      `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`
+    );
+  }, [isUpgrading, enhancedErrorProfile, username, selectedSpeeds, router]);
+
+  if (fullLoading) {
     return (
       <div className="min-h-screen px-4 py-8">
         <div className="mx-auto max-w-3xl">
@@ -633,7 +673,71 @@ export default function ScoutPage() {
           >
             &larr; Back to search
           </button>
-          <LoadingStages />
+
+          {basicData ? (
+            <>
+              {/* Partial PlayerCard: username + ratings */}
+              <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
+                <div>
+                  <h2 className="text-2xl font-bold text-white">{basicData.username}</h2>
+                  <p className="text-sm text-zinc-500 mt-1">
+                    Analyzing {basicData.totalGames.toLocaleString()} games...
+                  </p>
+                </div>
+                {Object.entries(basicData.ratings).filter(([, v]) => v !== undefined).length > 0 && (
+                  <div className="mt-4 flex flex-wrap gap-3">
+                    {Object.entries(basicData.ratings)
+                      .filter(([, v]) => v !== undefined)
+                      .map(([label, value]) => (
+                        <div key={label} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm">
+                          <span className="text-zinc-500 capitalize">{label}</span>{" "}
+                          <span className="font-mono text-white">{value}</span>
+                        </div>
+                      ))}
+                  </div>
+                )}
+                {/* Skeleton style bars */}
+                <div className="mt-6 space-y-3">
+                  <div className="h-4 w-24 rounded bg-zinc-700/50 animate-pulse" />
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-24 h-3 rounded bg-zinc-700/30 animate-pulse" />
+                      <div className="flex-1 h-2 rounded-full bg-zinc-700/30 animate-pulse" />
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Skeleton for error profile */}
+              <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
+                <div className="space-y-3">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-5 rounded-md bg-zinc-700/30 animate-pulse" />
+                  ))}
+                </div>
+              </div>
+
+              {/* Skeleton for tabs */}
+              <div className="mt-8">
+                <div className="flex gap-1 border-b border-zinc-800">
+                  {["Openings", "Weaknesses", "Prep Tips"].map((label) => (
+                    <div key={label} className="px-4 py-2.5 text-sm text-zinc-600">
+                      {label}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-6 space-y-4">
+                  {[1, 2, 3, 4].map((i) => (
+                    <div key={i} className="h-12 rounded-lg bg-zinc-800/30 animate-pulse" />
+                  ))}
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="flex min-h-[60vh] items-center justify-center">
+              <div className="h-12 w-12 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
+            </div>
+          )}
         </div>
       </div>
     );
@@ -676,12 +780,25 @@ export default function ScoutPage() {
     return (
       <div className="min-h-screen px-4 py-8">
         <div className="mx-auto max-w-3xl">
-          <button
-            onClick={() => router.push("/")}
-            className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            &larr; Back to search
-          </button>
+          <div className="mb-6 flex items-center justify-between">
+            <button
+              onClick={() => router.push("/")}
+              className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              &larr; Back to search
+            </button>
+            <button
+              onClick={() =>
+                router.push(
+                  `/play/${encodeURIComponent(username)}?source=pgn`
+                )
+              }
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+              style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
+            >
+              Practice &#9654;
+            </button>
+          </div>
 
           {/* Player Card */}
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
@@ -808,12 +925,21 @@ export default function ScoutPage() {
   return (
     <div className="min-h-screen px-4 py-8">
       <div className="mx-auto max-w-3xl">
-        <button
-          onClick={() => router.push("/")}
-          className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-        >
-          &larr; Back to search
-        </button>
+        <div className="mb-6 flex items-center justify-between">
+          <button
+            onClick={() => router.push("/")}
+            className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            &larr; Back to search
+          </button>
+          <button
+            onClick={handlePracticeClick}
+            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+            style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
+          >
+            Practice &#9654;
+          </button>
+        </div>
 
         {/* Speed Filter */}
         {availableSpeeds.length >= 1 && (
@@ -918,26 +1044,7 @@ export default function ScoutPage() {
         {/* Practice button */}
         <div className="mt-8 flex flex-col items-center gap-3">
           <button
-            onClick={() => {
-              if (isUpgrading) {
-                setShowPlayConfirm(true);
-                return;
-              }
-              // Store enhanced profile for play page if available
-              if (enhancedErrorProfile) {
-                try {
-                  sessionStorage.setItem(
-                    `enhanced-profile:${username}`,
-                    JSON.stringify(enhancedErrorProfile)
-                  );
-                } catch {
-                  // Storage full — non-fatal
-                }
-              }
-              router.push(
-                `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`
-              );
-            }}
+            onClick={handlePracticeClick}
             className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
           >
             Practice against {profile.username}

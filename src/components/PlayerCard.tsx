@@ -7,7 +7,7 @@ interface PlayerCardProps {
   filteredGames?: number;
 }
 
-function StyleBar({ label, value }: { label: string; value: number }) {
+function StyleBar({ label, value, tooltip }: { label: string; value: number; tooltip?: string }) {
   const getColor = (val: number) => {
     if (val >= 75) return "bg-green-500";
     if (val >= 50) return "bg-yellow-500";
@@ -16,7 +16,7 @@ function StyleBar({ label, value }: { label: string; value: number }) {
   };
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3" title={tooltip}>
       <span className="w-24 text-sm text-zinc-400">{label}</span>
       <div className="flex-1 h-2 rounded-full bg-zinc-700 overflow-hidden">
         <div
@@ -31,7 +31,7 @@ function StyleBar({ label, value }: { label: string; value: number }) {
 
 function ConfidenceBar({ confidence }: { confidence: number }) {
   return (
-    <div className="flex items-center gap-2 mt-1">
+    <div className="flex items-center gap-2 mt-1" title="Confidence based on number of rated games and rating stability. More games = higher confidence.">
       <div className="flex-1 h-1.5 rounded-full bg-zinc-700 overflow-hidden">
         <div
           className="h-full rounded-full bg-green-500/70 transition-all duration-500"
@@ -63,7 +63,7 @@ export default function PlayerCard({ profile, filteredGames }: PlayerCardProps) 
             )}
           </p>
         </div>
-        <div className="text-right">
+        <div className="text-right" title="Estimated FIDE rating based on Lichess ratings, adjusted for time control and opponent strength">
           <div className="text-3xl font-bold text-green-400">
             ~{profile.fideEstimate.rating}
           </div>
@@ -99,10 +99,14 @@ export default function PlayerCard({ profile, filteredGames }: PlayerCardProps) 
             </span>
           )}
         </div>
-        <StyleBar label="Aggression" value={profile.style.aggression} />
-        <StyleBar label="Tactical" value={profile.style.tactical} />
-        <StyleBar label="Positional" value={profile.style.positional} />
-        <StyleBar label="Endgame" value={profile.style.endgame} />
+        <StyleBar label="Aggression" value={profile.style.aggression}
+          tooltip="Tendency to win games quickly and sacrifice material. Higher = more aggressive play." />
+        <StyleBar label="Tactical" value={profile.style.tactical}
+          tooltip="Frequency of decisive games under 40 moves. Higher = more tactical, sharp play." />
+        <StyleBar label="Positional" value={profile.style.positional}
+          tooltip="Ability to avoid early losses and play longer strategic games. Higher = more solid positional play." />
+        <StyleBar label="Endgame" value={profile.style.endgame}
+          tooltip="Win rate in games lasting 30+ moves. Higher = better at converting advantages in endgames." />
       </div>
     </div>
   );

@@ -17,15 +17,17 @@ interface ErrorProfileCardProps {
 }
 
 /**
- * Each bar is scaled independently against a fixed reference rate (20%).
+ * Each bar is scaled against an adaptive reference rate derived from the data.
  * Within the colored portion, blunders and mistakes are stacked.
  */
 function PhaseBar({
   label,
   phase,
+  referenceRate,
 }: {
   label: string;
   phase: PhaseErrors;
+  referenceRate: number;
 }) {
   const errorPct = (phase.errorRate * 100).toFixed(1);
 
@@ -41,9 +43,7 @@ function PhaseBar({
     );
   }
 
-  // Scale against a fixed reference rate: 20% error rate = full bar
-  const REFERENCE_RATE = 0.20;
-  const filledPct = Math.min((phase.errorRate / REFERENCE_RATE) * 100, 100);
+  const filledPct = Math.min((phase.errorRate / referenceRate) * 100, 100);
 
   const totalErrors = phase.mistakes + phase.blunders;
 
@@ -164,29 +164,43 @@ export default function ErrorProfileCard({
       </div>
 
       <div className="space-y-3">
-        <PhaseBar
-          label="Opening"
-          phase={errorProfile.opening}
-        />
-        <PhaseBar
-          label="Middlegame"
-          phase={errorProfile.middlegame}
-        />
-        <PhaseBar
-          label="Endgame"
-          phase={errorProfile.endgame}
-        />
+        {(() => {
+          const maxRate = Math.max(
+            errorProfile.opening.errorRate,
+            errorProfile.middlegame.errorRate,
+            errorProfile.endgame.errorRate,
+            0.03
+          );
+          const ref = maxRate * 1.2;
+          return (
+            <>
+              <PhaseBar label="Opening" phase={errorProfile.opening} referenceRate={ref} />
+              <PhaseBar label="Middlegame" phase={errorProfile.middlegame} referenceRate={ref} />
+              <PhaseBar label="Endgame" phase={errorProfile.endgame} referenceRate={ref} />
+            </>
+          );
+        })()}
       </div>
 
       {/* Legend */}
       <div className="flex gap-4 mt-3 text-[10px] text-zinc-500">
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1" title="Moves that lost 300 or more centipawns">
           <span className="inline-block w-2 h-2 rounded-sm bg-red-500/80" />{" "}
           Blunders
         </span>
-        <span className="flex items-center gap-1">
+        <span className="flex items-center gap-1" title="Moves that lost 100-300 centipawns">
           <span className="inline-block w-2 h-2 rounded-sm bg-yellow-500/80" />{" "}
           Mistakes
+        </span>
+        <span className="ml-auto">
+          <a
+            href="https://github.com/dscape/outprep"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
+          >
+            How is this calculated?
+          </a>
         </span>
       </div>
 
@@ -199,19 +213,19 @@ export default function ErrorProfileCard({
 
       {/* Overall stats */}
       <div className="mt-3 grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-lg bg-zinc-900/50 p-2">
+        <div className="rounded-lg bg-zinc-900/50 p-2" title="Average centipawn loss per move. Lower is better. Under 30 is strong play, over 80 suggests frequent errors.">
           <div className="text-lg font-bold font-mono text-white">
             {errorProfile.overall.avgCPL}
           </div>
           <div className="text-[10px] text-zinc-500">Avg CPL</div>
         </div>
-        <div className="rounded-lg bg-zinc-900/50 p-2">
+        <div className="rounded-lg bg-zinc-900/50 p-2" title="Percentage of moves classified as mistakes (100-300 cp loss) or blunders (300+ cp loss).">
           <div className="text-lg font-bold font-mono text-white">
             {(errorProfile.overall.errorRate * 100).toFixed(1)}%
           </div>
           <div className="text-[10px] text-zinc-500">Error Rate</div>
         </div>
-        <div className="rounded-lg bg-zinc-900/50 p-2">
+        <div className="rounded-lg bg-zinc-900/50 p-2" title="Percentage of moves that lost 300 or more centipawns. These are the most severe errors.">
           <div className="text-lg font-bold font-mono text-white">
             {(errorProfile.overall.blunderRate * 100).toFixed(1)}%
           </div>

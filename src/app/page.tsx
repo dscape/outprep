@@ -9,6 +9,10 @@ export default function Home() {
           <h1 className="text-3xl font-bold text-white tracking-tight">
             outprep
           </h1>
+          <p className="mt-3 text-sm text-zinc-400 leading-relaxed max-w-xs mx-auto">
+            Scout any chess player. Study their openings and weaknesses.
+            Practice against a bot that plays like them.
+          </p>
         </div>
 
         <SearchInput />
