@@ -6,6 +6,7 @@ import {
   formatPlayerName,
 } from "@/lib/fide-blob";
 import { TitleBadge } from "@/components/title-badge";
+import GameReplay from "@/components/GameReplay";
 
 export const revalidate = 604800; // 7 days
 export const dynamicParams = true;
@@ -241,6 +242,17 @@ export default async function GamePage({
               </div>
             )}
           </div>
+
+          {/* Game Replay + Analysis */}
+          {game.pgn && (
+            <div className="mt-8">
+              <GameReplay
+                pgn={game.pgn}
+                whiteName={white}
+                blackName={black}
+              />
+            </div>
+          )}
 
           {/* Practice CTAs */}
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">

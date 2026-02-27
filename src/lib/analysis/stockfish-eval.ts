@@ -105,7 +105,7 @@ export async function evaluateGame(
  * Compute summary stats for the PLAYER only (not both sides).
  * Odd plies (1, 3, 5...) are white's moves; even plies (2, 4, 6...) are black's.
  */
-function computeSummary(moves: MoveEval[], playerColor?: "white" | "black"): AnalysisSummary {
+export function computeSummary(moves: MoveEval[], playerColor?: "white" | "black"): AnalysisSummary {
   let totalCPL = 0;
   let blunders = 0;
   let mistakes = 0;

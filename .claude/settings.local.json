@@ -46,7 +46,8 @@
       "WebFetch(domain:www.saremba.de)",
       "Bash(test:*)",
       "WebFetch(domain:ratings.fide.com)",
-      "Bash(unzip:*)"
+      "Bash(unzip:*)",
+      "Bash(du:*)"
     ]
   }
 }

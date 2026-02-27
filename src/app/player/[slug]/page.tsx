@@ -124,46 +124,22 @@ function OpeningTable({
   );
 }
 
-async function NotableGames({
-  playerSlug,
-  playerName,
-  recentGameSlugs,
+function RecentGames({
+  recentGames,
 }: {
-  playerSlug: string;
-  playerName: string;
-  recentGameSlugs?: string[];
+  recentGames?: FIDEPlayer["recentGames"];
 }) {
-  if (!recentGameSlugs || recentGameSlugs.length === 0) return null;
-
-  // Look up game details from the game index
-  const gameIndex = await getGameIndex();
-  if (!gameIndex) return null;
-
-  const gameMap = new Map(gameIndex.games.map((g) => [g.slug, g]));
-  const games = recentGameSlugs
-    .map((slug) => gameMap.get(slug))
-    .filter((g): g is GameIndexEntry => !!g);
-
-  if (games.length === 0) return null;
+  if (!recentGames || recentGames.length === 0) return null;
 
   return (
     <div className="mt-8">
-      <h2 className="text-lg font-semibold text-white mb-4">Notable Games</h2>
+      <h2 className="text-lg font-semibold text-white mb-4">Recent Games</h2>
       <div className="space-y-2">
-        {games.map((g) => {
-          const isWhite = g.whiteSlug === playerSlug;
-          const opponentName = formatPlayerName(isWhite ? g.blackName : g.whiteName);
-          const opponentElo = isWhite ? g.blackElo : g.whiteElo;
-          const resultText =
-            g.result === "1/2-1/2"
-              ? "Draw"
-              : (g.result === "1-0" && isWhite) || (g.result === "0-1" && !isWhite)
-                ? "Won"
-                : "Lost";
+        {recentGames.map((g) => {
           const resultColor =
-            resultText === "Won"
+            g.result === "Won"
               ? "text-green-400"
-              : resultText === "Lost"
+              : g.result === "Lost"
                 ? "text-red-400"
                 : "text-zinc-400";
 
@@ -182,9 +158,9 @@ async function NotableGames({
               href={`/game/${g.slug}`}
               className="flex items-center gap-3 rounded-lg border border-zinc-800/50 bg-zinc-900/30 px-4 py-3 hover:bg-zinc-800/50 hover:border-zinc-700/50 transition-all text-sm group"
             >
-              <span className={`font-medium ${resultColor} w-10`}>{resultText}</span>
+              <span className={`font-medium ${resultColor} w-10`}>{g.result}</span>
               <span className="text-zinc-300 group-hover:text-white transition-colors flex-1 truncate">
-                vs {opponentName} ({opponentElo})
+                vs {formatPlayerName(g.opponentName)} ({g.opponentElo})
               </span>
               {g.opening && (
                 <span className="text-zinc-500 hidden sm:inline truncate max-w-[140px]">
@@ -431,11 +407,7 @@ export default async function PlayerPage({
           </div>
 
           {/* Notable Games */}
-          <NotableGames
-            playerSlug={slug}
-            playerName={name}
-            recentGameSlugs={player.recentGameSlugs}
-          />
+          <RecentGames recentGames={player.recentGames} />
 
           {/* Practice CTA */}
           <div className="mt-10 flex flex-col items-center gap-3 pb-8">

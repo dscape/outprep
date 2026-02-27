@@ -173,7 +173,7 @@ type RecentGame = NonNullable<FIDEPlayer["recentGames"]>[number];
  */
 export function buildPlayerRecentGames(
   games: GameDetail[],
-  maxPerPlayer: number = 5
+  maxPerPlayer: number = 10
 ): Map<string, RecentGame[]> {
   const map = new Map<string, { game: RecentGame; date: string }[]>();
 

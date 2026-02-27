@@ -197,7 +197,7 @@ export async function uploadAllFromDisk(
   // +1 for game-index.json if present
   const gameIndexCount = opts?.gameIndex ? 1 : 0;
   const total = 2 + players.length + gameFiles.length + gameIndexCount + gameDetailFiles.length;
-  let uploaded = skipped; // Start counter from where we left off
+  let uploaded = 0;
 
   // 1. Upload index
   const indexPath = `${prefix}/index.json`;
