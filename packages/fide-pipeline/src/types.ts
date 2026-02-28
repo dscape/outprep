@@ -13,6 +13,7 @@ export interface TWICGameHeader {
   whiteFideId: string | null; // FIDE ID for reliable player dedup
   blackFideId: string | null;
   eco: string | null;
+  opening: string | null; // From PGN [Opening] header (e.g. "Sicilian")
   event: string | null;
   site: string | null;
   date: string | null;
@@ -64,7 +65,17 @@ export interface FIDEPlayer {
     date: string;
     opening: string | null;
     isWhite: boolean;
-  }>; // Inline display data for Notable Games on player page (avoids extra fetch)
+  }>;
+  notableGames?: Array<{
+    slug: string;
+    opponentName: string;
+    opponentElo: number;
+    result: "Won" | "Lost" | "Draw";
+    event: string;
+    date: string;
+    opening: string | null;
+    isWhite: boolean;
+  }>;
 }
 
 /** Compact player entry for the master index (sitemap + listing). */
@@ -103,10 +114,10 @@ export interface PlayerAccumulator {
   draws: number;
   losses: number;
   events: Map<string, string>; // event name → latest date
-  /** ECO counts as white: eco → { games, wins, draws, losses } */
-  whiteEcos: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>;
-  /** ECO counts as black */
-  blackEcos: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>;
+  /** Opening family counts as white: familyName → { ecoMap, games, wins, draws, losses } */
+  whiteOpenings: Map<string, { ecoMap: Map<string, number>; name: string; games: number; wins: number; draws: number; losses: number }>;
+  /** Opening family counts as black */
+  blackOpenings: Map<string, { ecoMap: Map<string, number>; name: string; games: number; wins: number; draws: number; losses: number }>;
 }
 
 // ─── Game types ──────────────────────────────────────────────────────────────
@@ -142,6 +153,8 @@ export interface GameIndexEntry {
   blackName: string;
   whiteSlug: string;
   blackSlug: string;
+  whiteFideId: string;
+  blackFideId: string;
   whiteElo: number;
   blackElo: number;
   event: string;

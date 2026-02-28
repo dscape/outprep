@@ -17,7 +17,9 @@ import { loadFideData, enrichPlayers } from "./fide-enrichment";
 import {
   buildGameDetails,
   buildGameIndex,
+  buildGameAliasMap,
   buildPlayerRecentGames,
+  buildPlayerNotableGames,
   writeGameFiles,
   createGameProcessingState,
   processGameDetailsChunk,
@@ -253,17 +255,20 @@ async function processTwoPass(
   }
   console.log(`  ${gameFilesWritten} game files written`);
 
-  // Finalize game index + recent games
-  const { gameIndex, playerRecentGames } = finalizeGameProcessing(gameState);
+  // Finalize game index + recent games + notable games + game aliases
+  const { gameIndex, playerRecentGames, playerNotableGames, gameAliases } = finalizeGameProcessing(gameState);
   for (const p of players) {
     p.recentGames = playerRecentGames.get(p.slug) ?? [];
+    const notable = playerNotableGames.get(p.slug);
+    if (notable && notable.length > 0) p.notableGames = notable;
   }
 
-  // Save index, players, aliases, game index
+  // Save index, players, aliases, game index, game aliases
   writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
   writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
   writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
   writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
+  writeFileSync(join(PROCESSED_DIR, "game-aliases.json"), JSON.stringify(gameAliases));
 
   console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
   console.log(`  index.json:      ${index.totalPlayers} players`);
@@ -271,9 +276,10 @@ async function processTwoPass(
   console.log(`  games/:          ${gameFilesWritten} game files`);
   console.log(`  game-details/:   ${gameState.filesWritten} game pages`);
   console.log(`  game-index.json: ${gameIndex.totalGames} games indexed`);
-  console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases\n`);
+  console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases`);
+  console.log(`  game-aliases:    ${Object.keys(gameAliases).length} game aliases\n`);
 
-  return { players, index, aliasMap, gameIndex, gameFilesWritten, gameDetailFilesWritten: gameState.filesWritten };
+  return { players, index, aliasMap, gameAliases, gameIndex, gameFilesWritten, gameDetailFilesWritten: gameState.filesWritten };
 }
 
 // ─── smoke ────────────────────────────────────────────────────────────────────
@@ -342,13 +348,19 @@ program
     const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
     console.log(`  ${gameDetailFilesWritten} game pages generated`);
 
-    // 5c. Cross-link players with their recent games (inline display data)
+    // 5c. Build game alias map (legacy slugs → new slugs for 301 redirects)
+    const gameAliasMap = buildGameAliasMap(games, players, { minElo: 0 });
+
+    // 5d. Cross-link players with their recent games + notable games
     const playerRecentGames = buildPlayerRecentGames(gameDetails);
+    const playerNotableGames = buildPlayerNotableGames(gameDetails, playerRecentGames);
     for (const p of players) {
       p.recentGames = playerRecentGames.get(p.slug) ?? [];
+      const notable = playerNotableGames.get(p.slug);
+      if (notable && notable.length > 0) p.notableGames = notable;
     }
 
-    // Save index + players + aliases + game index
+    // Save index + players + aliases + game index + game aliases
     writeFileSync(
       join(PROCESSED_DIR, "smoke-index.json"),
       JSON.stringify(index, null, 2)
@@ -373,8 +385,12 @@ program
       join(PROCESSED_DIR, "game-index.json"),
       JSON.stringify(gameIndex)
     );
+    writeFileSync(
+      join(PROCESSED_DIR, "game-aliases.json"),
+      JSON.stringify(gameAliasMap, null, 2)
+    );
 
-    console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${gameFilesWritten} game files, ${gameDetailFilesWritten} game pages, ${Object.keys(aliasMap).length} aliases)`);
+    console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${gameFilesWritten} game files, ${gameDetailFilesWritten} game pages, ${Object.keys(aliasMap).length} aliases, ${Object.keys(gameAliasMap).length} game aliases)`);
 
     // 6. Upload (optional)
     if (!opts.skipUpload) {
@@ -529,6 +545,12 @@ program
       ? readdirSync(GAME_DETAILS_DIR).filter(f => f.endsWith(".json")).length
       : 0;
 
+    // Load game aliases if available
+    const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
+    const gameAliases: Record<string, string> | undefined = existsSync(gameAliasesPath)
+      ? JSON.parse(readFileSync(gameAliasesPath, "utf-8"))
+      : undefined;
+
     console.log(`\nUploading to Vercel Blob (prefix: ${opts.prefix}/)`);
     console.log(`  ${index.totalPlayers} players, ${gameFileCount} game files, ${gameDetailCount} game pages, ${Object.keys(aliases).length} aliases\n`);
 
@@ -537,6 +559,7 @@ program
       prefix: opts.prefix,
       gameDetailsDir: existsSync(GAME_DETAILS_DIR) ? GAME_DETAILS_DIR : undefined,
       gameIndex,
+      gameAliases,
       onProgress: (uploaded, total) => {
         if (uploaded % 200 === 0 || uploaded === total) {
           const pct = Math.round((uploaded / total) * 100);
@@ -586,7 +609,7 @@ program
       .sort();
 
     const pgnFiles = pgnFileNames.map((f) => ({ name: f, path: join(DATA_DIR, f) }));
-    const { players, index, aliasMap, gameIndex, gameDetailFilesWritten } =
+    const { players, index, aliasMap, gameAliases, gameIndex, gameDetailFilesWritten } =
       await processTwoPass(pgnFiles, { minGames, minElo });
 
     // Step 3: Upload
@@ -602,6 +625,7 @@ program
       prefix: opts.prefix,
       gameDetailsDir: GAME_DETAILS_DIR,
       gameIndex,
+      gameAliases,
       onProgress: (uploaded, total) => {
         if (uploaded % 500 === 0 || uploaded === total) {
           const pct = Math.round((uploaded / total) * 100);

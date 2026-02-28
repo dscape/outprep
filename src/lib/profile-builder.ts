@@ -215,7 +215,7 @@ interface OpeningAccumulator {
 export function analyzeOpenings(
   games: LichessGame[],
   username: string,
-  minGames: number = 2,
+  minGames: number = 1,
 ): { white: OpeningStats[]; black: OpeningStats[] } {
   const whiteMap = new Map<string, OpeningAccumulator>();
   const blackMap = new Map<string, OpeningAccumulator>();

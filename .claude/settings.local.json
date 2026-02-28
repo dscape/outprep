@@ -47,7 +47,9 @@
       "Bash(test:*)",
       "WebFetch(domain:ratings.fide.com)",
       "Bash(unzip:*)",
-      "Bash(du:*)"
+      "Bash(du:*)",
+      "Bash(head -5 /Users/dscape/Desktop/dev/outprep/packages/fide-pipeline/data/processed/game-details/*.json)",
+      "Bash(head -60 /Users/dscape/Desktop/dev/outprep/src/app/api/profile/[username]/route.ts)"
     ]
   }
 }

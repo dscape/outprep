@@ -1,8 +1,9 @@
 import { Metadata } from "next";
-import { notFound } from "next/navigation";
+import { notFound, permanentRedirect } from "next/navigation";
 import {
   getGame,
   getGameIndex,
+  getGameAliasTarget,
   formatPlayerName,
 } from "@/lib/fide-blob";
 import { TitleBadge } from "@/components/title-badge";
@@ -11,15 +12,12 @@ import GameReplay from "@/components/GameReplay";
 export const revalidate = 604800; // 7 days
 export const dynamicParams = true;
 
-// Pre-render top 1000 games by combined Elo at build time
+// Pre-render all game pages at build time
 export async function generateStaticParams() {
   const index = await getGameIndex();
   if (!index) return [];
 
-  return index.games
-    .sort((a, b) => b.whiteElo + b.blackElo - (a.whiteElo + a.blackElo))
-    .slice(0, 1000)
-    .map((g) => ({ slug: g.slug }));
+  return index.games.map((g) => ({ slug: g.slug.split("/") }));
 }
 
 function formatDate(date: string): string {
@@ -50,9 +48,10 @@ function resultLabel(result: string): { text: string; color: string } {
 export async function generateMetadata({
   params,
 }: {
-  params: Promise<{ slug: string }>;
+  params: Promise<{ slug: string[] }>;
 }): Promise<Metadata> {
-  const { slug } = await params;
+  const { slug: slugParts } = await params;
+  const slug = slugParts.join("/");
   const game = await getGame(slug);
   if (!game) {
     return { title: "Game Not Found" };
@@ -96,12 +95,18 @@ export async function generateMetadata({
 export default async function GamePage({
   params,
 }: {
-  params: Promise<{ slug: string }>;
+  params: Promise<{ slug: string[] }>;
 }) {
-  const { slug } = await params;
-  const game = await getGame(slug);
+  const { slug: slugParts } = await params;
+  const slug = slugParts.join("/");
+  let game = await getGame(slug);
 
   if (!game) {
+    // Check if this is a legacy slug that should redirect to the new URL
+    const canonicalSlug = await getGameAliasTarget(slug);
+    if (canonicalSlug) {
+      permanentRedirect(`/game/${canonicalSlug}`);
+    }
     notFound();
   }
 

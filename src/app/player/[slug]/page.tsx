@@ -3,25 +3,23 @@ import { notFound, permanentRedirect } from "next/navigation";
 import {
   getPlayer,
   getPlayerIndex,
-  getPlayerGames,
   getAliasTarget,
   formatPlayerName,
 } from "@/lib/fide-blob";
-import type { FIDEPlayer, OpeningStats } from "@/lib/fide-blob";
+import type { FIDEPlayer } from "@/lib/fide-blob";
 import { TitleBadge } from "@/components/title-badge";
 import PracticeLoader from "./practice-loader";
+import FideOpenings from "./fide-openings";
 
 export const revalidate = 604800; // 7 days
 export const dynamicParams = true;
 
-// Pre-render top 500 players at build time
+// Pre-render all player pages at build time
 export async function generateStaticParams() {
   const index = await getPlayerIndex();
   if (!index) return [];
 
-  return index.players
-    .slice(0, 500)
-    .map((p) => ({ slug: p.slug }));
+  return index.players.map((p) => ({ slug: p.slug }));
 }
 
 export async function generateMetadata({
@@ -67,75 +65,20 @@ export async function generateMetadata({
   };
 }
 
-function OpeningTable({
+function GameList({
+  games,
   title,
-  openings,
 }: {
+  games?: FIDEPlayer["recentGames"];
   title: string;
-  openings: OpeningStats[];
 }) {
-  if (openings.length === 0) return null;
-
-  return (
-    <div>
-      <h3 className="text-sm font-medium text-zinc-400 uppercase tracking-wide mb-3">
-        {title}
-      </h3>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-zinc-800 text-zinc-500">
-              <th className="text-left py-2 pr-4 font-medium">ECO</th>
-              <th className="text-left py-2 pr-4 font-medium">Opening</th>
-              <th className="text-right py-2 pr-4 font-medium">Games</th>
-              <th className="text-right py-2 pr-4 font-medium">Win</th>
-              <th className="text-right py-2 pr-4 font-medium">Draw</th>
-              <th className="text-right py-2 font-medium">Loss</th>
-            </tr>
-          </thead>
-          <tbody>
-            {openings.map((op) => (
-              <tr
-                key={op.eco}
-                className="border-b border-zinc-800/50 hover:bg-zinc-800/30"
-              >
-                <td className="py-2 pr-4 font-mono text-zinc-400">
-                  {op.eco}
-                </td>
-                <td className="py-2 pr-4 text-zinc-300">{op.name}</td>
-                <td className="py-2 pr-4 text-right text-zinc-400">
-                  {op.games}
-                </td>
-                <td className="py-2 pr-4 text-right text-green-400">
-                  {op.winRate}%
-                </td>
-                <td className="py-2 pr-4 text-right text-zinc-400">
-                  {op.drawRate}%
-                </td>
-                <td className="py-2 text-right text-red-400">
-                  {op.lossRate}%
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function RecentGames({
-  recentGames,
-}: {
-  recentGames?: FIDEPlayer["recentGames"];
-}) {
-  if (!recentGames || recentGames.length === 0) return null;
+  if (!games || games.length === 0) return null;
 
   return (
     <div className="mt-8">
-      <h2 className="text-lg font-semibold text-white mb-4">Recent Games</h2>
+      <h2 className="text-lg font-semibold text-white mb-4">{title}</h2>
       <div className="space-y-2">
-        {recentGames.map((g) => {
+        {games.map((g) => {
           const resultColor =
             g.result === "Won"
               ? "text-green-400"
@@ -386,28 +329,23 @@ export default async function PlayerPage({
           </div>
 
           {/* Opening Repertoire */}
-          <div className="mt-8 space-y-8">
-            <h2 className="text-lg font-semibold text-white">
+          <div className="mt-8">
+            <h2 className="text-lg font-semibold text-white mb-4">
               Opening Repertoire
             </h2>
-            <OpeningTable
-              title="As White"
-              openings={player.openings.white}
+            <FideOpenings
+              white={player.openings.white}
+              black={player.openings.black}
+              playerSlug={slug}
+              playerName={name}
             />
-            <OpeningTable
-              title="As Black"
-              openings={player.openings.black}
-            />
-            {player.openings.white.length === 0 &&
-              player.openings.black.length === 0 && (
-                <p className="text-sm text-zinc-500">
-                  Not enough games to build an opening repertoire yet.
-                </p>
-              )}
           </div>
 
           {/* Notable Games */}
-          <RecentGames recentGames={player.recentGames} />
+          <GameList games={player.notableGames} title="Notable Games" />
+
+          {/* Recent Games */}
+          <GameList games={player.recentGames} title="Recent Games" />
 
           {/* Practice CTA */}
           <div className="mt-10 flex flex-col items-center gap-3 pb-8">

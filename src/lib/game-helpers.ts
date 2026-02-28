@@ -1,6 +1,7 @@
 import { OTBGame, LichessGame } from "./types";
 import { openingFamily } from "./profile-builder";
 import { classifyOpening } from "./analysis/eco-classifier";
+import { generateGameSlug } from "./game-slug";
 
 export interface GameForDrilldown {
   id: string;
@@ -89,6 +90,73 @@ export function lichessGamesToDrilldown(
       openingFamily: openingFamily(rawOpening),
       playerColor,
       opponent,
+    };
+  });
+}
+
+// ─── PGN header extraction (simple regex, no chess.js) ───────────────────────
+
+function extractPgnHeader(pgn: string, key: string): string | null {
+  const match = pgn.match(new RegExp(`\\[${key}\\s+"([^"]*)"\\]`));
+  return match?.[1] && match[1] !== "?" ? match[1] : null;
+}
+
+/**
+ * Normalize a FIDE name for case-insensitive matching.
+ * Strips accents and lowercases.
+ */
+function normalizeName(name: string): string {
+  return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Convert raw FIDE PGN strings into GameForDrilldown[] for the OpeningsTab.
+ * Uses simple regex header extraction — no chess.js parsing needed.
+ */
+export function fideGamesToDrilldown(
+  rawPgns: string[],
+  playerName: string
+): GameForDrilldown[] {
+  const normalizedPlayer = normalizeName(playerName);
+
+  return rawPgns.map((pgn, i) => {
+    const white = extractPgnHeader(pgn, "White") || "White";
+    const black = extractPgnHeader(pgn, "Black") || "Black";
+    const result = extractPgnHeader(pgn, "Result") || "*";
+    const event = extractPgnHeader(pgn, "Event");
+    const date = extractPgnHeader(pgn, "Date");
+    const round = extractPgnHeader(pgn, "Round");
+    const rawOpening = extractPgnHeader(pgn, "Opening") || extractPgnHeader(pgn, "ECO") || "Unknown";
+    const whiteFideId = extractPgnHeader(pgn, "WhiteFideId") || "";
+    const blackFideId = extractPgnHeader(pgn, "BlackFideId") || "";
+
+    // Determine player color by matching normalized names
+    const isWhite = normalizeName(white).includes(normalizedPlayer) ||
+      normalizedPlayer.includes(normalizeName(white));
+    const playerColor: "white" | "black" = isWhite ? "white" : "black";
+    const opponent = isWhite ? black : white;
+
+    // Generate game page slug for linking to /game/...
+    const slug = whiteFideId && blackFideId
+      ? generateGameSlug(white, black, event, date, round, whiteFideId, blackFideId)
+      : `fide-game-${i}`;
+
+    return {
+      id: slug,
+      pgn,
+      white,
+      black,
+      result,
+      openingFamily: openingFamily(rawOpening),
+      playerColor,
+      opponent,
+      date: date || undefined,
+      event: event || undefined,
     };
   });
 }

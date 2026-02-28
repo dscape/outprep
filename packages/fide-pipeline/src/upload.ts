@@ -27,6 +27,7 @@ interface UploadOptions {
   fresh?: boolean; // Ignore resume state
   gameDetailsDir?: string; // Directory with individual game detail JSON files
   gameIndex?: GameIndex; // Game index to upload
+  gameAliases?: Record<string, string>; // Legacy game slug → new slug map
 }
 
 // ─── Retry helper ────────────────────────────────────────────────────────────
@@ -194,9 +195,10 @@ export async function uploadAllFromDisk(
     ? readdirSync(opts.gameDetailsDir).filter(f => f.endsWith(".json"))
     : [];
 
-  // +1 for game-index.json if present
+  // +1 for game-index.json if present, +1 for game-aliases.json if present
   const gameIndexCount = opts?.gameIndex ? 1 : 0;
-  const total = 2 + players.length + gameFiles.length + gameIndexCount + gameDetailFiles.length;
+  const gameAliasCount = opts?.gameAliases ? 1 : 0;
+  const total = 2 + gameAliasCount + players.length + gameFiles.length + gameIndexCount + gameDetailFiles.length;
   let uploaded = 0;
 
   // 1. Upload index
@@ -219,6 +221,24 @@ export async function uploadAllFromDisk(
   }
   uploaded++;
   onProgress?.(uploaded, total);
+
+  // 2b. Upload game aliases (legacy slug → new slug for 301 redirects)
+  if (opts?.gameAliases) {
+    const gameAliasesPath = `${prefix}/game-aliases.json`;
+    if (!state.uploaded.has(gameAliasesPath)) {
+      await retryWithBackoff(() =>
+        put(gameAliasesPath, JSON.stringify(opts.gameAliases), {
+          access: "public",
+          contentType: "application/json",
+          addRandomSuffix: false,
+        })
+      );
+      state.uploaded.add(gameAliasesPath);
+      saveState(stateFile, state);
+    }
+    uploaded++;
+    onProgress?.(uploaded, total);
+  }
 
   // 3. Upload player profiles in batches of 10
   let playersUploaded = 0;
@@ -289,8 +309,10 @@ export async function uploadAllFromDisk(
       const batch = gameDetailFiles.slice(i, i + GAME_BATCH_SIZE);
       await Promise.all(
         batch.map(async (fileName) => {
-          const slug = fileName.replace(/\.json$/, "");
-          const path = `${prefix}/game-details/${slug}.json`;
+          const diskSlug = fileName.replace(/\.json$/, "");
+          // Disk filenames use __ separator, blob paths use /
+          const blobSlug = diskSlug.replace(/__/g, "/");
+          const path = `${prefix}/game-details/${blobSlug}.json`;
           if (!state.uploaded.has(path)) {
             const detailPath = join(opts.gameDetailsDir!, fileName);
             if (existsSync(detailPath)) {

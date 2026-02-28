@@ -18,9 +18,56 @@ import type {
 } from "./types";
 
 /**
- * Generate a game slug: {white-lastname}-vs-{black-lastname}-{event}-{date}[-r{round}]
+ * Generate a game slug in nested format:
+ *   {event-slug}[-r{round}]-{year}/{white-lastname}-{whiteFideId}-vs-{black-lastname}-{blackFideId}
+ *
+ * Fallback (no event/date):
+ *   {white-lastname}-{whiteFideId}-vs-{black-lastname}-{blackFideId}
  */
 export function generateGameSlug(
+  whiteName: string,
+  blackName: string,
+  event: string,
+  date: string,
+  round: string | null,
+  whiteFideId: string,
+  blackFideId: string
+): string {
+  const { lastName: wLast } = parseNameParts(whiteName);
+  const { lastName: bLast } = parseNameParts(blackName);
+
+  // Build matchup segment: {white-lastname}-{whiteFideId}-vs-{black-lastname}-{blackFideId}
+  const matchup = slugify(`${wLast} ${whiteFideId} vs ${bLast} ${blackFideId}`);
+
+  // Build event segment if event and date are available
+  if (event && date) {
+    const year = date.split(".")[0] || "";
+
+    // Truncate event to first 6 words to keep URLs reasonable
+    const eventWords = event.split(/\s+/).slice(0, 6).join(" ");
+
+    const eventParts = [eventWords];
+
+    // Append round if present and meaningful
+    if (round && round !== "?" && round !== "-") {
+      const roundSlug = "r" + round.replace(/\./g, "-");
+      eventParts.push(roundSlug);
+    }
+
+    // Append year
+    if (year) eventParts.push(year);
+
+    return `${slugify(eventParts.join(" "))}/${matchup}`;
+  }
+
+  return matchup;
+}
+
+/**
+ * Generate a legacy game slug (pre-URL-restructuring format) for alias mapping.
+ * Format: {white-lastname}-vs-{black-lastname}-{event}-{date}[-r{round}]
+ */
+export function generateLegacyGameSlug(
   whiteName: string,
   blackName: string,
   event: string,
@@ -104,7 +151,7 @@ export function buildGameDetails(
     const blackSlug = blackPlayer?.slug ?? "";
 
     // Generate slug with collision handling
-    let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round);
+    let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round, game.whiteFideId, game.blackFideId);
     const count = (slugCounts.get(slug) ?? 0) + 1;
     slugCounts.set(slug, count);
     if (count > 1) {
@@ -148,6 +195,8 @@ export function buildGameIndex(games: GameDetail[]): GameIndex {
     blackName: g.blackName,
     whiteSlug: g.whiteSlug,
     blackSlug: g.blackSlug,
+    whiteFideId: g.whiteFideId,
+    blackFideId: g.blackFideId,
     whiteElo: g.whiteElo,
     blackElo: g.blackElo,
     event: g.event,
@@ -162,6 +211,58 @@ export function buildGameIndex(games: GameDetail[]): GameIndex {
     totalGames: entries.length,
     games: entries,
   };
+}
+
+/**
+ * Build a game alias map from legacy slugs → new slugs.
+ * Used by the non-incremental smoke test path.
+ */
+export function buildGameAliasMap(
+  allGames: TWICGameHeader[],
+  players: FIDEPlayer[],
+  options: { minElo?: number } = {}
+): Record<string, string> {
+  const minElo = options.minElo ?? 2000;
+  const playerByFideId = new Map<string, FIDEPlayer>();
+  for (const p of players) playerByFideId.set(p.fideId, p);
+
+  const seenKeys = new Set<string>();
+  const newSlugCounts = new Map<string, number>();
+  const legacySlugCounts = new Map<string, number>();
+  const aliases: Record<string, string> = {};
+
+  for (const game of allGames) {
+    if (!game.whiteFideId || !game.blackFideId) continue;
+    const wElo = game.whiteElo ?? 0;
+    const bElo = game.blackElo ?? 0;
+    if (wElo < minElo && bElo < minElo) continue;
+    if (!game.event || !game.date) continue;
+
+    const headers = extractHeaders(game.rawPgn);
+    const round = headers["Round"] && headers["Round"] !== "?" ? headers["Round"] : null;
+    const dedupKey = `${game.whiteFideId}:${game.blackFideId}:${game.event}:${game.date}:${round ?? ""}`;
+    if (seenKeys.has(dedupKey)) continue;
+    seenKeys.add(dedupKey);
+
+    const whitePlayer = playerByFideId.get(game.whiteFideId);
+    const blackPlayer = playerByFideId.get(game.blackFideId);
+    const whiteName = whitePlayer?.name ?? game.white;
+    const blackName = blackPlayer?.name ?? game.black;
+
+    let newSlug = generateGameSlug(whiteName, blackName, game.event, game.date, round, game.whiteFideId, game.blackFideId);
+    const newCount = (newSlugCounts.get(newSlug) ?? 0) + 1;
+    newSlugCounts.set(newSlug, newCount);
+    if (newCount > 1) newSlug = `${newSlug}-${newCount}`;
+
+    let legacySlug = generateLegacyGameSlug(whiteName, blackName, game.event, game.date, round);
+    const legacyCount = (legacySlugCounts.get(legacySlug) ?? 0) + 1;
+    legacySlugCounts.set(legacySlug, legacyCount);
+    if (legacyCount > 1) legacySlug = `${legacySlug}-${legacyCount}`;
+
+    aliases[legacySlug] = newSlug;
+  }
+
+  return aliases;
 }
 
 /** Inline display data for a recent game on a player page. */
@@ -225,8 +326,58 @@ export function buildPlayerRecentGames(
 }
 
 /**
+ * Build notable games per player: highest-rated opponents, deduplicated against recent.
+ * Score: opponentElo + (win ? 100 : loss ? 50 : 0) + (opponentHasPage ? 50 : 0)
+ */
+export function buildPlayerNotableGames(
+  games: GameDetail[],
+  recentGames: Map<string, RecentGame[]>,
+  maxPerPlayer: number = 10
+): Map<string, RecentGame[]> {
+  const candidates = new Map<string, NotableGameCandidate[]>();
+
+  for (const g of games) {
+    if (g.whiteSlug) {
+      const result: "Won" | "Lost" | "Draw" =
+        g.result === "1-0" ? "Won" : g.result === "0-1" ? "Lost" : "Draw";
+      const score = g.blackElo + (result === "Won" ? 100 : result === "Lost" ? 50 : 0) + (g.blackSlug ? 50 : 0);
+      if (!candidates.has(g.whiteSlug)) candidates.set(g.whiteSlug, []);
+      candidates.get(g.whiteSlug)!.push({
+        game: { slug: g.slug, opponentName: g.blackName, opponentElo: g.blackElo, result, event: g.event, date: g.date, opening: g.opening, isWhite: true },
+        score,
+      });
+    }
+    if (g.blackSlug) {
+      const result: "Won" | "Lost" | "Draw" =
+        g.result === "0-1" ? "Won" : g.result === "1-0" ? "Lost" : "Draw";
+      const score = g.whiteElo + (result === "Won" ? 100 : result === "Lost" ? 50 : 0) + (g.whiteSlug ? 50 : 0);
+      if (!candidates.has(g.blackSlug)) candidates.set(g.blackSlug, []);
+      candidates.get(g.blackSlug)!.push({
+        game: { slug: g.slug, opponentName: g.whiteName, opponentElo: g.whiteElo, result, event: g.event, date: g.date, opening: g.opening, isWhite: false },
+        score,
+      });
+    }
+  }
+
+  const result = new Map<string, RecentGame[]>();
+  for (const [playerSlug, cands] of candidates) {
+    cands.sort((a, b) => b.score - a.score);
+    const recentSlugs = new Set((recentGames.get(playerSlug) ?? []).map((g) => g.slug));
+    const notable: RecentGame[] = [];
+    for (const c of cands) {
+      if (notable.length >= maxPerPlayer) break;
+      if (!recentSlugs.has(c.game.slug)) notable.push(c.game);
+    }
+    if (notable.length > 0) result.set(playerSlug, notable);
+  }
+
+  return result;
+}
+
+/**
  * Write individual game detail JSON files to disk.
  * Cleans the directory first to avoid stale files.
+ * Uses __ separator in filenames since slugs now contain /.
  */
 export function writeGameFiles(games: GameDetail[], dir: string): number {
   // Clean old files
@@ -236,7 +387,8 @@ export function writeGameFiles(games: GameDetail[], dir: string): number {
   mkdirSync(dir, { recursive: true });
 
   for (const game of games) {
-    writeFileSync(join(dir, `${game.slug}.json`), JSON.stringify(game));
+    const diskFilename = game.slug.replace(/\//g, "__");
+    writeFileSync(join(dir, `${diskFilename}.json`), JSON.stringify(game));
   }
 
   return games.length;
@@ -244,12 +396,21 @@ export function writeGameFiles(games: GameDetail[], dir: string): number {
 
 // ─── Incremental processing (for memory-efficient two-pass pipeline) ─────────
 
+/** Notable game candidate with score for ranking. */
+interface NotableGameCandidate {
+  game: RecentGame;
+  score: number;
+}
+
 /** Mutable state carried across PGN file chunks during incremental game processing. */
 export interface GameProcessingState {
   seenKeys: Set<string>;
   slugCounts: Map<string, number>;
+  legacySlugCounts: Map<string, number>;
   indexEntries: GameIndexEntry[];
   recentGamesMap: Map<string, { date: string; game: RecentGame }[]>;
+  notableGamesMap: Map<string, NotableGameCandidate[]>;
+  gameAliases: Map<string, string>; // legacy slug → new slug (for 301 redirects)
   playerByFideId: Map<string, FIDEPlayer>;
   minElo: number;
   filesWritten: number;
@@ -267,8 +428,11 @@ export function createGameProcessingState(
   return {
     seenKeys: new Set(),
     slugCounts: new Map(),
+    legacySlugCounts: new Map(),
     indexEntries: [],
     recentGamesMap: new Map(),
+    notableGamesMap: new Map(),
+    gameAliases: new Map(),
     playerByFideId,
     minElo: options.minElo ?? 2000,
     filesWritten: 0,
@@ -310,14 +474,22 @@ export function processGameDetailsChunk(
     const whiteSlug = whitePlayer?.slug ?? "";
     const blackSlug = blackPlayer?.slug ?? "";
 
-    let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round);
+    let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round, game.whiteFideId, game.blackFideId);
     const count = (state.slugCounts.get(slug) ?? 0) + 1;
     state.slugCounts.set(slug, count);
     if (count > 1) slug = `${slug}-${count}`;
 
+    // Compute legacy slug for alias mapping (old URL → new URL redirect)
+    let legacySlug = generateLegacyGameSlug(whiteName, blackName, game.event, game.date, round);
+    const legacyCount = (state.legacySlugCounts.get(legacySlug) ?? 0) + 1;
+    state.legacySlugCounts.set(legacySlug, legacyCount);
+    if (legacyCount > 1) legacySlug = `${legacySlug}-${legacyCount}`;
+    state.gameAliases.set(legacySlug, slug);
+
     const opening = headers["Opening"] ?? null;
 
     // Write game detail file to disk immediately — no accumulation of PGN strings
+    // Use __ separator in filenames since slugs now contain /
     const detail: GameDetail = {
       slug,
       whiteName,
@@ -340,7 +512,8 @@ export function processGameDetailsChunk(
       result: game.result,
       pgn: game.rawPgn,
     };
-    writeFileSync(join(gameDetailsDir, `${slug}.json`), JSON.stringify(detail));
+    const diskFilename = slug.replace(/\//g, "__");
+    writeFileSync(join(gameDetailsDir, `${diskFilename}.json`), JSON.stringify(detail));
     state.filesWritten++;
 
     // Accumulate lightweight index entry (no pgn)
@@ -350,6 +523,8 @@ export function processGameDetailsChunk(
       blackName,
       whiteSlug,
       blackSlug,
+      whiteFideId: game.whiteFideId,
+      blackFideId: game.blackFideId,
       whiteElo: wElo,
       blackElo: bElo,
       event: game.event,
@@ -359,38 +534,56 @@ export function processGameDetailsChunk(
       opening,
     });
 
-    // Accumulate recent games per player
+    // Accumulate recent games + notable games per player
+    const whiteResult: "Won" | "Lost" | "Draw" =
+      game.result === "1-0" ? "Won" : game.result === "0-1" ? "Lost" : "Draw";
+    const blackResult: "Won" | "Lost" | "Draw" =
+      game.result === "0-1" ? "Won" : game.result === "1-0" ? "Lost" : "Draw";
+
     if (whiteSlug) {
+      const whiteGame: RecentGame = {
+        slug,
+        opponentName: blackName,
+        opponentElo: bElo,
+        result: whiteResult,
+        event: game.event,
+        date: game.date,
+        opening,
+        isWhite: true,
+      };
+
       if (!state.recentGamesMap.has(whiteSlug)) state.recentGamesMap.set(whiteSlug, []);
-      state.recentGamesMap.get(whiteSlug)!.push({
-        date: game.date,
-        game: {
-          slug,
-          opponentName: blackName,
-          opponentElo: bElo,
-          result: game.result === "1-0" ? "Won" : game.result === "0-1" ? "Lost" : "Draw",
-          event: game.event,
-          date: game.date,
-          opening,
-          isWhite: true,
-        },
-      });
+      state.recentGamesMap.get(whiteSlug)!.push({ date: game.date, game: whiteGame });
+
+      // Notable game scoring: opponent elo + win bonus + opponent-has-page bonus
+      const whiteScore = bElo
+        + (whiteResult === "Won" ? 100 : whiteResult === "Lost" ? 50 : 0)
+        + (blackSlug ? 50 : 0);
+      if (!state.notableGamesMap.has(whiteSlug)) state.notableGamesMap.set(whiteSlug, []);
+      state.notableGamesMap.get(whiteSlug)!.push({ game: whiteGame, score: whiteScore });
     }
+
     if (blackSlug) {
-      if (!state.recentGamesMap.has(blackSlug)) state.recentGamesMap.set(blackSlug, []);
-      state.recentGamesMap.get(blackSlug)!.push({
+      const blackGame: RecentGame = {
+        slug,
+        opponentName: whiteName,
+        opponentElo: wElo,
+        result: blackResult,
+        event: game.event,
         date: game.date,
-        game: {
-          slug,
-          opponentName: whiteName,
-          opponentElo: wElo,
-          result: game.result === "0-1" ? "Won" : game.result === "1-0" ? "Lost" : "Draw",
-          event: game.event,
-          date: game.date,
-          opening,
-          isWhite: false,
-        },
-      });
+        opening,
+        isWhite: false,
+      };
+
+      if (!state.recentGamesMap.has(blackSlug)) state.recentGamesMap.set(blackSlug, []);
+      state.recentGamesMap.get(blackSlug)!.push({ date: game.date, game: blackGame });
+
+      // Notable game scoring
+      const blackScore = wElo
+        + (blackResult === "Won" ? 100 : blackResult === "Lost" ? 50 : 0)
+        + (whiteSlug ? 50 : 0);
+      if (!state.notableGamesMap.has(blackSlug)) state.notableGamesMap.set(blackSlug, []);
+      state.notableGamesMap.get(blackSlug)!.push({ game: blackGame, score: blackScore });
     }
   }
 }
@@ -400,8 +593,14 @@ export function processGameDetailsChunk(
  */
 export function finalizeGameProcessing(
   state: GameProcessingState,
-  maxRecentPerPlayer: number = 10
-): { gameIndex: GameIndex; playerRecentGames: Map<string, RecentGame[]> } {
+  maxRecentPerPlayer: number = 10,
+  maxNotablePerPlayer: number = 10
+): {
+  gameIndex: GameIndex;
+  playerRecentGames: Map<string, RecentGame[]>;
+  playerNotableGames: Map<string, RecentGame[]>;
+  gameAliases: Record<string, string>;
+} {
   const gameIndex: GameIndex = {
     generatedAt: new Date().toISOString(),
     totalGames: state.indexEntries.length,
@@ -417,5 +616,30 @@ export function finalizeGameProcessing(
     );
   }
 
-  return { gameIndex, playerRecentGames };
+  // Build notable games: top-scored, deduplicated against recent games
+  const playerNotableGames = new Map<string, RecentGame[]>();
+  for (const [playerSlug, candidates] of state.notableGamesMap) {
+    candidates.sort((a, b) => b.score - a.score);
+    const recentSlugs = new Set(
+      (playerRecentGames.get(playerSlug) ?? []).map((g) => g.slug)
+    );
+    const notable: RecentGame[] = [];
+    for (const c of candidates) {
+      if (notable.length >= maxNotablePerPlayer) break;
+      if (!recentSlugs.has(c.game.slug)) {
+        notable.push(c.game);
+      }
+    }
+    if (notable.length > 0) {
+      playerNotableGames.set(playerSlug, notable);
+    }
+  }
+
+  // Build game aliases as a plain record
+  const gameAliases: Record<string, string> = {};
+  for (const [legacySlug, newSlug] of state.gameAliases) {
+    gameAliases[legacySlug] = newSlug;
+  }
+
+  return { gameIndex, playerRecentGames, playerNotableGames, gameAliases };
 }

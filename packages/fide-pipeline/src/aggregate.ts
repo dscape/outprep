@@ -11,15 +11,7 @@ import type {
   PlayerIndex,
   PlayerIndexEntry,
 } from "./types";
-
-// Well-known ECO opening names (first letter gives category)
-const ECO_CATEGORIES: Record<string, string> = {
-  A: "Flank Openings",
-  B: "Semi-Open Games",
-  C: "Open Games",
-  D: "Closed Games",
-  E: "Indian Defences",
-};
+import { ECO_NAMES } from "./eco-names";
 
 /**
  * Normalize a player name for deduplication.
@@ -163,6 +155,7 @@ export function aggregatePlayers(
         fideId: game.whiteFideId,
         color: "white",
         eco: game.eco,
+        opening: game.opening,
         event: game.event,
         date: game.date,
         result: game.result,
@@ -178,6 +171,7 @@ export function aggregatePlayers(
         fideId: game.blackFideId,
         color: "black",
         eco: game.eco,
+        opening: game.opening,
         event: game.event,
         date: game.date,
         result: game.result,
@@ -210,8 +204,8 @@ export function aggregatePlayers(
       recentEvents: getRecentEvents(acc.events, 5),
       lastSeen: acc.latestEloDate,
       openings: {
-        white: buildOpeningStats(acc.whiteEcos),
-        black: buildOpeningStats(acc.blackEcos),
+        white: buildOpeningStats(acc.whiteOpenings),
+        black: buildOpeningStats(acc.blackOpenings),
       },
       winRate:
         totalResults > 0 ? Math.round((acc.wins / totalResults) * 100) : 0,
@@ -235,6 +229,7 @@ interface GameInput {
   fideId: string | null;
   color: "white" | "black";
   eco: string | null;
+  opening: string | null;
   event: string | null;
   date: string | null;
   result: string;
@@ -264,8 +259,8 @@ function processPlayer(
       draws: 0,
       losses: 0,
       events: new Map(),
-      whiteEcos: new Map(),
-      blackEcos: new Map(),
+      whiteOpenings: new Map(),
+      blackOpenings: new Map(),
     };
     players.set(key, acc);
   }
@@ -309,16 +304,20 @@ function processPlayer(
     acc.events.set(input.event, input.date);
   }
 
-  // Track ECO opening
-  if (input.eco) {
-    const ecoMap = input.color === "white" ? acc.whiteEcos : acc.blackEcos;
-    const ecoName = getEcoName(input.eco);
-    let entry = ecoMap.get(input.eco);
+  // Track opening by family name (e.g. "Sicilian Defense" groups B20-B99 variants)
+  if (input.eco || input.opening) {
+    const familyMap = input.color === "white" ? acc.whiteOpenings : acc.blackOpenings;
+    const resolvedName = resolveOpeningName(input.eco, input.opening);
+    const family = openingFamily(resolvedName);
+    const eco = input.eco || "";
+
+    let entry = familyMap.get(family);
     if (!entry) {
-      entry = { eco: input.eco, name: ecoName, games: 0, wins: 0, draws: 0, losses: 0 };
-      ecoMap.set(input.eco, entry);
+      entry = { ecoMap: new Map(), name: family, games: 0, wins: 0, draws: 0, losses: 0 };
+      familyMap.set(family, entry);
     }
     entry.games++;
+    if (eco) entry.ecoMap.set(eco, (entry.ecoMap.get(eco) || 0) + 1);
     if (isWin) entry.wins++;
     else if (isDraw) entry.draws++;
     else entry.losses++;
@@ -326,10 +325,24 @@ function processPlayer(
 
 }
 
-/** Get a human-readable ECO name from code. */
-function getEcoName(eco: string): string {
-  const letter = eco.charAt(0).toUpperCase();
-  return ECO_CATEGORIES[letter] || eco;
+/**
+ * Resolve an opening name from ECO_NAMES lookup or PGN [Opening] header.
+ * Priority: ECO_NAMES map (consistent colon format for family grouping) → PGN header → ECO code.
+ */
+function resolveOpeningName(eco: string | null, opening: string | null): string {
+  if (eco && ECO_NAMES[eco]) return ECO_NAMES[eco];
+  if (opening && opening !== "?") return opening;
+  return eco || "Unknown";
+}
+
+/**
+ * Extract opening family name (before first colon).
+ * e.g. "Sicilian Defense: Najdorf Variation" → "Sicilian Defense"
+ * Matches profile-builder.ts:openingFamily().
+ */
+function openingFamily(name: string): string {
+  const idx = name.indexOf(":");
+  return idx > 0 ? name.substring(0, idx).trim() : name.trim();
 }
 
 /** Rank titles for comparison (higher = better). */
@@ -359,28 +372,39 @@ function getRecentEvents(
     .map(([name]) => name);
 }
 
-/** Build OpeningStats[] from ECO accumulator map. */
+/** Build OpeningStats[] from family-grouped accumulator map. */
 function buildOpeningStats(
-  ecoMap: Map<string, { eco: string; name: string; games: number; wins: number; draws: number; losses: number }>
+  familyMap: Map<string, { ecoMap: Map<string, number>; name: string; games: number; wins: number; draws: number; losses: number }>
 ): OpeningStats[] {
-  const total = Array.from(ecoMap.values()).reduce(
+  const total = Array.from(familyMap.values()).reduce(
     (sum, e) => sum + e.games,
     0
   );
 
-  return Array.from(ecoMap.values())
-    .filter((e) => e.games >= 2)
+  return Array.from(familyMap.values())
+    .filter((e) => e.games >= 1)
     .sort((a, b) => b.games - a.games)
     .slice(0, 15)
-    .map((e) => ({
-      eco: e.eco,
-      name: e.name,
-      games: e.games,
-      pct: total > 0 ? Math.round((e.games / total) * 100) : 0,
-      winRate: e.games > 0 ? Math.round((e.wins / e.games) * 100) : 0,
-      drawRate: e.games > 0 ? Math.round((e.draws / e.games) * 100) : 0,
-      lossRate: e.games > 0 ? Math.round((e.losses / e.games) * 100) : 0,
-    }));
+    .map((e) => {
+      // Resolve to the most frequent ECO code in the family group
+      let bestEco = "";
+      let bestCount = 0;
+      for (const [eco, count] of e.ecoMap) {
+        if (count > bestCount) {
+          bestEco = eco;
+          bestCount = count;
+        }
+      }
+      return {
+        eco: bestEco,
+        name: e.name,
+        games: e.games,
+        pct: total > 0 ? Math.round((e.games / total) * 100) : 0,
+        winRate: e.games > 0 ? Math.round((e.wins / e.games) * 100) : 0,
+        drawRate: e.games > 0 ? Math.round((e.draws / e.games) * 100) : 0,
+        lossRate: e.games > 0 ? Math.round((e.losses / e.games) * 100) : 0,
+      };
+    });
 }
 
 /** Build a PlayerIndex from FIDEPlayer array. */

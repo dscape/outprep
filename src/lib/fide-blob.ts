@@ -39,6 +39,8 @@ let cachedIndex: { data: PlayerIndex; fetchedAt: number } | null = null;
 let cachedAliases: { data: Record<string, string>; fetchedAt: number } | null = null;
 // In-memory cache for the game index
 let cachedGameIndex: { data: GameIndex; fetchedAt: number } | null = null;
+// In-memory cache for game aliases (legacy slug → new slug)
+let cachedGameAliases: { data: Record<string, string>; fetchedAt: number } | null = null;
 const INDEX_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
 // ─── Local file fallback for development ──────────────────────────────────────
@@ -303,17 +305,20 @@ export async function getGameIndex(): Promise<GameIndex | null> {
 
 /**
  * Get a single game detail by slug.
+ * Slugs may contain / (nested format), which maps to __ in disk filenames.
  */
 export async function getGame(slug: string): Promise<GameDetail | null> {
   // Dev fallback: read single game detail file from disk
+  // Disk filenames use __ separator since slugs contain /
   if (IS_DEV) {
     try {
       const fs = await import("node:fs");
       const path = await import("node:path");
+      const diskFilename = slug.replace(/\//g, "__");
       const gameFile = path.join(
         process.cwd(),
         "packages/fide-pipeline/data/processed/game-details",
-        `${slug}.json`
+        `${diskFilename}.json`
       );
       if (fs.existsSync(gameFile)) {
         return JSON.parse(fs.readFileSync(gameFile, "utf-8"));
@@ -324,4 +329,43 @@ export async function getGame(slug: string): Promise<GameDetail | null> {
   }
 
   return fetchBlobJson<GameDetail>(`${PREFIX}/game-details/${slug}.json`);
+}
+
+/**
+ * Look up a legacy game slug and return the new canonical slug.
+ * Returns null if the slug is not a legacy alias.
+ */
+export async function getGameAliasTarget(slug: string): Promise<string | null> {
+  // Check cache first
+  if (cachedGameAliases && Date.now() - cachedGameAliases.fetchedAt < INDEX_CACHE_TTL) {
+    return cachedGameAliases.data[slug] ?? null;
+  }
+
+  // Dev fallback: load local game-aliases.json
+  if (IS_DEV) {
+    try {
+      const fs = await import("node:fs");
+      const path = await import("node:path");
+      const aliasesPath = path.join(
+        process.cwd(),
+        "packages/fide-pipeline/data/processed/game-aliases.json"
+      );
+      if (fs.existsSync(aliasesPath)) {
+        const data = JSON.parse(fs.readFileSync(aliasesPath, "utf-8"));
+        cachedGameAliases = { data, fetchedAt: Date.now() };
+        return data[slug] ?? null;
+      }
+    } catch {
+      // fall through to Blob
+    }
+  }
+
+  // Production: fetch from Blob
+  const aliases = await fetchBlobJson<Record<string, string>>(`${PREFIX}/game-aliases.json`);
+  if (aliases) {
+    cachedGameAliases = { data: aliases, fetchedAt: Date.now() };
+    return aliases[slug] ?? null;
+  }
+
+  return null;
 }

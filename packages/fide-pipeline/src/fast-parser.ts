@@ -76,6 +76,7 @@ export function parseHeaders(
       whiteFideId: parseFideId(h["WhiteFideId"]),
       blackFideId: parseFideId(h["BlackFideId"]),
       eco: h["ECO"] || null,
+      opening: h["Opening"] || null,
       event: h["Event"] || null,
       site: h["Site"] || null,
       date: h["Date"] || null,
