@@ -8,6 +8,7 @@ import {
 } from "@/lib/fide-blob";
 import type { FIDEPlayer } from "@/lib/fide-blob";
 import { TitleBadge } from "@/components/title-badge";
+import { CountryFlag } from "@/components/country-flag";
 import PracticeLoader from "./practice-loader";
 import FideOpenings from "./fide-openings";
 
@@ -213,7 +214,7 @@ export default async function PlayerPage({
                 </div>
                 <p className="text-sm text-zinc-400 mt-1">
                   {player.federation && (
-                    <span className="text-zinc-300 font-medium">{player.federation}</span>
+                    <CountryFlag federation={player.federation} showCode className="text-zinc-300 font-medium" />
                   )}
                   {player.federation && " · "}
                   {player.gameCount.toLocaleString()} OTB games analyzed

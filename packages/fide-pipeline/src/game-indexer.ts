@@ -149,6 +149,8 @@ export function buildGameDetails(
     const blackName = blackPlayer?.name ?? game.black;
     const whiteSlug = whitePlayer?.slug ?? "";
     const blackSlug = blackPlayer?.slug ?? "";
+    const whiteFederation = whitePlayer?.federation ?? null;
+    const blackFederation = blackPlayer?.federation ?? null;
 
     // Generate slug with collision handling
     let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round, game.whiteFideId, game.blackFideId);
@@ -170,6 +172,8 @@ export function buildGameDetails(
       blackElo: bElo,
       whiteTitle: game.whiteTitle,
       blackTitle: game.blackTitle,
+      whiteFederation,
+      blackFederation,
       event: game.event,
       site: game.site ?? null,
       date: game.date,
@@ -199,6 +203,8 @@ export function buildGameIndex(games: GameDetail[]): GameIndex {
     blackFideId: g.blackFideId,
     whiteElo: g.whiteElo,
     blackElo: g.blackElo,
+    whiteFederation: g.whiteFederation,
+    blackFederation: g.blackFederation,
     event: g.event,
     date: g.date,
     result: g.result,
@@ -473,6 +479,8 @@ export function processGameDetailsChunk(
     const blackName = blackPlayer?.name ?? game.black;
     const whiteSlug = whitePlayer?.slug ?? "";
     const blackSlug = blackPlayer?.slug ?? "";
+    const whiteFederation = whitePlayer?.federation ?? null;
+    const blackFederation = blackPlayer?.federation ?? null;
 
     let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round, game.whiteFideId, game.blackFideId);
     const count = (state.slugCounts.get(slug) ?? 0) + 1;
@@ -502,6 +510,8 @@ export function processGameDetailsChunk(
       blackElo: bElo,
       whiteTitle: game.whiteTitle,
       blackTitle: game.blackTitle,
+      whiteFederation,
+      blackFederation,
       event: game.event,
       site: game.site ?? null,
       date: game.date,
@@ -527,6 +537,8 @@ export function processGameDetailsChunk(
       blackFideId: game.blackFideId,
       whiteElo: wElo,
       blackElo: bElo,
+      whiteFederation,
+      blackFederation,
       event: game.event,
       date: game.date,
       result: game.result,

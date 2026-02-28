@@ -7,6 +7,7 @@ import {
   formatPlayerName,
 } from "@/lib/fide-blob";
 import { TitleBadge } from "@/components/title-badge";
+import { CountryFlag } from "@/components/country-flag";
 import GameReplay from "@/components/GameReplay";
 
 export const revalidate = 604800; // 7 days
@@ -164,6 +165,7 @@ export default async function GamePage({
               <div className="flex-1 text-center">
                 <div className="flex items-center justify-center gap-2 mb-1">
                   <div className="h-4 w-4 rounded-sm border border-zinc-600 bg-white" />
+                  {game.whiteFederation && <CountryFlag federation={game.whiteFederation} />}
                   {game.whiteTitle && <TitleBadge title={game.whiteTitle} />}
                 </div>
                 {game.whiteSlug ? (
@@ -191,6 +193,7 @@ export default async function GamePage({
               <div className="flex-1 text-center">
                 <div className="flex items-center justify-center gap-2 mb-1">
                   <div className="h-4 w-4 rounded-sm border border-zinc-600 bg-zinc-900" />
+                  {game.blackFederation && <CountryFlag federation={game.blackFederation} />}
                   {game.blackTitle && <TitleBadge title={game.blackTitle} />}
                 </div>
                 {game.blackSlug ? (

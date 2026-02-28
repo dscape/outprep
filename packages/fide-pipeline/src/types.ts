@@ -135,6 +135,8 @@ export interface GameDetail {
   blackElo: number;
   whiteTitle: string | null;
   blackTitle: string | null;
+  whiteFederation: string | null;
+  blackFederation: string | null;
   event: string;
   site: string | null;
   date: string; // "2022.04.20"
@@ -157,6 +159,8 @@ export interface GameIndexEntry {
   blackFideId: string;
   whiteElo: number;
   blackElo: number;
+  whiteFederation: string | null;
+  blackFederation: string | null;
   event: string;
   date: string;
   result: string;
