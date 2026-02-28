@@ -9,6 +9,7 @@ import { downloadTWIC, downloadRange } from "./download";
 import { parseHeaders } from "./fast-parser";
 import {
   aggregatePlayers,
+  createAggregator,
   buildPlayerIndex,
   normalizePlayerName,
 } from "./aggregate";
@@ -25,8 +26,9 @@ import {
   processGameDetailsChunk,
   finalizeGameProcessing,
 } from "./game-indexer";
-import type { TWICGameHeader, FIDEPlayer, GameIndex, PlayerIndex } from "./types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync } from "node:fs";
+import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 // ─── Load .env from project root ────────────────────────────────────────────
@@ -161,29 +163,33 @@ async function processTwoPass(
   pgnFiles: { name: string; path: string }[],
   opts: { minGames: number; minElo: number }
 ) {
-  // ── PASS 1: Parse without rawPgn, aggregate, enrich ──
+  // ── PASS 1: Parse without rawPgn, aggregate incrementally, enrich ──
   console.log("\nPass 1: Aggregate players (lightweight, no PGN text)...\n");
 
-  let allHeaders: TWICGameHeader[] = [];
-  for (const file of pgnFiles) {
+  const aggregator = createAggregator();
+  let totalGames = 0;
+  for (let fi = 0; fi < pgnFiles.length; fi++) {
+    const file = pgnFiles[fi];
+    const pct = Math.round(((fi + 1) / pgnFiles.length) * 100);
+    process.stdout.write(`  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: reading...`);
     const pgn = readFileSync(file.path, "utf-8");
     const start = Date.now();
     const games = parseHeaders(pgn, { skipRawPgn: true });
     const ms = Date.now() - start;
-    console.log(`  ${file.name}: ${games.length} games (${ms}ms)`);
-    allHeaders = allHeaders.concat(games);
+    process.stdout.write(`\r  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: ${games.length} games (${ms}ms)\n`);
+    aggregator.feed(games);
+    totalGames += games.length;
+    // games array freed at next iteration — no accumulation
   }
-  console.log(`\nTotal games: ${allHeaders.length}`);
+  console.log(`\nTotal games: ${totalGames}`);
 
   console.log("\nAggregating players...");
-  const players = aggregatePlayers(allHeaders, opts.minGames);
+  const players = aggregator.finalize(opts.minGames);
   console.log(`  ${players.length} players with ${opts.minGames}+ games`);
 
-  // Free headers — they held no rawPgn but still many objects
-  allHeaders = [];
-
   console.log("\nEnriching with FIDE rating list...");
-  let fideData = loadFideData(RATINGS_DIR);
+  const playerFideIds = new Set(players.map((p) => p.fideId));
+  let fideData = loadFideData(RATINGS_DIR, playerFideIds);
   const enrichedCount = enrichPlayers(players, fideData);
   console.log(`  Enriched ${enrichedCount}/${players.length} players`);
   players.sort((a, b) => b.fideRating - a.fideRating);
@@ -195,33 +201,41 @@ async function processTwoPass(
   const aliasMap = buildAliasMap(players);
 
   // ── PASS 2: Process games one PGN file at a time (with rawPgn) ──
-  console.log("\nPass 2: Build player games + game details (one file at a time)...\n");
+  console.log("\nPass 2: Build player games + game details (one file at a time)...");
 
-  // Build lookups for player game collection
+  console.log("  Building player lookup maps...");
   const fideIdToSlug = new Map<string, string>();
   const nameToSlug = new Map<string, string>();
   for (const p of players) {
     if (p.fideId) fideIdToSlug.set(p.fideId, p.slug);
     nameToSlug.set(normalizePlayerName(p.name), p.slug);
   }
+  console.log(`  ${fideIdToSlug.size} FIDE ID mappings, ${nameToSlug.size} name mappings`);
 
-  const gamesBySlug = new Map<string, string[]>();
-  for (const p of players) {
-    gamesBySlug.set(p.slug, []);
-  }
+  // Stream player games to JSONL temp files on disk (avoid holding all PGN strings in memory)
+  const GAMES_TEMP_DIR = join(tmpdir(), `fide-games-temp-${Date.now()}`);
+  mkdirSync(GAMES_TEMP_DIR, { recursive: true });
+  const slugsWithGames = new Set<string>();
 
   // Clean game-details dir before incremental writes
   if (existsSync(GAME_DETAILS_DIR)) rmSync(GAME_DETAILS_DIR, { recursive: true });
   mkdirSync(GAME_DETAILS_DIR, { recursive: true });
 
+  console.log("  Initializing game processing state...");
   const gameState = createGameProcessingState(players, { minElo: opts.minElo });
+  console.log(`  Ready to process ${pgnFiles.length} PGN files\n`);
 
-  for (const file of pgnFiles) {
+  for (let fi = 0; fi < pgnFiles.length; fi++) {
+    const file = pgnFiles[fi];
+    const pct = Math.round(((fi + 1) / pgnFiles.length) * 100);
+    process.stdout.write(`  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: reading...`);
     const pgn = readFileSync(file.path, "utf-8");
     const games = parseHeaders(pgn); // WITH rawPgn
-    console.log(`  ${file.name}: processing ${games.length} games...`);
+    process.stdout.write(`\r  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: processing ${games.length} games...\n`);
 
-    // Collect player games
+    // Batch JSONL appends for this file's games (one PGN file at a time in memory)
+    const batchAppends = new Map<string, string>();
+
     for (const game of games) {
       const whiteSlug =
         (game.whiteFideId && fideIdToSlug.get(game.whiteFideId)) ||
@@ -229,31 +243,46 @@ async function processTwoPass(
       const blackSlug =
         (game.blackFideId && fideIdToSlug.get(game.blackFideId)) ||
         nameToSlug.get(normalizePlayerName(game.black));
-      if (whiteSlug && gamesBySlug.has(whiteSlug)) {
-        gamesBySlug.get(whiteSlug)!.push(game.rawPgn);
+
+      const jsonLine = JSON.stringify(game.rawPgn) + "\n";
+
+      if (whiteSlug) {
+        batchAppends.set(whiteSlug, (batchAppends.get(whiteSlug) ?? "") + jsonLine);
+        slugsWithGames.add(whiteSlug);
       }
-      if (blackSlug && gamesBySlug.has(blackSlug)) {
-        gamesBySlug.get(blackSlug)!.push(game.rawPgn);
+      if (blackSlug) {
+        batchAppends.set(blackSlug, (batchAppends.get(blackSlug) ?? "") + jsonLine);
+        slugsWithGames.add(blackSlug);
       }
+    }
+
+    // Flush batch to JSONL files on disk
+    for (const [slug, lines] of batchAppends) {
+      appendFileSync(join(GAMES_TEMP_DIR, `${slug}.jsonl`), lines);
     }
 
     // Write game detail files immediately (no accumulation)
     processGameDetailsChunk(games, gameState, GAME_DETAILS_DIR);
-    // games for this file freed at next iteration
+    // games + batchAppends freed at next iteration
   }
 
-  // Flush player game files
+  // Convert JSONL temp files to final JSON array files
   console.log("\nWriting per-player game files...");
   if (existsSync(GAMES_DIR)) rmSync(GAMES_DIR, { recursive: true });
   mkdirSync(GAMES_DIR, { recursive: true });
   let gameFilesWritten = 0;
-  for (const [slug, pgns] of gamesBySlug) {
-    if (pgns.length > 0) {
-      writeFileSync(join(GAMES_DIR, `${slug}.json`), JSON.stringify(pgns));
-      gameFilesWritten++;
-    }
+  for (const slug of slugsWithGames) {
+    const jsonlPath = join(GAMES_TEMP_DIR, `${slug}.jsonl`);
+    if (!existsSync(jsonlPath)) continue;
+    const lines = readFileSync(jsonlPath, "utf-8").trimEnd().split("\n");
+    const pgns: string[] = lines.map((line) => JSON.parse(line));
+    writeFileSync(join(GAMES_DIR, `${slug}.json`), JSON.stringify(pgns));
+    gameFilesWritten++;
   }
   console.log(`  ${gameFilesWritten} game files written`);
+
+  // Clean up temp directory
+  rmSync(GAMES_TEMP_DIR, { recursive: true, force: true });
 
   // Finalize game index + recent games + notable games + game aliases
   const { gameIndex, playerRecentGames, playerNotableGames, gameAliases } = finalizeGameProcessing(gameState);

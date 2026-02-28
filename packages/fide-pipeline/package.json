@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "pipeline": "tsx src/cli.ts",
-    "fide-pipeline": "tsx src/cli.ts",
+    "pipeline": "NODE_OPTIONS='--max-old-space-size=4096' tsx src/cli.ts",
+    "fide-pipeline": "NODE_OPTIONS='--max-old-space-size=4096' tsx src/cli.ts",
     "build": "echo 'fide-pipeline uses tsx, no build step'",
     "typecheck": "tsc --noEmit"
   },

@@ -51,40 +51,58 @@ export interface MergedFideRecord {
 /**
  * Parse the unified FIDE rating list TXT file (fixed-width format).
  * All 3 rating types (Standard, Rapid, Blitz) are in a single row per player.
+ *
+ * Reads the file as a raw Buffer (295 MB) rather than a UTF-16 string (~590 MB)
+ * to halve memory usage. Uses Buffer.toString() for each field extraction,
+ * which creates independent strings that don't keep the parent buffer alive.
+ *
+ * When `filterIds` is provided, only records matching those FIDE IDs are kept.
+ *
  * Returns a Map of FIDE ID → MergedFideRecord.
  */
-export function parseFideUnifiedList(txtPath: string): Map<string, MergedFideRecord> {
-  const content = readFileSync(txtPath, "utf-8");
-  const lines = content.split("\n");
+export function parseFideUnifiedList(
+  txtPath: string,
+  filterIds?: Set<string>
+): Map<string, MergedFideRecord> {
+  const buf = readFileSync(txtPath); // raw Buffer, not UTF-16 string
   const result = new Map<string, MergedFideRecord>();
+  const NL = 0x0a; // '\n'
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    // Skip header and empty lines
-    if (i === 0 || line.trim() === "") continue;
+  let start = 0;
+  let lineNum = 0;
+  while (start < buf.length) {
+    let end = buf.indexOf(NL, start);
+    if (end === -1) end = buf.length;
 
-    const fideId = line.slice(0, 15).trim();
-    if (!fideId || !/^\d+$/.test(fideId)) continue;
+    // Skip header line
+    if (lineNum > 0 && end > start) {
+      const fideId = buf.toString("utf-8", start, start + 15).trim();
 
-    const name = line.slice(15, 76).trim();
-    const federation = line.slice(76, 79).trim();
-    const title = line.slice(84, 88).trim() || null;
+      if (fideId && /^\d+$/.test(fideId) && (!filterIds || filterIds.has(fideId))) {
+        const name = buf.toString("utf-8", start + 15, start + 76).trim();
+        const federation = buf.toString("utf-8", start + 76, start + 79).trim();
+        const title = buf.toString("utf-8", start + 84, start + 88).trim() || null;
 
-    const sRtng = parseInt(line.slice(113, 119).trim(), 10);
-    const rRtng = parseInt(line.slice(126, 132).trim(), 10);
-    const bRtng = parseInt(line.slice(139, 145).trim(), 10);
-    const birthStr = line.slice(152, 156).trim();
-    const birthYear = birthStr ? parseInt(birthStr, 10) : null;
+        const sRtng = parseInt(buf.toString("utf-8", start + 113, start + 119).trim(), 10);
+        const rRtng = parseInt(buf.toString("utf-8", start + 126, start + 132).trim(), 10);
+        const bRtng = parseInt(buf.toString("utf-8", start + 139, start + 145).trim(), 10);
+        const birthStr = buf.toString("utf-8", start + 152, start + 156).trim();
+        const birthYear = birthStr ? parseInt(birthStr, 10) : null;
 
-    result.set(fideId, {
-      name,
-      federation,
-      title,
-      birthYear: birthYear && !isNaN(birthYear) ? birthYear : null,
-      standardRating: sRtng && !isNaN(sRtng) ? sRtng : null,
-      rapidRating: rRtng && !isNaN(rRtng) ? rRtng : null,
-      blitzRating: bRtng && !isNaN(bRtng) ? bRtng : null,
-    });
+        result.set(fideId, {
+          name,
+          federation,
+          title,
+          birthYear: birthYear && !isNaN(birthYear) ? birthYear : null,
+          standardRating: sRtng && !isNaN(sRtng) ? sRtng : null,
+          rapidRating: rRtng && !isNaN(rRtng) ? rRtng : null,
+          blitzRating: bRtng && !isNaN(bRtng) ? bRtng : null,
+        });
+      }
+    }
+
+    start = end + 1;
+    lineNum++;
   }
 
   return result;
@@ -97,7 +115,16 @@ export function parseFideUnifiedList(txtPath: string): Map<string, MergedFideRec
  * types per player. Unzips to a temp directory to avoid polluting the repo.
  * Returns a Map of FIDE ID → MergedFideRecord.
  */
-export function loadFideData(ratingsDir: string): Map<string, MergedFideRecord> {
+/**
+ * Load the unified FIDE rating list from a zip file.
+ *
+ * When `filterIds` is provided, only records matching those FIDE IDs are loaded.
+ * This avoids loading ~1M records when only ~80K are needed.
+ */
+export function loadFideData(
+  ratingsDir: string,
+  filterIds?: Set<string>
+): Map<string, MergedFideRecord> {
   const zipPath = join(ratingsDir, "players_list.zip");
   if (!existsSync(zipPath)) {
     console.warn(`[fide-enrichment] Zip not found: ${zipPath}. Skipping enrichment.`);
@@ -120,9 +147,9 @@ export function loadFideData(ratingsDir: string): Map<string, MergedFideRecord> 
 
   const txtPath = join(tmpDir, txtFile);
   console.log(`  Parsing unified FIDE rating list: ${txtFile}...`);
-  const fideData = parseFideUnifiedList(txtPath);
+  const fideData = parseFideUnifiedList(txtPath, filterIds);
 
-  console.log(`  Parsed: ${fideData.size} total FIDE players`);
+  console.log(`  Parsed: ${fideData.size} FIDE players${filterIds ? ` (filtered from ${filterIds.size} IDs)` : ""}`);
 
   // Clean up temp dir (best effort)
   try {

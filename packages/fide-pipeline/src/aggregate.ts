@@ -133,6 +133,95 @@ function bestDisplayName(existing: string, candidate: string): string {
 }
 
 /**
+ * Streaming player aggregator — feed game chunks one at a time,
+ * then finalize to get the FIDEPlayer array. Avoids holding all
+ * game headers in memory at once.
+ */
+export function createAggregator() {
+  const players = new Map<string, PlayerAccumulator>();
+
+  return {
+    /** Feed a batch of games (e.g., one PGN file's worth). */
+    feed(games: TWICGameHeader[]): void {
+      for (const game of games) {
+        if (game.whiteElo !== null) {
+          processPlayer(players, {
+            name: game.white,
+            elo: game.whiteElo,
+            title: game.whiteTitle,
+            fideId: game.whiteFideId,
+            color: "white",
+            eco: game.eco,
+            opening: game.opening,
+            event: game.event,
+            date: game.date,
+            result: game.result,
+          });
+        }
+        if (game.blackElo !== null) {
+          processPlayer(players, {
+            name: game.black,
+            elo: game.blackElo,
+            title: game.blackTitle,
+            fideId: game.blackFideId,
+            color: "black",
+            eco: game.eco,
+            opening: game.opening,
+            event: game.event,
+            date: game.date,
+            result: game.result,
+          });
+        }
+      }
+    },
+
+    /** Convert accumulators to FIDEPlayer profiles. Clears internal state to free memory. */
+    finalize(minGames: number = 3): FIDEPlayer[] {
+      const result: FIDEPlayer[] = [];
+
+      const accumulators = Array.from(players.values()).filter(
+        (p) => p.games >= minGames && p.fideId !== null
+      );
+
+      for (const acc of accumulators) {
+        const fideId = acc.fideId!;
+        const slug = generateSlug(acc.name, fideId);
+        const aliases = generateAliases(acc.nameVariants, fideId, slug);
+        const totalResults = acc.wins + acc.draws + acc.losses;
+
+        result.push({
+          name: acc.name,
+          slug,
+          fideId,
+          aliases,
+          fideRating: acc.latestElo,
+          title: acc.title,
+          gameCount: acc.games,
+          recentEvents: getRecentEvents(acc.events, 5),
+          lastSeen: acc.latestEloDate,
+          openings: {
+            white: buildOpeningStats(acc.whiteOpenings),
+            black: buildOpeningStats(acc.blackOpenings),
+          },
+          winRate:
+            totalResults > 0 ? Math.round((acc.wins / totalResults) * 100) : 0,
+          drawRate:
+            totalResults > 0 ? Math.round((acc.draws / totalResults) * 100) : 0,
+          lossRate:
+            totalResults > 0 ? Math.round((acc.losses / totalResults) * 100) : 0,
+        });
+      }
+
+      // Free accumulator state — can be very large (200K+ entries with Maps/Sets)
+      players.clear();
+
+      result.sort((a, b) => b.fideRating - a.fideRating);
+      return result;
+    },
+  };
+}
+
+/**
  * Aggregate games into per-player profiles.
  *
  * @param games All parsed game headers
@@ -143,83 +232,9 @@ export function aggregatePlayers(
   games: TWICGameHeader[],
   minGames: number = 3
 ): FIDEPlayer[] {
-  const players = new Map<string, PlayerAccumulator>();
-
-  for (const game of games) {
-    // Process white player
-    if (game.whiteElo !== null) {
-      processPlayer(players, {
-        name: game.white,
-        elo: game.whiteElo,
-        title: game.whiteTitle,
-        fideId: game.whiteFideId,
-        color: "white",
-        eco: game.eco,
-        opening: game.opening,
-        event: game.event,
-        date: game.date,
-        result: game.result,
-      });
-    }
-
-    // Process black player
-    if (game.blackElo !== null) {
-      processPlayer(players, {
-        name: game.black,
-        elo: game.blackElo,
-        title: game.blackTitle,
-        fideId: game.blackFideId,
-        color: "black",
-        eco: game.eco,
-        opening: game.opening,
-        event: game.event,
-        date: game.date,
-        result: game.result,
-      });
-    }
-  }
-
-  // Convert accumulators to FIDEPlayer profiles
-  // Only include players WITH a FIDE ID and enough games
-  const result: FIDEPlayer[] = [];
-
-  const accumulators = Array.from(players.values()).filter(
-    (p) => p.games >= minGames && p.fideId !== null
-  );
-
-  for (const acc of accumulators) {
-    const fideId = acc.fideId!; // guaranteed non-null by filter above
-    const slug = generateSlug(acc.name, fideId);
-    const aliases = generateAliases(acc.nameVariants, fideId, slug);
-    const totalResults = acc.wins + acc.draws + acc.losses;
-
-    result.push({
-      name: acc.name,
-      slug,
-      fideId,
-      aliases,
-      fideRating: acc.latestElo,
-      title: acc.title,
-      gameCount: acc.games,
-      recentEvents: getRecentEvents(acc.events, 5),
-      lastSeen: acc.latestEloDate,
-      openings: {
-        white: buildOpeningStats(acc.whiteOpenings),
-        black: buildOpeningStats(acc.blackOpenings),
-      },
-      winRate:
-        totalResults > 0 ? Math.round((acc.wins / totalResults) * 100) : 0,
-      drawRate:
-        totalResults > 0 ? Math.round((acc.draws / totalResults) * 100) : 0,
-      lossRate:
-        totalResults > 0 ? Math.round((acc.losses / totalResults) * 100) : 0,
-    });
-  }
-
-  // Sort by rating descending
-  result.sort((a, b) => b.fideRating - a.fideRating);
-
-  return result;
+  const agg = createAggregator();
+  agg.feed(games);
+  return agg.finalize(minGames);
 }
 
 interface GameInput {

@@ -408,6 +408,45 @@ interface NotableGameCandidate {
   score: number;
 }
 
+/** Max notable game candidates to keep per player during incremental processing. */
+const MAX_NOTABLE_CANDIDATES = 50;
+
+/**
+ * Insert a notable game candidate, keeping only the top MAX_NOTABLE_CANDIDATES
+ * per player to bound memory. If the list is full and the new candidate scores
+ * lower than the current minimum, it is discarded.
+ */
+function insertNotableCandidate(
+  map: Map<string, NotableGameCandidate[]>,
+  slug: string,
+  candidate: NotableGameCandidate
+): void {
+  const candidates = map.get(slug);
+  if (!candidates) {
+    map.set(slug, [candidate]);
+    return;
+  }
+
+  if (candidates.length < MAX_NOTABLE_CANDIDATES) {
+    candidates.push(candidate);
+    return;
+  }
+
+  // Find the minimum-scored candidate and replace if new one is better
+  let minIdx = 0;
+  let minScore = candidates[0].score;
+  for (let i = 1; i < candidates.length; i++) {
+    if (candidates[i].score < minScore) {
+      minScore = candidates[i].score;
+      minIdx = i;
+    }
+  }
+
+  if (candidate.score > minScore) {
+    candidates[minIdx] = candidate;
+  }
+}
+
 /** Mutable state carried across PGN file chunks during incremental game processing. */
 export interface GameProcessingState {
   seenKeys: Set<string>;
@@ -571,8 +610,7 @@ export function processGameDetailsChunk(
       const whiteScore = bElo
         + (whiteResult === "Won" ? 100 : whiteResult === "Lost" ? 50 : 0)
         + (blackSlug ? 50 : 0);
-      if (!state.notableGamesMap.has(whiteSlug)) state.notableGamesMap.set(whiteSlug, []);
-      state.notableGamesMap.get(whiteSlug)!.push({ game: whiteGame, score: whiteScore });
+      insertNotableCandidate(state.notableGamesMap, whiteSlug, { game: whiteGame, score: whiteScore });
     }
 
     if (blackSlug) {
@@ -594,8 +632,7 @@ export function processGameDetailsChunk(
       const blackScore = wElo
         + (blackResult === "Won" ? 100 : blackResult === "Lost" ? 50 : 0)
         + (whiteSlug ? 50 : 0);
-      if (!state.notableGamesMap.has(blackSlug)) state.notableGamesMap.set(blackSlug, []);
-      state.notableGamesMap.get(blackSlug)!.push({ game: blackGame, score: blackScore });
+      insertNotableCandidate(state.notableGamesMap, blackSlug, { game: blackGame, score: blackScore });
     }
   }
 }

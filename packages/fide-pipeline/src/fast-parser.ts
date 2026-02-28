@@ -14,26 +14,37 @@ import type { TWICGameHeader } from "./types";
 /**
  * Split a multi-game PGN string into individual game strings.
  * Games are separated by double newlines followed by an [Event header.
+ *
+ * Uses ` ${str}`.slice(1) to detach trimmed results from the parent string.
+ * Without this, V8's trim() creates SlicedStrings that keep the entire
+ * multi-MB parent PGN string alive.
  */
 export function splitPGN(pgnText: string): string[] {
   const games: string[] = [];
   const parts = pgnText.split(/\n\n(?=\[Event )/);
   for (const part of parts) {
     const trimmed = part.trim();
-    if (trimmed) games.push(trimmed);
+    if (trimmed) games.push(` ${trimmed}`.slice(1));
   }
   return games.length > 0 ? games : [pgnText.trim()].filter(Boolean);
 }
 
 /**
  * Extract PGN headers from a single game PGN string.
+ *
+ * Uses string concatenation to detach regex capture groups from the parent
+ * string. Without this, V8 creates SlicedStrings that keep the entire parent
+ * PGN file content (~4 MB per file) alive as long as any extracted header
+ * value is referenced — causing ~2.8 GB of leaked memory across 709 files.
  */
 export function extractHeaders(pgn: string): Record<string, string> {
   const headers: Record<string, string> = {};
   const regex = /\[(\w+)\s+"([^"]*)"\]/g;
   let match;
   while ((match = regex.exec(pgn)) !== null) {
-    headers[match[1]] = match[2];
+    // ` ${str}`.slice(1) forces V8 to create an independent SeqString
+    // rather than a SlicedString referencing the parent pgn string
+    headers[` ${match[1]}`.slice(1)] = ` ${match[2]}`.slice(1);
   }
   return headers;
 }
