@@ -329,7 +329,7 @@ function processPlayer(
  * Resolve an opening name from ECO_NAMES lookup or PGN [Opening] header.
  * Priority: ECO_NAMES map (consistent colon format for family grouping) → PGN header → ECO code.
  */
-function resolveOpeningName(eco: string | null, opening: string | null): string {
+export function resolveOpeningName(eco: string | null, opening: string | null): string {
   if (eco && ECO_NAMES[eco]) return ECO_NAMES[eco];
   if (opening && opening !== "?") return opening;
   return eco || "Unknown";

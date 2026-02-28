@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { extractHeaders } from "./fast-parser";
-import { slugify, parseNameParts } from "./aggregate";
+import { slugify, parseNameParts, resolveOpeningName } from "./aggregate";
 import type {
   TWICGameHeader,
   FIDEPlayer,
@@ -175,7 +175,7 @@ export function buildGameDetails(
       date: game.date,
       round,
       eco: game.eco ?? null,
-      opening: headers["Opening"] ?? null,
+      opening: resolveOpeningName(game.eco ?? null, headers["Opening"] ?? null),
       variation: headers["Variation"] ?? null,
       result: game.result,
       pgn: game.rawPgn,
@@ -486,7 +486,7 @@ export function processGameDetailsChunk(
     if (legacyCount > 1) legacySlug = `${legacySlug}-${legacyCount}`;
     state.gameAliases.set(legacySlug, slug);
 
-    const opening = headers["Opening"] ?? null;
+    const opening = resolveOpeningName(game.eco ?? null, headers["Opening"] ?? null);
 
     // Write game detail file to disk immediately — no accumulation of PGN strings
     // Use __ separator in filenames since slugs now contain /
