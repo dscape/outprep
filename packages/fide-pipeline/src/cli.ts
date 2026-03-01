@@ -5,7 +5,7 @@
  */
 
 import { Command } from "commander";
-import { downloadTWIC, downloadRange } from "./download";
+import { downloadTWIC, downloadRange, downloadFideRatings } from "./download";
 import { parseHeaders } from "./fast-parser";
 import {
   aggregatePlayers,
@@ -232,6 +232,8 @@ async function processTwoPass(
   const players = aggregator.finalize(opts.minGames);
   console.log(`  ${players.length} players with ${opts.minGames}+ games`);
 
+  console.log("\nDownloading FIDE rating list (if needed)...");
+  await downloadFideRatings();
   console.log("\nEnriching with FIDE rating list...");
   const playerFideIds = new Set(players.map((p) => p.fideId));
   let fideData = loadFideData(RATINGS_DIR, playerFideIds);
@@ -429,7 +431,8 @@ program
     const players = aggregatePlayers(games, 1); // min 1 game for smoke test
     console.log(`  Players: ${players.length} unique rated players`);
 
-    // 3b. Enrich with FIDE names + ratings
+    // 3b. Download FIDE rating list if needed, then enrich
+    await downloadFideRatings();
     console.log("\n  Enriching with FIDE rating list...");
     const fideData = loadFideData(RATINGS_DIR);
     const enrichedCount = enrichPlayers(players, fideData);
@@ -586,6 +589,22 @@ program
     };
     writeFileSync(join(DATA_DIR, "download-meta.json"), JSON.stringify(meta, null, 2));
     console.log(`Metadata saved to ${DATA_DIR}/download-meta.json\n`);
+  });
+
+// ─── download-ratings ─────────────────────────────────────────────────────────
+
+program
+  .command("download-ratings")
+  .description("Download the official FIDE rating list (Standard/Rapid/Blitz)")
+  .option("--force", "Re-download even if the file already exists")
+  .action(async (opts) => {
+    console.log("\nDownloading FIDE rating list...\n");
+    const ok = await downloadFideRatings({ force: opts.force });
+    if (!ok) {
+      console.error("Failed to download FIDE rating list.");
+      process.exit(1);
+    }
+    console.log("\nFIDE rating list ready.\n");
   });
 
 // ─── process ──────────────────────────────────────────────────────────────────

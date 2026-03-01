@@ -36,10 +36,17 @@ The only variable needed is `BLOB_READ_WRITE_TOKEN` (for uploading to Vercel Blo
 
 ### 3. FIDE rating list (for name + rating enrichment)
 
-Download the official FIDE rating list from [ratings.fide.com](https://ratings.fide.com/download_lists.phtml):
+The FIDE rating list is **downloaded automatically** by the pipeline when needed. You can also download it manually:
 
-1. Download the combined TXT zip (https://ratings.fide.com/download/players_list.zip) — a single file containing all ratings (Standard, Rapid, Blitz) per player
-2. Place it at `packages/fide-pipeline/data/ratings/players_list.zip`
+```bash
+# Download (or update) the FIDE rating list
+npm run fide-pipeline -- download-ratings
+
+# Force re-download (e.g. after a monthly FIDE update)
+npm run fide-pipeline -- download-ratings --force
+```
+
+The `process`, `full`, and `smoke` commands will also auto-download the rating list if it's not already present.
 
 The zip contains one file (`players_list_foa.txt`) in fixed-width format with all three rating types per player row. The pipeline unzips to `/tmp` at runtime — the raw `.txt` file is never stored in the repo.
 
@@ -113,6 +120,14 @@ Download TWIC zip files and extract PGN text.
 | `--from <n>` | required | First TWIC issue number |
 | `--to <n>` | required | Last TWIC issue number |
 | `--delay <ms>` | 500 | Delay between downloads (be polite to TWIC servers) |
+
+### `download-ratings`
+
+Download the official FIDE rating list (Standard/Rapid/Blitz). Also runs automatically during `process`, `full`, and `smoke` if the file is missing.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--force` | false | Re-download even if the file already exists |
 
 ### `process`
 
@@ -275,7 +290,7 @@ The upload automatically retries with backoff when Vercel Blob returns `BlobServ
 
 ### "Zip not found" for FIDE enrichment
 
-If you see `[fide-enrichment] Zip not found`, download the FIDE rating list zip and place it at `data/ratings/players_list.zip`. The pipeline still works without it, just with abbreviated names.
+If you see `[fide-enrichment] Zip not found`, run `npm run fide-pipeline -- download-ratings` to fetch the FIDE rating list. The pipeline normally auto-downloads this, but network issues may prevent it. The pipeline still works without it, just with abbreviated names.
 
 ### Large data directory
 

@@ -10,6 +10,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  statSync,
   writeFileSync,
   unlinkSync,
 } from "node:fs";
@@ -118,6 +119,56 @@ function extractPgnFromZip(zipPath: string): string | null {
   } catch (err) {
     console.error("  Zip extraction failed:", (err as Error).message);
     return null;
+  }
+}
+
+const FIDE_RATINGS_URL = "https://ratings.fide.com/download/players_list.zip";
+const RATINGS_DIR = join(DATA_DIR, "ratings");
+
+/**
+ * Download the official FIDE combined rating list zip.
+ * Contains Standard, Rapid, and Blitz ratings for all FIDE-registered players.
+ *
+ * Saves to data/ratings/players_list.zip. Skips download if the file already
+ * exists (use `force` to re-download, e.g. for monthly updates).
+ */
+export async function downloadFideRatings(opts?: {
+  force?: boolean;
+}): Promise<boolean> {
+  if (!existsSync(RATINGS_DIR)) {
+    mkdirSync(RATINGS_DIR, { recursive: true });
+  }
+
+  const zipPath = join(RATINGS_DIR, "players_list.zip");
+
+  if (existsSync(zipPath) && !opts?.force) {
+    console.log(`  FIDE rating list already exists: ${zipPath}`);
+    return true;
+  }
+
+  try {
+    console.log(`  Downloading FIDE rating list...`);
+    const res = await fetch(FIDE_RATINGS_URL);
+    if (!res.ok) {
+      console.error(`  Failed to download FIDE ratings: HTTP ${res.status}`);
+      return false;
+    }
+
+    const body = res.body;
+    if (!body) return false;
+    const dest = createWriteStream(zipPath);
+    await pipeline(Readable.fromWeb(body as never), dest);
+
+    const sizeMB = (statSync(zipPath).size / 1024 / 1024).toFixed(1);
+    console.log(`  FIDE rating list downloaded: ${sizeMB} MB → ${zipPath}`);
+    return true;
+  } catch (err) {
+    console.error(`  Error downloading FIDE ratings:`, err);
+    // Clean up partial file
+    try {
+      unlinkSync(zipPath);
+    } catch {}
+    return false;
   }
 }
 
