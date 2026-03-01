@@ -26,7 +26,8 @@ import {
   finalizeGameProcessing,
 } from "./game-indexer";
 import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync, openSync, writeSync, closeSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync, openSync, writeSync, closeSync, unlinkSync, createReadStream } from "node:fs";
+import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -201,6 +202,69 @@ function streamWriteRecord(filePath: string, record: Record<string, string>): vo
 }
 
 /**
+ * Stream-write game-index.json from a JSONL temp file of GameIndexEntry objects.
+ * Reads one line at a time so the full index never lives in memory.
+ */
+async function streamWriteGameIndexFromJsonl(
+  outputPath: string,
+  jsonlPath: string,
+  totalGames: number
+): Promise<void> {
+  const fd = openSync(outputPath, "w");
+  writeSync(fd, `{"generatedAt":${JSON.stringify(new Date().toISOString())},"totalGames":${totalGames},"games":[`);
+
+  const rl = createInterface({
+    input: createReadStream(jsonlPath, { encoding: "utf-8" }),
+    crlfDelay: Infinity,
+  });
+
+  let first = true;
+  for await (const line of rl) {
+    if (!line) continue;
+    if (!first) writeSync(fd, ",");
+    writeSync(fd, line);
+    first = false;
+  }
+
+  writeSync(fd, "]}");
+  closeSync(fd);
+}
+
+/**
+ * Stream-write game-aliases.json from a tab-separated JSONL temp file.
+ * Each line is: legacySlug\tnewSlug
+ * Returns the number of aliases written.
+ */
+async function streamWriteGameAliasesFromJsonl(
+  outputPath: string,
+  jsonlPath: string
+): Promise<number> {
+  const fd = openSync(outputPath, "w");
+  writeSync(fd, "{");
+
+  const rl = createInterface({
+    input: createReadStream(jsonlPath, { encoding: "utf-8" }),
+    crlfDelay: Infinity,
+  });
+
+  let first = true;
+  let count = 0;
+  for await (const line of rl) {
+    if (!line) continue;
+    const tabIdx = line.indexOf("\t");
+    if (tabIdx === -1) continue;
+    if (!first) writeSync(fd, ",");
+    writeSync(fd, `${JSON.stringify(line.slice(0, tabIdx))}:${JSON.stringify(line.slice(tabIdx + 1))}`);
+    first = false;
+    count++;
+  }
+
+  writeSync(fd, "}");
+  closeSync(fd);
+  return count;
+}
+
+/**
  * Two-pass pipeline: aggregate without rawPgn (low memory), then process
  * games one PGN file at a time with rawPgn. Prevents OOM on large datasets.
  */
@@ -268,8 +332,14 @@ async function processTwoPass(
   if (existsSync(GAME_DETAILS_JSONL)) unlinkSync(GAME_DETAILS_JSONL);
   const gameDetailsFd = openSync(GAME_DETAILS_JSONL, "w");
 
+  // Open temp JSONL files for index entries and game aliases (streamed to disk to avoid OOM)
+  const INDEX_ENTRIES_JSONL = join(GAMES_TEMP_DIR, "index-entries.jsonl");
+  const GAME_ALIASES_JSONL_TEMP = join(GAMES_TEMP_DIR, "game-aliases.jsonl");
+  const indexEntriesFd = openSync(INDEX_ENTRIES_JSONL, "w");
+  const gameAliasesFd = openSync(GAME_ALIASES_JSONL_TEMP, "w");
+
   console.log("  Initializing game processing state...");
-  const gameState = createGameProcessingState(players, { minElo: opts.minElo });
+  const gameState = createGameProcessingState(players, { minElo: opts.minElo, indexEntriesFd, gameAliasesFd });
   console.log(`  Ready to process ${pgnFiles.length} PGN files\n`);
 
   for (let fi = 0; fi < pgnFiles.length; fi++) {
@@ -313,8 +383,10 @@ async function processTwoPass(
     // games + batchAppends freed at next iteration
   }
 
-  // Close game-details JSONL file
+  // Close all JSONL file descriptors
   closeSync(gameDetailsFd);
+  closeSync(indexEntriesFd);
+  closeSync(gameAliasesFd);
 
   // Convert JSONL temp files to final JSON array files
   const totalSlugs = slugsWithGames.size;
@@ -335,23 +407,19 @@ async function processTwoPass(
     }
   }
 
-  // Clean up temp directory
-  console.log("\nCleaning up temp files...");
-  rmSync(GAMES_TEMP_DIR, { recursive: true, force: true });
-
-  // Finalize game index + recent games + notable games + game aliases
-  console.log("Finalizing game index + recent/notable games...");
-  const { gameIndex, playerRecentGames, playerNotableGames, gameAliases } = finalizeGameProcessing(gameState);
-  const totalGamesIndexed = gameIndex.totalGames;
+  // Finalize recent/notable games (game index + aliases are already on disk as JSONL)
+  console.log("Finalizing recent/notable games...");
+  const totalGamesIndexed = gameState.totalGamesIndexed;
   const gameDetailFilesWritten = gameState.filesWritten;
+  const { playerRecentGames, playerNotableGames } = finalizeGameProcessing(gameState);
   console.log(`  ${totalGamesIndexed} games indexed`);
 
-  // Free gameState — finalizeGameProcessing already extracted what we need
-  gameState.indexEntries.length = 0;
+  // Free gameState
   gameState.recentGamesMap.clear();
   gameState.notableGamesMap.clear();
-  gameState.gameAliases.clear();
   gameState.seenKeys.clear();
+  gameState.slugCounts.clear();
+  gameState.legacySlugCounts.clear();
   gameState.playerByFideId.clear();
 
   console.log("Attaching recent/notable games to players...");
@@ -378,13 +446,14 @@ async function processTwoPass(
   writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
 
   console.log(`  game-index.json (${totalGamesIndexed} games)...`);
-  streamWriteGameIndex(join(PROCESSED_DIR, "game-index.json"), gameIndex);
-  // Free the large games array now that it's written
-  gameIndex.games.length = 0;
+  await streamWriteGameIndexFromJsonl(join(PROCESSED_DIR, "game-index.json"), INDEX_ENTRIES_JSONL, totalGamesIndexed);
 
-  const totalGameAliases = Object.keys(gameAliases).length;
-  console.log(`  game-aliases.json (${totalGameAliases} aliases)...`);
-  streamWriteRecord(join(PROCESSED_DIR, "game-aliases.json"), gameAliases);
+  console.log(`  game-aliases.json...`);
+  const totalGameAliases = await streamWriteGameAliasesFromJsonl(join(PROCESSED_DIR, "game-aliases.json"), GAME_ALIASES_JSONL_TEMP);
+
+  // Clean up temp directory (after all JSONL reads are done)
+  console.log("\nCleaning up temp files...");
+  rmSync(GAMES_TEMP_DIR, { recursive: true, force: true });
 
   console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
   console.log(`  index.json:          ${index.totalPlayers} players`);
@@ -395,7 +464,7 @@ async function processTwoPass(
   console.log(`  aliases.json:        ${Object.keys(aliasMap).length} aliases`);
   console.log(`  game-aliases:        ${totalGameAliases} game aliases\n`);
 
-  return { players, index, aliasMap, gameAliases, gameIndex, gameFilesWritten, gameDetailFilesWritten };
+  return { players, index, aliasMap, gameFilesWritten, gameDetailFilesWritten };
 }
 
 // ─── smoke ────────────────────────────────────────────────────────────────────
@@ -674,26 +743,23 @@ program
 
     const gameFileCount = readdirSync(GAMES_DIR).filter(f => f.endsWith(".json")).length;
 
-    // Load game index if available
+    // Game index: stream from disk (1GB+) instead of reading into memory
     const gameIndexPath = join(PROCESSED_DIR, "game-index.json");
-    const gameIndex: GameIndex | undefined = existsSync(gameIndexPath)
-      ? JSON.parse(readFileSync(gameIndexPath, "utf-8"))
-      : undefined;
+    const hasGameIndex = existsSync(gameIndexPath);
 
-    // Count game details from JSONL file
+    // Count game details from JSONL file by streaming (avoid reading entire file)
     let gameDetailCount = 0;
     if (existsSync(GAME_DETAILS_JSONL)) {
-      const content = readFileSync(GAME_DETAILS_JSONL, "utf-8");
-      for (let i = 0; i < content.length; i++) {
-        if (content[i] === "\n") gameDetailCount++;
-      }
+      const rl = createInterface({
+        input: createReadStream(GAME_DETAILS_JSONL, { encoding: "utf-8" }),
+        crlfDelay: Infinity,
+      });
+      for await (const _ of rl) gameDetailCount++;
     }
 
-    // Load game aliases if available
+    // Game aliases: stream from disk (355MB+) instead of reading into memory
     const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
-    const gameAliases: Record<string, string> | undefined = existsSync(gameAliasesPath)
-      ? JSON.parse(readFileSync(gameAliasesPath, "utf-8"))
-      : undefined;
+    const hasGameAliases = existsSync(gameAliasesPath);
 
     console.log(`\nUploading to Vercel Blob (prefix: ${opts.prefix}/)`);
     console.log(`  ${index.totalPlayers} players, ${gameFileCount} game files, ${gameDetailCount} game pages, ${Object.keys(aliases).length} aliases\n`);
@@ -703,8 +769,8 @@ program
       prefix: opts.prefix,
       gameDetailsJsonl: existsSync(GAME_DETAILS_JSONL) ? GAME_DETAILS_JSONL : undefined,
       gameDetailCount,
-      gameIndex,
-      gameAliases,
+      gameIndexPath: hasGameIndex ? gameIndexPath : undefined,
+      gameAliasesPath: hasGameAliases ? gameAliasesPath : undefined,
       onProgress: (uploaded, total) => {
         if (uploaded % 200 === 0 || uploaded === total) {
           const pct = Math.round((uploaded / total) * 100);
@@ -754,7 +820,7 @@ program
       .sort();
 
     const pgnFiles = pgnFileNames.map((f) => ({ name: f, path: join(DATA_DIR, f) }));
-    const { players, index, aliasMap, gameAliases, gameIndex, gameDetailFilesWritten } =
+    const { players, index, aliasMap, gameDetailFilesWritten } =
       await processTwoPass(pgnFiles, { minGames, minElo });
 
     // Step 3: Upload
@@ -766,12 +832,18 @@ program
 
     console.log(`\nStep 3/3: Upload to Vercel Blob (prefix: ${opts.prefix}/)\n`);
 
+    // Stream large files from disk instead of using in-memory objects
+    // (processTwoPass clears gameIndex.games after writing to disk, so
+    //  the in-memory object would upload an empty game index)
+    const fullGameIndexPath = join(PROCESSED_DIR, "game-index.json");
+    const fullGameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
+
     const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
       prefix: opts.prefix,
       gameDetailsJsonl: GAME_DETAILS_JSONL,
       gameDetailCount: gameDetailFilesWritten,
-      gameIndex,
-      gameAliases,
+      gameIndexPath: existsSync(fullGameIndexPath) ? fullGameIndexPath : undefined,
+      gameAliasesPath: existsSync(fullGameAliasesPath) ? fullGameAliasesPath : undefined,
       onProgress: (uploaded, total) => {
         if (uploaded % 500 === 0 || uploaded === total) {
           const pct = Math.round((uploaded / total) * 100);

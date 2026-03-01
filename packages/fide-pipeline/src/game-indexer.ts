@@ -431,24 +431,61 @@ function insertNotableCandidate(
   }
 }
 
+/**
+ * Insert a recent game for a player, keeping only the most recent
+ * maxPerPlayer entries. Evicts the oldest entry when full.
+ */
+function insertRecentGame(
+  map: Map<string, { date: string; game: RecentGame }[]>,
+  slug: string,
+  entry: { date: string; game: RecentGame },
+  maxPerPlayer: number
+): void {
+  const entries = map.get(slug);
+  if (!entries) {
+    map.set(slug, [entry]);
+    return;
+  }
+  if (entries.length < maxPerPlayer) {
+    entries.push(entry);
+    return;
+  }
+  // Find the oldest entry and replace if new one is more recent
+  let oldestIdx = 0;
+  let oldestDate = entries[0].date;
+  for (let i = 1; i < entries.length; i++) {
+    if (entries[i].date < oldestDate) {
+      oldestDate = entries[i].date;
+      oldestIdx = i;
+    }
+  }
+  if (entry.date > oldestDate) {
+    entries[oldestIdx] = entry;
+  }
+}
+
 /** Mutable state carried across PGN file chunks during incremental game processing. */
 export interface GameProcessingState {
   seenKeys: Set<string>;
   slugCounts: Map<string, number>;
   legacySlugCounts: Map<string, number>;
-  indexEntries: GameIndexEntry[];
+  /** FD for index entries JSONL temp file (streamed to disk instead of in-memory array). */
+  indexEntriesFd: number;
+  totalGamesIndexed: number;
   recentGamesMap: Map<string, { date: string; game: RecentGame }[]>;
   notableGamesMap: Map<string, NotableGameCandidate[]>;
-  gameAliases: Map<string, string>; // legacy slug → new slug (for 301 redirects)
+  /** FD for game aliases JSONL temp file (streamed to disk instead of in-memory Map). */
+  gameAliasesFd: number;
   playerByFideId: Map<string, FIDEPlayer>;
   minElo: number;
   filesWritten: number;
+  maxRecentPerPlayer: number;
 }
 
 /** Create initial state for incremental game processing. */
 export function createGameProcessingState(
   players: FIDEPlayer[],
-  options: { minElo?: number } = {}
+  options: { minElo?: number; indexEntriesFd: number; gameAliasesFd: number; maxRecentPerPlayer?: number }
 ): GameProcessingState {
   const playerByFideId = new Map<string, FIDEPlayer>();
   for (const p of players) {
@@ -458,13 +495,15 @@ export function createGameProcessingState(
     seenKeys: new Set(),
     slugCounts: new Map(),
     legacySlugCounts: new Map(),
-    indexEntries: [],
+    indexEntriesFd: options.indexEntriesFd,
+    totalGamesIndexed: 0,
     recentGamesMap: new Map(),
     notableGamesMap: new Map(),
-    gameAliases: new Map(),
+    gameAliasesFd: options.gameAliasesFd,
     playerByFideId,
     minElo: options.minElo ?? 500,
     filesWritten: 0,
+    maxRecentPerPlayer: options.maxRecentPerPlayer ?? 10,
   };
 }
 
@@ -515,12 +554,12 @@ export function processGameDetailsChunk(
     const legacyCount = (state.legacySlugCounts.get(legacySlug) ?? 0) + 1;
     state.legacySlugCounts.set(legacySlug, legacyCount);
     if (legacyCount > 1) legacySlug = `${legacySlug}-${legacyCount}`;
-    state.gameAliases.set(legacySlug, slug);
+    // Stream alias to disk instead of accumulating in memory
+    writeSync(state.gameAliasesFd, legacySlug + "\t" + slug + "\n");
 
     const opening = resolveOpeningName(game.eco ?? null, headers["Opening"] ?? null);
 
-    // Write game detail file to disk immediately — no accumulation of PGN strings
-    // Use __ separator in filenames since slugs now contain /
+    // Write game detail to disk immediately — no accumulation of PGN strings
     const detail: GameDetail = {
       slug,
       whiteName,
@@ -548,8 +587,8 @@ export function processGameDetailsChunk(
     writeSync(gameDetailsFd, JSON.stringify(detail) + "\n");
     state.filesWritten++;
 
-    // Accumulate lightweight index entry (no pgn)
-    state.indexEntries.push({
+    // Stream index entry to disk instead of accumulating in memory
+    writeSync(state.indexEntriesFd, JSON.stringify({
       slug,
       whiteName,
       blackName,
@@ -566,9 +605,10 @@ export function processGameDetailsChunk(
       result: game.result,
       eco: game.eco ?? null,
       opening,
-    });
+    }) + "\n");
+    state.totalGamesIndexed++;
 
-    // Accumulate recent games + notable games per player
+    // Accumulate recent games + notable games per player (bounded)
     const whiteResult: "Won" | "Lost" | "Draw" =
       game.result === "1-0" ? "Won" : game.result === "0-1" ? "Lost" : "Draw";
     const blackResult: "Won" | "Lost" | "Draw" =
@@ -586,8 +626,7 @@ export function processGameDetailsChunk(
         isWhite: true,
       };
 
-      if (!state.recentGamesMap.has(whiteSlug)) state.recentGamesMap.set(whiteSlug, []);
-      state.recentGamesMap.get(whiteSlug)!.push({ date: game.date, game: whiteGame });
+      insertRecentGame(state.recentGamesMap, whiteSlug, { date: game.date, game: whiteGame }, state.maxRecentPerPlayer);
 
       // Notable game scoring: opponent elo + win bonus + opponent-has-page bonus
       const whiteScore = bElo
@@ -608,8 +647,7 @@ export function processGameDetailsChunk(
         isWhite: false,
       };
 
-      if (!state.recentGamesMap.has(blackSlug)) state.recentGamesMap.set(blackSlug, []);
-      state.recentGamesMap.get(blackSlug)!.push({ date: game.date, game: blackGame });
+      insertRecentGame(state.recentGamesMap, blackSlug, { date: game.date, game: blackGame }, state.maxRecentPerPlayer);
 
       // Notable game scoring
       const blackScore = wElo
@@ -621,31 +659,20 @@ export function processGameDetailsChunk(
 }
 
 /**
- * Finalize incremental game processing: build GameIndex and per-player recent games.
+ * Finalize incremental game processing: build per-player recent + notable games.
+ * Game index and aliases are already streamed to disk via FDs during processing.
  */
 export function finalizeGameProcessing(
   state: GameProcessingState,
-  maxRecentPerPlayer: number = 10,
   maxNotablePerPlayer: number = 10
 ): {
-  gameIndex: GameIndex;
   playerRecentGames: Map<string, RecentGame[]>;
   playerNotableGames: Map<string, RecentGame[]>;
-  gameAliases: Record<string, string>;
 } {
-  const gameIndex: GameIndex = {
-    generatedAt: new Date().toISOString(),
-    totalGames: state.indexEntries.length,
-    games: state.indexEntries.slice(),
-  };
-
   const playerRecentGames = new Map<string, RecentGame[]>();
   for (const [playerSlug, entries] of state.recentGamesMap) {
     entries.sort((a, b) => b.date.localeCompare(a.date));
-    playerRecentGames.set(
-      playerSlug,
-      entries.slice(0, maxRecentPerPlayer).map((e) => e.game)
-    );
+    playerRecentGames.set(playerSlug, entries.map((e) => e.game));
   }
 
   // Build notable games: top-scored, deduplicated against recent games
@@ -667,11 +694,5 @@ export function finalizeGameProcessing(
     }
   }
 
-  // Build game aliases as a plain record
-  const gameAliases: Record<string, string> = {};
-  for (const [legacySlug, newSlug] of state.gameAliases) {
-    gameAliases[legacySlug] = newSlug;
-  }
-
-  return { gameIndex, playerRecentGames, playerNotableGames, gameAliases };
+  return { playerRecentGames, playerNotableGames };
 }

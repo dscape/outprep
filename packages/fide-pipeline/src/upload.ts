@@ -28,8 +28,10 @@ interface UploadOptions {
   fresh?: boolean; // Ignore resume state
   gameDetailsJsonl?: string; // Path to game-details.jsonl file
   gameDetailCount?: number; // Total game details for progress calculation
-  gameIndex?: GameIndex; // Game index to upload
-  gameAliases?: Record<string, string>; // Legacy game slug → new slug map
+  gameIndex?: GameIndex; // Game index to upload (in-memory, for small datasets)
+  gameAliases?: Record<string, string>; // Legacy game slug → new slug map (in-memory)
+  gameIndexPath?: string; // Path to game-index.json (streamed to avoid OOM on large files)
+  gameAliasesPath?: string; // Path to game-aliases.json (streamed to avoid OOM)
 }
 
 // ─── Retry helper ────────────────────────────────────────────────────────────
@@ -193,8 +195,8 @@ export async function uploadAllFromDisk(
     : [];
 
   // +1 for game-index.json if present, +1 for game-aliases.json if present
-  const gameIndexCount = opts?.gameIndex ? 1 : 0;
-  const gameAliasCount = opts?.gameAliases ? 1 : 0;
+  const gameIndexCount = (opts?.gameIndex || opts?.gameIndexPath) ? 1 : 0;
+  const gameAliasCount = (opts?.gameAliases || opts?.gameAliasesPath) ? 1 : 0;
   const gameDetailTotal = opts?.gameDetailCount ?? 0;
   const total = 2 + gameAliasCount + players.length + gameFiles.length + gameIndexCount + gameDetailTotal;
   let uploaded = 0;
@@ -221,17 +223,21 @@ export async function uploadAllFromDisk(
   onProgress?.(uploaded, total);
 
   // 2b. Upload game aliases (legacy slug → new slug for 301 redirects)
-  if (opts?.gameAliases) {
-    const gameAliasesPath = `${prefix}/game-aliases.json`;
-    if (!state.uploaded.has(gameAliasesPath)) {
+  if (opts?.gameAliases || opts?.gameAliasesPath) {
+    const gameAliasesBlobPath = `${prefix}/game-aliases.json`;
+    if (!state.uploaded.has(gameAliasesBlobPath)) {
+      // Prefer streaming from file path to avoid OOM on large files
+      const body = opts.gameAliasesPath
+        ? createReadStream(opts.gameAliasesPath)
+        : JSON.stringify(opts.gameAliases);
       await retryWithBackoff(() =>
-        put(gameAliasesPath, JSON.stringify(opts.gameAliases), {
+        put(gameAliasesBlobPath, body, {
           access: "public",
           contentType: "application/json",
           addRandomSuffix: false,
         })
       );
-      state.uploaded.add(gameAliasesPath);
+      state.uploaded.add(gameAliasesBlobPath);
       saveState(stateFile, state);
     }
     uploaded++;
@@ -283,17 +289,21 @@ export async function uploadAllFromDisk(
   }
 
   // 5. Upload game index (if provided)
-  if (opts?.gameIndex) {
-    const gameIndexPath = `${prefix}/game-index.json`;
-    if (!state.uploaded.has(gameIndexPath)) {
+  if (opts?.gameIndex || opts?.gameIndexPath) {
+    const gameIndexBlobPath = `${prefix}/game-index.json`;
+    if (!state.uploaded.has(gameIndexBlobPath)) {
+      // Prefer streaming from file path to avoid OOM on large files (1GB+)
+      const body = opts.gameIndexPath
+        ? createReadStream(opts.gameIndexPath)
+        : JSON.stringify(opts.gameIndex);
       await retryWithBackoff(() =>
-        put(gameIndexPath, JSON.stringify(opts.gameIndex), {
+        put(gameIndexBlobPath, body, {
           access: "public",
           contentType: "application/json",
           addRandomSuffix: false,
         })
       );
-      state.uploaded.add(gameIndexPath);
+      state.uploaded.add(gameIndexBlobPath);
       saveState(stateFile, state);
     }
     uploaded++;
