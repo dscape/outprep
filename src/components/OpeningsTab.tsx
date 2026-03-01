@@ -45,8 +45,8 @@ function ResultBadge({ result, playerColor }: { result: string; playerColor: "wh
 function CoverageBadge({ coverage }: { coverage: OpeningCoverage }) {
   if (coverage.analyzed === 0) {
     return (
-      <span className="text-[10px] text-zinc-600" title="No games in this opening have engine analysis">
-        no evals
+      <span className="text-[10px] text-zinc-600" title="No games in this opening have engine analysis yet">
+        none
       </span>
     );
   }
@@ -160,8 +160,9 @@ export default function OpeningsTab({
       {/* Coverage nudge banner */}
       {coverageStats && coverageStats.total > 0 && coverageStats.analyzed < coverageStats.total * 0.5 && (
         <div className="mb-4 rounded-lg border border-zinc-700/40 bg-zinc-800/30 px-3 py-2 text-xs text-zinc-400">
-          Only {coverageStats.analyzed} of {coverageStats.total} games have engine analysis.
-          Run a Quick Scan for more accurate data.
+          Only {coverageStats.analyzed} of {coverageStats.total} games have engine analysis
+          (move-by-move evaluation that detects mistakes and blunders).
+          Run a Quick Scan above for a more accurate error profile.
         </div>
       )}
 
@@ -179,7 +180,7 @@ export default function OpeningsTab({
                 <th className="pb-2 pr-4 font-medium text-right">Freq</th>
                 <th className="pb-2 pr-4 font-medium min-w-[120px]">W / D / L</th>
                 {hasCoverage && (
-                  <th className="pb-2 font-medium text-right" title="Engine analysis coverage">Evals</th>
+                  <th className="pb-2 font-medium text-right" title="How many games have move-by-move engine analysis (detects mistakes and blunders)">Analyzed</th>
                 )}
               </tr>
             </thead>

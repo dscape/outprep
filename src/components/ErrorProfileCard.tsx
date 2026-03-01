@@ -140,8 +140,31 @@ export default function ErrorProfileCard({
   isUpgrading = false,
   upgradeComplete = false,
 }: ErrorProfileCardProps) {
+  // No analyzed games yet — show a nudge to run analysis instead of hiding the card
   if (errorProfile.gamesAnalyzed === 0 && !isUpgrading) {
-    return null;
+    if (!onUpgrade || !totalGames || totalGames === 0) return null;
+    const unevalCount = totalGames;
+    const quickTime = estimateTime(unevalCount, "sampling");
+    return (
+      <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
+        <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide mb-3">
+          Error Profile
+        </h3>
+        <div className="rounded-lg border border-yellow-600/30 bg-yellow-900/10 px-4 py-3">
+          <p className="text-sm text-zinc-300 mb-1">No engine analysis yet</p>
+          <p className="text-xs text-zinc-500 mb-3">
+            Run a quick scan to detect mistakes and blunders across {unevalCount} games.
+            This powers the error profile, weakness detection, and prep tips.
+          </p>
+          <button
+            onClick={() => onUpgrade("sampling")}
+            className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-green-500"
+          >
+            Quick Scan {quickTime < 120 ? `(${formatTime(quickTime)})` : ""}
+          </button>
+        </div>
+      </div>
+    );
   }
 
   const insight = generateInsight(errorProfile);
@@ -158,10 +181,13 @@ export default function ErrorProfileCard({
         <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide">
           Error Profile
         </h3>
-        <span className="text-xs text-zinc-600">
+        <span
+          className="text-xs text-zinc-600 cursor-help"
+          title="Games with engine evaluations (from Lichess or Stockfish) that rate each move's quality, detecting mistakes and blunders."
+        >
           {upgradeComplete && totalGames
             ? `${totalGames} games analyzed`
-            : `${errorProfile.gamesAnalyzed} games with evals`}
+            : `${errorProfile.gamesAnalyzed} games with engine analysis`}
         </span>
       </div>
 

@@ -365,14 +365,20 @@ export function buildPlayerNotableGames(
     }
   }
 
+  const MAX_PER_OPPONENT = 2; // Ensure diverse opponents in notable games
   const result = new Map<string, RecentGame[]>();
   for (const [playerSlug, cands] of candidates) {
     cands.sort((a, b) => b.score - a.score);
     const recentSlugs = new Set((recentGames.get(playerSlug) ?? []).map((g) => g.slug));
     const notable: RecentGame[] = [];
+    const opponentCounts = new Map<string, number>();
     for (const c of cands) {
       if (notable.length >= maxPerPlayer) break;
-      if (!recentSlugs.has(c.game.slug)) notable.push(c.game);
+      if (recentSlugs.has(c.game.slug)) continue;
+      const oppCount = opponentCounts.get(c.game.opponentName) ?? 0;
+      if (oppCount >= MAX_PER_OPPONENT) continue;
+      opponentCounts.set(c.game.opponentName, oppCount + 1);
+      notable.push(c.game);
     }
     if (notable.length > 0) result.set(playerSlug, notable);
   }
@@ -687,7 +693,8 @@ export function finalizeGameProcessing(
     playerRecentGames.set(playerSlug, entries.map((e) => e.game));
   }
 
-  // Build notable games: top-scored, deduplicated against recent games
+  // Build notable games: top-scored, deduplicated against recent games, diverse opponents
+  const MAX_PER_OPPONENT = 2;
   const playerNotableGames = new Map<string, RecentGame[]>();
   for (const [playerSlug, candidates] of state.notableGamesMap) {
     candidates.sort((a, b) => b.score - a.score);
@@ -695,11 +702,14 @@ export function finalizeGameProcessing(
       (playerRecentGames.get(playerSlug) ?? []).map((g) => g.slug)
     );
     const notable: RecentGame[] = [];
+    const opponentCounts = new Map<string, number>();
     for (const c of candidates) {
       if (notable.length >= maxNotablePerPlayer) break;
-      if (!recentSlugs.has(c.game.slug)) {
-        notable.push(c.game);
-      }
+      if (recentSlugs.has(c.game.slug)) continue;
+      const oppCount = opponentCounts.get(c.game.opponentName) ?? 0;
+      if (oppCount >= MAX_PER_OPPONENT) continue;
+      opponentCounts.set(c.game.opponentName, oppCount + 1);
+      notable.push(c.game);
     }
     if (notable.length > 0) {
       playerNotableGames.set(playerSlug, notable);

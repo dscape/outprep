@@ -399,13 +399,10 @@ export default function GameReplay({
   const handleOpenLichess = useCallback(async () => {
     setLichessImporting(true);
     try {
-      const res = await fetch("https://lichess.org/api/import", {
+      const res = await fetch("/api/lichess-import", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          Accept: "application/json",
-        },
-        body: new URLSearchParams({ pgn }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pgn }),
       });
       if (!res.ok) throw new Error(`Import failed: ${res.status}`);
       const data = await res.json();

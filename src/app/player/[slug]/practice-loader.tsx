@@ -2,8 +2,6 @@
 
 import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { parseAllPGNGames } from "@/lib/pgn-parser";
-import { analyzeOTBGames } from "@/lib/otb-analyzer";
 
 interface PracticeLoaderProps {
   slug: string;
@@ -23,35 +21,22 @@ export default function PracticeLoader({
     setError(null);
 
     try {
-      // 1. Fetch raw PGN games from Blob via API
-      const res = await fetch(`/api/fide-games/${encodeURIComponent(slug)}`);
+      // Fetch pre-built OTB profile from server (parsing + analysis done server-side)
+      const res = await fetch(`/api/fide-practice/${encodeURIComponent(slug)}?name=${encodeURIComponent(playerName)}`);
       if (!res.ok) {
-        throw new Error("Failed to load games");
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || "Failed to load games");
       }
 
-      const { games: rawPgns } = (await res.json()) as { games: string[] };
-      if (!rawPgns || rawPgns.length === 0) {
-        throw new Error("No games available for this player");
-      }
+      const profile = await res.json();
 
-      // 2. Parse PGNs using existing chess.js-based parser
-      const combinedPgn = rawPgns.join("\n\n");
-      const otbGames = parseAllPGNGames(combinedPgn);
-
-      if (otbGames.length === 0) {
-        throw new Error("Could not parse any games");
-      }
-
-      // 3. Build OTB profile using existing analyzer
-      const profile = analyzeOTBGames(otbGames, playerName);
-
-      // 4. Store in sessionStorage (existing pattern from OTBUploader)
+      // Store compact profile in sessionStorage (PGN text already stripped server-side)
       sessionStorage.setItem(
         `pgn-import:${playerName}`,
         JSON.stringify(profile)
       );
 
-      // 5. Navigate to scout page in PGN mode
+      // Navigate to scout page in PGN mode
       router.push(
         `/scout/${encodeURIComponent(playerName)}?source=pgn`
       );

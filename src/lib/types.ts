@@ -199,4 +199,5 @@ export interface GameAnalysis {
   keyMoments: KeyMoment[];
   coachingNarrative: string;
   opponentFideEstimate?: number;
+  scoutedUsername?: string; // When reviewing a scouted player's game (playerColor = scouted player's color)
 }

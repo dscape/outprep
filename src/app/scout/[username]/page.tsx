@@ -222,6 +222,7 @@ export default function ScoutPage() {
     totalGames: number;
   } | null>(null);
   const [fullLoading, setFullLoading] = useState(true);
+  const [timeRangeLoading, setTimeRangeLoading] = useState(false);
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("openings");
   const [selectedSpeeds, setSelectedSpeeds] = useState<string[]>([]);
@@ -245,6 +246,7 @@ export default function ScoutPage() {
   const evalEngineRef = useRef<StockfishEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const computedEvalsRef = useRef<GameEvalData[]>([]);
+  const profileRef = useRef<PlayerProfile | null>(null);
 
   // Drill-down: raw Lichess games for opening expansion
   const [rawLichessGames, setRawLichessGames] = useState<LichessGame[] | null>(null);
@@ -308,7 +310,10 @@ export default function ScoutPage() {
     }
 
     // Phase 2: Full profile with analysis
-    async function loadFullProfile() {
+    async function loadFullProfile(isTimeRangeChange: boolean) {
+      if (isTimeRangeChange) {
+        setTimeRangeLoading(true);
+      }
       try {
         const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
         const since = sinceMs ? Date.now() - sinceMs : undefined;
@@ -321,11 +326,13 @@ export default function ScoutPage() {
           const data = await res.json();
           setError(data.error || "Failed to load profile");
           setFullLoading(false);
+          setTimeRangeLoading(false);
           return;
         }
 
         const data = await res.json();
         setProfile(data);
+        profileRef.current = data;
         // Default: all available speeds selected
         setSelectedSpeeds(
           Object.keys(data.bySpeed || {}).sort(
@@ -336,11 +343,14 @@ export default function ScoutPage() {
         setError("Network error. Please try again.");
       } finally {
         setFullLoading(false);
+        setTimeRangeLoading(false);
       }
     }
 
     loadBasic();
-    loadFullProfile();
+    // Only show full loading skeleton on initial load, not time range changes
+    const isTimeRangeChange = !!profileRef.current;
+    loadFullProfile(isTimeRangeChange);
   }, [username, isPGNMode, timeRange]);
 
   // Cleanup on unmount
@@ -463,17 +473,23 @@ export default function ScoutPage() {
     return mergeSpeedProfiles(profile, selectedSpeeds);
   }, [profile, selectedSpeeds]);
 
+  // Compute prep tips for the current filter selection
+  const filteredPrepTips = useMemo((): PrepTip[] => {
+    if (!filteredData) return [];
+    return generatePrepTips(filteredData.weaknesses, filteredData.openings, filteredData.style);
+  }, [filteredData]);
+
   // Drill-down: navigate to analysis page for a single game
-  // Flip perspective: the user would play the OPPOSITE color of the scouted player
+  // Keep the scouted player's perspective (their color, their performance)
   const handleAnalyzeGame = useCallback(
     (game: GameForDrilldown) => {
-      const userColor = game.playerColor === "white" ? "black" : "white";
       const storedGame = {
         pgn: game.pgn,
         result: game.result,
-        playerColor: userColor,
-        opponentUsername: username,
+        playerColor: game.playerColor,
+        opponentUsername: game.opponent,
         opponentFideEstimate: profile?.fideEstimate?.rating,
+        scoutedUsername: username,
       };
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
       router.push(`/analysis/${game.id}`);
@@ -1054,7 +1070,6 @@ export default function ScoutPage() {
                 onClick={() => {
                   if (key !== timeRange) {
                     setTimeRange(key);
-                    setFullLoading(true);
                   }
                 }}
                 className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
@@ -1064,6 +1079,9 @@ export default function ScoutPage() {
                 }`}
               >
                 {label}
+                {timeRangeLoading && timeRange === key && (
+                  <span className="ml-1.5 inline-block h-3 w-3 rounded-full border-2 border-green-200 border-t-transparent animate-spin align-middle" />
+                )}
               </button>
             ))}
           </div>
@@ -1133,7 +1151,7 @@ export default function ScoutPage() {
                 speeds={selectedSpeeds.join(",")}
               />
             )}
-            {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? profile.prepTips} />}
+            {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />}
             {activeTab === "otb" && otbProfile && (
               <OTBAnalysisTab profile={otbProfile} />
             )}
@@ -1148,6 +1166,10 @@ export default function ScoutPage() {
           >
             Practice against {profile.username}
           </button>
+          <p className="text-xs text-zinc-500 mt-1">
+            Bot trained on {filteredData.games} {selectedSpeeds.join(" + ")} game{filteredData.games !== 1 ? "s" : ""}
+            {timeRange !== "all" ? ` from ${TIME_RANGES.find(t => t.key === timeRange)?.label?.toLowerCase()}` : ""}
+          </p>
 
           {showPlayConfirm && isUpgrading && (
             <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/80 p-4 text-center max-w-md animate-in fade-in duration-200">

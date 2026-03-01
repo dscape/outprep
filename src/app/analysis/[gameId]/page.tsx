@@ -21,6 +21,7 @@ interface StoredGame {
   opponentFideEstimate?: number;
   precomputedMoves?: MoveEval[];
   precomputedSummary?: AnalysisSummary;
+  scoutedUsername?: string; // When reviewing a scouted player's game (not your own)
 }
 
 export default function AnalysisPage() {
@@ -103,7 +104,7 @@ export default function AnalysisPage() {
         // Step 4: Opponent context overlay
         setStage("Cross-referencing opponent patterns...");
         const keyMoments = profile
-          ? tagMoments(moves, contexts, profile, gd.playerColor)
+          ? tagMoments(moves, contexts, profile, gd.playerColor, gd.scoutedUsername)
           : [];
 
         // Step 5: Generate narrative
@@ -143,6 +144,7 @@ export default function AnalysisPage() {
           keyMoments,
           coachingNarrative,
           opponentFideEstimate: gd.opponentFideEstimate,
+          scoutedUsername: gd.scoutedUsername,
         });
 
         setStage("");
@@ -174,10 +176,11 @@ export default function AnalysisPage() {
 
   // Progressive loading: show board and context while analysis runs
   if (!analysis && gameData) {
+    const playerLabel = gameData.scoutedUsername || "You";
     const resultLabel = gameData.result === "1-0"
-      ? (gameData.playerColor === "white" ? "You won" : "You lost")
+      ? (gameData.playerColor === "white" ? `${playerLabel} won` : `${playerLabel} lost`)
       : gameData.result === "0-1"
-        ? (gameData.playerColor === "black" ? "You won" : "You lost")
+        ? (gameData.playerColor === "black" ? `${playerLabel} won` : `${playerLabel} lost`)
         : "Draw";
 
     return (
@@ -186,11 +189,11 @@ export default function AnalysisPage() {
           <div className="mb-6 flex items-center justify-between">
             <button
               onClick={() =>
-                router.push(`/scout/${encodeURIComponent(gameData.opponentUsername)}`)
+                router.push(`/scout/${encodeURIComponent(gameData.scoutedUsername || gameData.opponentUsername)}`)
               }
               className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
             >
-              &larr; Back to {gameData.opponentUsername}
+              &larr; Back to {gameData.scoutedUsername || gameData.opponentUsername}
             </button>
           </div>
 
@@ -280,19 +283,19 @@ export default function AnalysisPage() {
         <div className="mb-6 flex items-center justify-between">
           <button
             onClick={() =>
-              router.push(`/scout/${encodeURIComponent(analysis.opponentUsername)}`)
+              router.push(`/scout/${encodeURIComponent(analysis.scoutedUsername || analysis.opponentUsername)}`)
             }
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            &larr; Back to {analysis.opponentUsername}
+            &larr; Back to {analysis.scoutedUsername || analysis.opponentUsername}
           </button>
           <button
             onClick={() =>
-              router.push(`/play/${encodeURIComponent(analysis.opponentUsername)}`)
+              router.push(`/play/${encodeURIComponent(analysis.scoutedUsername || analysis.opponentUsername)}`)
             }
             className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-500 transition-colors"
           >
-            Play again
+            Practice against {analysis.scoutedUsername || analysis.opponentUsername}
           </button>
         </div>
 

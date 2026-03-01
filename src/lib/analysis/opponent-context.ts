@@ -5,10 +5,13 @@ export function tagMoments(
   moves: MoveEval[],
   contexts: PositionContext[],
   profile: PlayerProfile,
-  playerColor: "white" | "black"
+  playerColor: "white" | "black",
+  playerName?: string
 ): KeyMoment[] {
   const moments: KeyMoment[] = [];
   const contextMap = new Map(contexts.map((c) => [c.ply, c]));
+  const pLabel = playerName || "Your";
+  const pPossessive = playerName ? `${playerName}'s` : "Your";
 
   // Get opponent's known openings
   const opponentOpenings = playerColor === "white"
@@ -63,10 +66,12 @@ export function tagMoments(
       // Player's move
       if (move.classification === "blunder" || move.classification === "mistake") {
         tag = "YOUR ERROR";
-        description = `Your ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+        description = `${pPossessive} ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
       } else if (move.evalDelta <= -30 && exploitsWeakness(context, profile, weaknessAreas)) {
         tag = "PREP HIT";
-        description = `Great move! You exploited the opponent's known weakness on move ${moveNum}.`;
+        description = playerName
+          ? `${playerName} exploited the opponent's known weakness on move ${moveNum}.`
+          : `Great move! You exploited the opponent's known weakness on move ${moveNum}.`;
       } else if (move.evalDelta <= -30 && context?.phase !== "opening") {
         tag = "EXPLOITED";
         description = `Strong move ${move.san} on move ${moveNum} gained a significant advantage.`;

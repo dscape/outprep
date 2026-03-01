@@ -135,20 +135,23 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   // eslint-disable-next-line react-hooks/refs -- keeping ref in sync for use in callbacks
   selectedPlyRef.current = selectedPly;
 
+  // Player label: use scouted player's name when reviewing their game, otherwise "You"
+  const playerLabel = analysis.scoutedUsername || "You";
+
   // Extract player names and Elo from PGN headers
   const pgnInfo = useMemo(() => {
     const h = parsePgnHeaders(analysis.pgn);
 
     const validHeader = (v: string | undefined) => v && v !== "?" ? v : undefined;
-    const whiteName = validHeader(h["White"]) || (analysis.playerColor === "white" ? "You" : analysis.opponentUsername);
-    const blackName = validHeader(h["Black"]) || (analysis.playerColor === "black" ? "You" : analysis.opponentUsername);
+    const whiteName = validHeader(h["White"]) || (analysis.playerColor === "white" ? playerLabel : analysis.opponentUsername);
+    const blackName = validHeader(h["Black"]) || (analysis.playerColor === "black" ? playerLabel : analysis.opponentUsername);
 
     // Opponent Elo: prefer PGN header, fallback to opponentFideEstimate
     const opponentEloField = analysis.playerColor === "white" ? "BlackElo" : "WhiteElo";
     const opponentElo = parseInt(h[opponentEloField]) || analysis.opponentFideEstimate || null;
 
     return { whiteName, blackName, opponentElo };
-  }, [analysis]);
+  }, [analysis, playerLabel]);
 
   const quality = useMemo(() => qualityLabel(analysis.summary.accuracy), [analysis.summary.accuracy]);
 
@@ -286,13 +289,10 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     // OTB game — import via Lichess API
     setLichessImporting(true);
     try {
-      const res = await fetch("https://lichess.org/api/import", {
+      const res = await fetch("/api/lichess-import", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/x-www-form-urlencoded",
-          "Accept": "application/json",
-        },
-        body: new URLSearchParams({ pgn: analysis.pgn }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pgn: analysis.pgn }),
       });
       if (!res.ok) throw new Error(`Import failed: ${res.status}`);
       const data = await res.json();
@@ -335,13 +335,14 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     [analysis.moves]
   );
 
-  // Determine if the scouted player won/lost/drew
+  // Determine if the player (scouted or self) won/lost/drew
   const isPlayerWin =
     (analysis.result === "1-0" && analysis.playerColor === "white") ||
     (analysis.result === "0-1" && analysis.playerColor === "black");
   const isPlayerLoss =
     (analysis.result === "1-0" && analysis.playerColor === "black") ||
     (analysis.result === "0-1" && analysis.playerColor === "white");
+  const resultText = isPlayerWin ? `${playerLabel} won` : isPlayerLoss ? `${playerLabel} lost` : "Draw";
 
   return (
     <div className="space-y-6">
@@ -372,7 +373,7 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
           {/* Right: quality label + perf rating */}
           <div className="text-right flex-shrink-0">
             <div className={`text-xl font-bold ${quality.color}`}>
-              {isPlayerWin ? "Won" : isPlayerLoss ? "Lost" : "Draw"}
+              {resultText}
               {" · "}
               <span className={quality.color}>{quality.label}</span>
             </div>
