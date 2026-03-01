@@ -27,7 +27,8 @@ import {
   finalizeGameProcessing,
 } from "./game-indexer";
 import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync, openSync, writeSync, closeSync, renameSync } from "node:fs";
+import { rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -156,6 +157,36 @@ function writePlayerGames(
 }
 
 /**
+ * Stream-write a JSON array to a file one element at a time to avoid
+ * building the entire JSON string in memory (prevents OOM on large arrays).
+ */
+function streamWriteJsonArray(filePath: string, items: unknown[]): void {
+  const fd = openSync(filePath, "w");
+  writeSync(fd, "[");
+  for (let i = 0; i < items.length; i++) {
+    if (i > 0) writeSync(fd, ",");
+    writeSync(fd, JSON.stringify(items[i]));
+  }
+  writeSync(fd, "]");
+  closeSync(fd);
+}
+
+/**
+ * Stream-write the GameIndex object — the `games` array is written element
+ * by element so we never stringify the entire index at once.
+ */
+function streamWriteGameIndex(filePath: string, gameIndex: GameIndex): void {
+  const fd = openSync(filePath, "w");
+  writeSync(fd, `{"generatedAt":${JSON.stringify(gameIndex.generatedAt)},"totalGames":${gameIndex.totalGames},"games":[`);
+  for (let i = 0; i < gameIndex.games.length; i++) {
+    if (i > 0) writeSync(fd, ",");
+    writeSync(fd, JSON.stringify(gameIndex.games[i]));
+  }
+  writeSync(fd, "]}");
+  closeSync(fd);
+}
+
+/**
  * Two-pass pipeline: aggregate without rawPgn (low memory), then process
  * games one PGN file at a time with rawPgn. Prevents OOM on large datasets.
  */
@@ -217,8 +248,14 @@ async function processTwoPass(
   mkdirSync(GAMES_TEMP_DIR, { recursive: true });
   const slugsWithGames = new Set<string>();
 
-  // Clean game-details dir before incremental writes
-  if (existsSync(GAME_DETAILS_DIR)) rmSync(GAME_DETAILS_DIR, { recursive: true });
+  // Clean game-details dir before incremental writes — rename instantly, delete in background
+  let oldGameDetailsCleanup: Promise<void> | null = null;
+  if (existsSync(GAME_DETAILS_DIR)) {
+    const oldDir = `${GAME_DETAILS_DIR}-old-${Date.now()}`;
+    console.log("  Moving previous game-details directory aside...");
+    renameSync(GAME_DETAILS_DIR, oldDir);
+    oldGameDetailsCleanup = rm(oldDir, { recursive: true, force: true }).catch(() => {});
+  }
   mkdirSync(GAME_DETAILS_DIR, { recursive: true });
 
   console.log("  Initializing game processing state...");
@@ -267,25 +304,34 @@ async function processTwoPass(
   }
 
   // Convert JSONL temp files to final JSON array files
-  console.log("\nWriting per-player game files...");
+  const totalSlugs = slugsWithGames.size;
+  console.log(`\nWriting per-player game files (${totalSlugs} players)...`);
   if (existsSync(GAMES_DIR)) rmSync(GAMES_DIR, { recursive: true });
   mkdirSync(GAMES_DIR, { recursive: true });
   let gameFilesWritten = 0;
   for (const slug of slugsWithGames) {
     const jsonlPath = join(GAMES_TEMP_DIR, `${slug}.jsonl`);
     if (!existsSync(jsonlPath)) continue;
-    const lines = readFileSync(jsonlPath, "utf-8").trimEnd().split("\n");
-    const pgns: string[] = lines.map((line) => JSON.parse(line));
-    writeFileSync(join(GAMES_DIR, `${slug}.json`), JSON.stringify(pgns));
+    // Each JSONL line is already a valid JSON value — avoid parse+re-stringify
+    const raw = readFileSync(jsonlPath, "utf-8").trimEnd();
+    writeFileSync(join(GAMES_DIR, `${slug}.json`), `[${raw.replaceAll("\n", ",")}]`);
     gameFilesWritten++;
+    if (gameFilesWritten % 5000 === 0 || gameFilesWritten === totalSlugs) {
+      const pct = Math.round((gameFilesWritten / totalSlugs) * 100);
+      console.log(`  [${gameFilesWritten}/${totalSlugs} ${pct}%] game files written`);
+    }
   }
-  console.log(`  ${gameFilesWritten} game files written`);
 
   // Clean up temp directory
+  console.log("\nCleaning up temp files...");
   rmSync(GAMES_TEMP_DIR, { recursive: true, force: true });
 
   // Finalize game index + recent games + notable games + game aliases
+  console.log("Finalizing game index + recent/notable games...");
   const { gameIndex, playerRecentGames, playerNotableGames, gameAliases } = finalizeGameProcessing(gameState);
+  console.log(`  ${gameIndex.totalGames} games indexed`);
+
+  console.log("Attaching recent/notable games to players...");
   for (const p of players) {
     p.recentGames = playerRecentGames.get(p.slug) ?? [];
     const notable = playerNotableGames.get(p.slug);
@@ -293,10 +339,22 @@ async function processTwoPass(
   }
 
   // Save index, players, aliases, game index, game aliases
+  // Stream-write large files to avoid OOM from JSON.stringify on huge arrays
+  console.log("\nWriting output files...");
+
+  console.log("  index.json...");
   writeFileSync(join(PROCESSED_DIR, "index.json"), JSON.stringify(index));
-  writeFileSync(join(PROCESSED_DIR, "players.json"), JSON.stringify(players));
+
+  console.log(`  players.json (${players.length} players)...`);
+  streamWriteJsonArray(join(PROCESSED_DIR, "players.json"), players);
+
+  console.log("  aliases.json...");
   writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
-  writeFileSync(join(PROCESSED_DIR, "game-index.json"), JSON.stringify(gameIndex));
+
+  console.log(`  game-index.json (${gameIndex.totalGames} games)...`);
+  streamWriteGameIndex(join(PROCESSED_DIR, "game-index.json"), gameIndex);
+
+  console.log("  game-aliases.json...");
   writeFileSync(join(PROCESSED_DIR, "game-aliases.json"), JSON.stringify(gameAliases));
 
   console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
@@ -307,6 +365,9 @@ async function processTwoPass(
   console.log(`  game-index.json: ${gameIndex.totalGames} games indexed`);
   console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases`);
   console.log(`  game-aliases:    ${Object.keys(gameAliases).length} game aliases\n`);
+
+  // Wait for background cleanup of old game-details directory
+  if (oldGameDetailsCleanup) await oldGameDetailsCleanup;
 
   return { players, index, aliasMap, gameAliases, gameIndex, gameFilesWritten, gameDetailFilesWritten: gameState.filesWritten };
 }
