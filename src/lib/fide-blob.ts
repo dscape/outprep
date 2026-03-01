@@ -287,9 +287,17 @@ export async function getGameIndex(): Promise<GameIndex | null> {
         "packages/fide-pipeline/data/processed/game-index.json"
       );
       if (fs.existsSync(gameIndexPath)) {
-        const data = JSON.parse(fs.readFileSync(gameIndexPath, "utf-8"));
-        cachedGameIndex = { data, fetchedAt: Date.now() };
-        return data;
+        const stat = fs.statSync(gameIndexPath);
+        // V8 cannot hold strings > ~512MB; skip files that would crash the process
+        if (stat.size > 256 * 1024 * 1024) {
+          console.warn(
+            `[fide-blob] game-index.json is too large (${(stat.size / 1024 / 1024).toFixed(0)}MB), skipping local load`
+          );
+        } else {
+          const data = JSON.parse(fs.readFileSync(gameIndexPath, "utf-8"));
+          cachedGameIndex = { data, fetchedAt: Date.now() };
+          return data;
+        }
       }
     } catch {
       // fall through to Blob
