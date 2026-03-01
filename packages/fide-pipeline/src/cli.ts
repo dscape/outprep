@@ -187,6 +187,23 @@ function streamWriteGameIndex(filePath: string, gameIndex: GameIndex): void {
 }
 
 /**
+ * Stream-write a Record<string,string> as JSON one key at a time to avoid
+ * building the entire string in memory.
+ */
+function streamWriteRecord(filePath: string, record: Record<string, string>): void {
+  const fd = openSync(filePath, "w");
+  writeSync(fd, "{");
+  let first = true;
+  for (const key of Object.keys(record)) {
+    if (!first) writeSync(fd, ",");
+    writeSync(fd, `${JSON.stringify(key)}:${JSON.stringify(record[key])}`);
+    first = false;
+  }
+  writeSync(fd, "}");
+  closeSync(fd);
+}
+
+/**
  * Two-pass pipeline: aggregate without rawPgn (low memory), then process
  * games one PGN file at a time with rawPgn. Prevents OOM on large datasets.
  */
@@ -329,7 +346,17 @@ async function processTwoPass(
   // Finalize game index + recent games + notable games + game aliases
   console.log("Finalizing game index + recent/notable games...");
   const { gameIndex, playerRecentGames, playerNotableGames, gameAliases } = finalizeGameProcessing(gameState);
-  console.log(`  ${gameIndex.totalGames} games indexed`);
+  const totalGamesIndexed = gameIndex.totalGames;
+  const gameDetailFilesWritten = gameState.filesWritten;
+  console.log(`  ${totalGamesIndexed} games indexed`);
+
+  // Free gameState — finalizeGameProcessing already extracted what we need
+  gameState.indexEntries.length = 0;
+  gameState.recentGamesMap.clear();
+  gameState.notableGamesMap.clear();
+  gameState.gameAliases.clear();
+  gameState.seenKeys.clear();
+  gameState.playerByFideId.clear();
 
   console.log("Attaching recent/notable games to players...");
   for (const p of players) {
@@ -337,6 +364,9 @@ async function processTwoPass(
     const notable = playerNotableGames.get(p.slug);
     if (notable && notable.length > 0) p.notableGames = notable;
   }
+  // Free maps now that data is on players
+  playerRecentGames.clear();
+  playerNotableGames.clear();
 
   // Save index, players, aliases, game index, game aliases
   // Stream-write large files to avoid OOM from JSON.stringify on huge arrays
@@ -351,25 +381,26 @@ async function processTwoPass(
   console.log("  aliases.json...");
   writeFileSync(join(PROCESSED_DIR, "aliases.json"), JSON.stringify(aliasMap));
 
-  console.log(`  game-index.json (${gameIndex.totalGames} games)...`);
+  console.log(`  game-index.json (${totalGamesIndexed} games)...`);
   streamWriteGameIndex(join(PROCESSED_DIR, "game-index.json"), gameIndex);
+  // Free the large games array now that it's written
+  gameIndex.games.length = 0;
 
-  console.log("  game-aliases.json...");
-  writeFileSync(join(PROCESSED_DIR, "game-aliases.json"), JSON.stringify(gameAliases));
+  const totalGameAliases = Object.keys(gameAliases).length;
+  console.log(`  game-aliases.json (${totalGameAliases} aliases)...`);
+  streamWriteRecord(join(PROCESSED_DIR, "game-aliases.json"), gameAliases);
 
   console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
   console.log(`  index.json:      ${index.totalPlayers} players`);
   console.log(`  players.json:    ${players.length} player profiles`);
   console.log(`  games/:          ${gameFilesWritten} game files`);
-  console.log(`  game-details/:   ${gameState.filesWritten} game pages`);
-  console.log(`  game-index.json: ${gameIndex.totalGames} games indexed`);
+  console.log(`  game-details/:   ${gameDetailFilesWritten} game pages`);
+  console.log(`  game-index.json: ${totalGamesIndexed} games indexed`);
   console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases`);
-  console.log(`  game-aliases:    ${Object.keys(gameAliases).length} game aliases\n`);
+  console.log(`  game-aliases:    ${totalGameAliases} game aliases\n`);
 
-  // Wait for background cleanup of old game-details directory
-  if (oldGameDetailsCleanup) await oldGameDetailsCleanup;
-
-  return { players, index, aliasMap, gameAliases, gameIndex, gameFilesWritten, gameDetailFilesWritten: gameState.filesWritten };
+  // Background cleanup of old game-details directory — no need to wait, process will exit when done
+  return { players, index, aliasMap, gameAliases, gameIndex, gameFilesWritten, gameDetailFilesWritten };
 }
 
 // ─── smoke ────────────────────────────────────────────────────────────────────
