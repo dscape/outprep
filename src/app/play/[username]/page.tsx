@@ -29,6 +29,7 @@ export default function PlayPage() {
   const rawUsername = params.username as string;
   const username = decodeURIComponent(rawUsername);
   const speeds = searchParams.get("speeds") || "";
+  const since = searchParams.get("since") || "";
   const eco = searchParams.get("eco") || "";
   const openingName = searchParams.get("openingName") || "";
   const opponentWeaknessColor = searchParams.get("color") as "white" | "black" | null;
@@ -74,7 +75,8 @@ export default function PlayPage() {
 
     async function load() {
       try {
-        const query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
+        let query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
+        if (since) query += `${query ? "&" : "?"}since=${encodeURIComponent(since)}`;
 
         // Start bot-data fetch immediately (likely cache-hit from scout pre-warm)
         const botFetch = fetch(

@@ -5,7 +5,7 @@ import { MoveEval, AnalysisSummary } from "../types";
 const INACCURACY_THRESHOLD = 50;
 const MISTAKE_THRESHOLD = 100;
 const BLUNDER_THRESHOLD = 200;
-const ANALYSIS_DEPTH = 18;
+const ANALYSIS_DEPTH = 14;
 
 export async function evaluateGame(
   pgn: string,

@@ -27,7 +27,9 @@ export async function GET(
   const { username } = await params;
   const speedsParam = request.nextUrl.searchParams.get("speeds");
   const speeds = speedsParam ? speedsParam.split(",").filter(Boolean) : [];
-  const cacheKey = `bot:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}`;
+  const sinceParam = request.nextUrl.searchParams.get("since");
+  const since = sinceParam ? parseInt(sinceParam) : undefined;
+  const cacheKey = `bot:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}:${since || "all"}`;
 
   try {
     const cached = cache.get(cacheKey);
@@ -39,6 +41,9 @@ export async function GET(
     let filtered = games.filter((g) => g.variant === "standard");
     if (speeds.length > 0) {
       filtered = filtered.filter((g) => speeds.includes(g.speed));
+    }
+    if (since) {
+      filtered = filtered.filter((g) => (g.createdAt ?? 0) >= since);
     }
 
     const errorProfile = buildErrorProfileFromLichess(filtered, username);

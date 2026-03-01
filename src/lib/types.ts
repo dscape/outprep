@@ -115,6 +115,7 @@ export interface LichessGame {
   moves: string;
   pgn?: string;
   clock?: { initial: number; increment: number };
+  createdAt?: number;
   analysis?: LichessEvalAnnotation[];
 }
 

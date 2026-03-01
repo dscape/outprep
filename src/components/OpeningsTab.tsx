@@ -4,6 +4,11 @@ import { useState, useMemo } from "react";
 import { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 
+interface OpeningCoverage {
+  analyzed: number;
+  total: number;
+}
+
 interface OpeningsTabProps {
   white: OpeningStats[];
   black: OpeningStats[];
@@ -11,6 +16,7 @@ interface OpeningsTabProps {
   onAnalyzeGame?: (game: GameForDrilldown) => void;
   onRequestGames?: () => void;
   loadingGames?: boolean;
+  coverageByOpening?: Map<string, OpeningCoverage>;
 }
 
 function WDLBar({ win, draw, loss }: { win: number; draw: number; loss: number }) {
@@ -36,6 +42,31 @@ function ResultBadge({ result, playerColor }: { result: string; playerColor: "wh
   return <span className="text-zinc-400 font-medium">Draw</span>;
 }
 
+function CoverageBadge({ coverage }: { coverage: OpeningCoverage }) {
+  if (coverage.analyzed === 0) {
+    return (
+      <span className="text-[10px] text-zinc-600" title="No games in this opening have engine analysis">
+        no evals
+      </span>
+    );
+  }
+  if (coverage.analyzed >= coverage.total) {
+    return (
+      <span className="text-[10px] text-green-500/70" title="All games in this opening have engine analysis">
+        ✓
+      </span>
+    );
+  }
+  return (
+    <span
+      className="text-[10px] text-zinc-500"
+      title={`${coverage.analyzed} of ${coverage.total} games have engine analysis`}
+    >
+      {coverage.analyzed}/{coverage.total}
+    </span>
+  );
+}
+
 export default function OpeningsTab({
   white,
   black,
@@ -43,12 +74,14 @@ export default function OpeningsTab({
   onAnalyzeGame,
   onRequestGames,
   loadingGames,
+  coverageByOpening,
 }: OpeningsTabProps) {
   const [color, setColor] = useState<"white" | "black">("white");
   const [expandedOpening, setExpandedOpening] = useState<string | null>(null);
   const openings = color === "white" ? white : black;
 
   const isClickable = !!(games || onRequestGames);
+  const hasCoverage = !!coverageByOpening;
 
   // Index games by opening family + color for quick lookup
   const gamesByOpening = useMemo(() => {
@@ -64,6 +97,18 @@ export default function OpeningsTab({
     }
     return map;
   }, [games, color]);
+
+  // Calculate overall coverage stats for nudge banner
+  const coverageStats = useMemo(() => {
+    if (!coverageByOpening) return null;
+    let totalAnalyzed = 0;
+    let totalGames = 0;
+    for (const [, c] of coverageByOpening) {
+      totalAnalyzed += c.analyzed;
+      totalGames += c.total;
+    }
+    return { analyzed: totalAnalyzed, total: totalGames };
+  }, [coverageByOpening]);
 
   const handleRowClick = (openingName: string) => {
     if (!isClickable) return;
@@ -83,6 +128,9 @@ export default function OpeningsTab({
     setColor(c);
     setExpandedOpening(null);
   };
+
+  // Column count for colSpan calculation
+  const colCount = (isClickable ? 1 : 0) + 5 + (hasCoverage ? 1 : 0);
 
   return (
     <div>
@@ -109,6 +157,14 @@ export default function OpeningsTab({
         </button>
       </div>
 
+      {/* Coverage nudge banner */}
+      {coverageStats && coverageStats.total > 0 && coverageStats.analyzed < coverageStats.total * 0.5 && (
+        <div className="mb-4 rounded-lg border border-zinc-700/40 bg-zinc-800/30 px-3 py-2 text-xs text-zinc-400">
+          Only {coverageStats.analyzed} of {coverageStats.total} games have engine analysis.
+          Run a Quick Scan for more accurate data.
+        </div>
+      )}
+
       {openings.length === 0 ? (
         <p className="text-sm text-zinc-500">No opening data available.</p>
       ) : (
@@ -122,12 +178,16 @@ export default function OpeningsTab({
                 <th className="pb-2 pr-4 font-medium text-right">Games</th>
                 <th className="pb-2 pr-4 font-medium text-right">Freq</th>
                 <th className="pb-2 pr-4 font-medium min-w-[120px]">W / D / L</th>
+                {hasCoverage && (
+                  <th className="pb-2 font-medium text-right" title="Engine analysis coverage">Evals</th>
+                )}
               </tr>
             </thead>
             <tbody>
               {openings.map((op) => {
                 const isExpanded = expandedOpening === op.name;
                 const matchingGames = gamesByOpening?.get(op.name) || [];
+                const coverage = coverageByOpening?.get(op.name);
 
                 return (
                   <OpeningRow
@@ -139,6 +199,9 @@ export default function OpeningsTab({
                     matchingGames={matchingGames}
                     onToggle={() => handleRowClick(op.name)}
                     onAnalyzeGame={onAnalyzeGame}
+                    coverage={coverage}
+                    hasCoverageColumn={hasCoverage}
+                    colCount={colCount}
                   />
                 );
               })}
@@ -158,6 +221,9 @@ function OpeningRow({
   matchingGames,
   onToggle,
   onAnalyzeGame,
+  coverage,
+  hasCoverageColumn,
+  colCount,
 }: {
   op: OpeningStats;
   isExpanded: boolean;
@@ -166,6 +232,9 @@ function OpeningRow({
   matchingGames: GameForDrilldown[];
   onToggle: () => void;
   onAnalyzeGame?: (game: GameForDrilldown) => void;
+  coverage?: OpeningCoverage;
+  hasCoverageColumn: boolean;
+  colCount: number;
 }) {
   return (
     <>
@@ -198,11 +267,16 @@ function OpeningRow({
             </div>
           </div>
         </td>
+        {hasCoverageColumn && (
+          <td className="py-2 text-right">
+            {coverage ? <CoverageBadge coverage={coverage} /> : null}
+          </td>
+        )}
       </tr>
 
       {isExpanded && (
         <tr>
-          <td colSpan={isClickable ? 6 : 5} className="p-0">
+          <td colSpan={colCount} className="p-0">
             <div className="border-l-2 border-green-500/40 bg-zinc-900/40 px-4 py-3 ml-2">
               {loadingGames ? (
                 <div className="flex items-center gap-2 text-sm text-zinc-400">

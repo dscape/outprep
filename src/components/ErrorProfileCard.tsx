@@ -7,6 +7,7 @@ interface ErrorProfileCardProps {
   errorProfile: ErrorProfile;
   totalGames?: number;
   onUpgrade?: (mode: EvalMode) => void;
+  onCancel?: () => void;
   upgradeProgress?: {
     gamesComplete: number;
     totalGames: number;
@@ -134,6 +135,7 @@ export default function ErrorProfileCard({
   errorProfile,
   totalGames,
   onUpgrade,
+  onCancel,
   upgradeProgress,
   isUpgrading = false,
   upgradeComplete = false,
@@ -194,7 +196,7 @@ export default function ErrorProfileCard({
         </span>
         <span className="ml-auto">
           <a
-            href="https://github.com/dscape/outprep"
+            href="https://github.com/dscape/outprep/blob/main/packages/engine/src/error-profile.ts"
             target="_blank"
             rel="noopener noreferrer"
             className="text-zinc-600 hover:text-zinc-400 transition-colors underline underline-offset-2"
@@ -233,8 +235,31 @@ export default function ErrorProfileCard({
         </div>
       </div>
 
-      {/* Upgrade section */}
-      {hasUnevaluatedGames && !isUpgrading && !upgradeComplete && onUpgrade && (
+      {/* Quick scan nudge when it would take < 30 seconds */}
+      {hasUnevaluatedGames && !isUpgrading && !upgradeComplete && onUpgrade &&
+        estimateTime(unevaluatedCount, "sampling") < 30 && (
+        <div className="mt-4 border-t border-zinc-700/50 pt-4">
+          <div className="rounded-lg border border-green-600/30 bg-green-900/10 px-3 py-2.5 flex items-center justify-between">
+            <p className="text-xs text-zinc-300">
+              Quick scan will only take{" "}
+              <span className="font-medium text-green-400">
+                {formatTime(estimateTime(unevaluatedCount, "sampling"))}
+              </span>
+              {" "}for {unevaluatedCount} games
+            </p>
+            <button
+              onClick={() => onUpgrade("sampling")}
+              className="ml-3 shrink-0 rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-green-500"
+            >
+              Start scan
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Upgrade section — shown when quick scan would take >= 30 seconds */}
+      {hasUnevaluatedGames && !isUpgrading && !upgradeComplete && onUpgrade &&
+        estimateTime(unevaluatedCount, "sampling") >= 30 && (
         <div className="mt-4 border-t border-zinc-700/50 pt-4">
           <p className="text-xs text-zinc-500 mb-3">
             Based on {errorProfile.gamesAnalyzed} of {totalGames} games.
@@ -244,6 +269,7 @@ export default function ErrorProfileCard({
           <div className="flex gap-2">
             <button
               onClick={() => onUpgrade("sampling")}
+              title="Samples every other move at depth 10. Fast but approximate — good for a general picture."
               className="flex-1 rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:border-zinc-500/50"
             >
               Quick scan{" "}
@@ -253,6 +279,7 @@ export default function ErrorProfileCard({
             </button>
             <button
               onClick={() => onUpgrade("comprehensive")}
+              title="Analyzes every move at depth 12. More accurate but takes longer."
               className="flex-1 rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:border-zinc-500/50"
             >
               Deep analysis{" "}
@@ -282,7 +309,17 @@ export default function ErrorProfileCard({
               Analyzing... {upgradeProgress.gamesComplete}/
               {upgradeProgress.totalGames} games
             </span>
-            <span>{upgradeProgress.pct}%</span>
+            <div className="flex items-center gap-2">
+              <span>{upgradeProgress.pct}%</span>
+              {onCancel && (
+                <button
+                  onClick={onCancel}
+                  className="text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
           </div>
           <div className="h-1.5 w-full rounded-full bg-zinc-700/50 overflow-hidden">
             <div

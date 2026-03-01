@@ -10,6 +10,7 @@ import {
   PrepTip,
   PlayerRatings,
 } from "./types";
+import type { ErrorProfile } from "@outprep/engine";
 import { estimateFIDE } from "./fide-estimator";
 import { buildErrorProfileFromLichess } from "./lichess-adapters";
 
@@ -406,7 +407,68 @@ function getConfidence(analyzedGames: number): "low" | "medium" | "high" {
   return "high";
 }
 
-function generatePrepTips(
+/**
+ * Enrich existing weaknesses with error-profile data from engine analysis.
+ * Adds new phase-specific weaknesses and updates severity of existing ones.
+ */
+export function detectWeaknessesFromErrorProfile(
+  errorProfile: ErrorProfile,
+  existingWeaknesses: Weakness[]
+): Weakness[] {
+  const updated = [...existingWeaknesses];
+  const conf: "low" | "medium" | "high" =
+    errorProfile.gamesAnalyzed < 10 ? "low" :
+    errorProfile.gamesAnalyzed < 30 ? "medium" : "high";
+
+  // Opening phase has disproportionate errors
+  if (
+    errorProfile.opening.totalMoves >= 10 &&
+    errorProfile.overall.errorRate > 0 &&
+    errorProfile.opening.errorRate > errorProfile.overall.errorRate * 1.5
+  ) {
+    const exists = updated.some(w => w.area === "Opening Inaccuracy");
+    if (!exists) {
+      updated.push({
+        area: "Opening Inaccuracy",
+        severity: errorProfile.opening.errorRate > 0.15 ? "critical" : "moderate",
+        description: `Makes ${(errorProfile.opening.errorRate * 100).toFixed(1)}% errors in the opening phase, significantly above their overall ${(errorProfile.overall.errorRate * 100).toFixed(1)}% rate.`,
+        stat: `${(errorProfile.opening.errorRate * 100).toFixed(1)}% opening error rate`,
+        confidence: conf,
+      });
+    }
+  }
+
+  // Middlegame blunder tendency
+  if (
+    errorProfile.middlegame.totalMoves >= 20 &&
+    errorProfile.middlegame.blunderRate > 0.05
+  ) {
+    const exists = updated.some(w => w.area === "Middlegame Blunders");
+    if (!exists) {
+      updated.push({
+        area: "Middlegame Blunders",
+        severity: errorProfile.middlegame.blunderRate > 0.08 ? "critical" : "moderate",
+        description: `Blunders ${(errorProfile.middlegame.blunderRate * 100).toFixed(1)}% of middlegame moves, suggesting vulnerability in complex positions.`,
+        stat: `${(errorProfile.middlegame.blunderRate * 100).toFixed(1)}% middlegame blunder rate`,
+        confidence: conf,
+      });
+    }
+  }
+
+  // Update severity of existing endgame weakness if error profile confirms it
+  if (errorProfile.endgame.totalMoves >= 10) {
+    const endgameWeakness = updated.find(w => w.area === "Endgame Conversion");
+    if (endgameWeakness && errorProfile.overall.errorRate > 0 &&
+        errorProfile.endgame.errorRate > errorProfile.overall.errorRate * 1.3) {
+      endgameWeakness.severity = errorProfile.endgame.errorRate > 0.15 ? "critical" : "moderate";
+      endgameWeakness.stat = `${(errorProfile.endgame.errorRate * 100).toFixed(1)}% endgame error rate`;
+    }
+  }
+
+  return updated.slice(0, 8);
+}
+
+export function generatePrepTips(
   weaknesses: Weakness[],
   openings: { white: OpeningStats[]; black: OpeningStats[] },
   style: StyleMetrics

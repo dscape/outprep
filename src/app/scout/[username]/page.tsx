@@ -8,6 +8,7 @@ import {
   StyleMetrics,
   OpeningStats,
   Weakness,
+  PrepTip,
   PhaseErrors,
   GameEvalData,
 } from "@/lib/types";
@@ -30,6 +31,11 @@ import {
   otbGamesToDrilldown,
   lichessGamesToDrilldown,
 } from "@/lib/game-helpers";
+import {
+  openingFamily,
+  detectWeaknessesFromErrorProfile,
+  generatePrepTips,
+} from "@/lib/profile-builder";
 import { LichessGame } from "@/lib/types";
 
 type Tab = "openings" | "weaknesses" | "prep" | "otb";
@@ -194,6 +200,12 @@ function mergeErrorProfiles(profiles: ErrorProfile[]): ErrorProfile {
 }
 
 const SPEED_ORDER = ["bullet", "blitz", "rapid", "classical"];
+const TIME_RANGES = [
+  { key: "1m", label: "Last month", ms: 30 * 24 * 60 * 60 * 1000 },
+  { key: "3m", label: "3 months", ms: 90 * 24 * 60 * 60 * 1000 },
+  { key: "1y", label: "Last year", ms: 365 * 24 * 60 * 60 * 1000 },
+  { key: "all", label: "All time", ms: 0 },
+];
 
 export default function ScoutPage() {
   const params = useParams();
@@ -213,6 +225,7 @@ export default function ScoutPage() {
   const [error, setError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("openings");
   const [selectedSpeeds, setSelectedSpeeds] = useState<string[]>([]);
+  const [timeRange, setTimeRange] = useState<string>("all");
   const [otbProfile, setOtbProfile] = useState<OTBProfile | null>(null);
 
   // Upgrade state
@@ -227,6 +240,8 @@ export default function ScoutPage() {
     useState<ErrorProfile | null>(null);
   const [upgradeComplete, setUpgradeComplete] = useState(false);
   const [totalGameCount, setTotalGameCount] = useState<number | null>(null);
+  const [enhancedWeaknesses, setEnhancedWeaknesses] = useState<Weakness[] | null>(null);
+  const [enhancedPrepTips, setEnhancedPrepTips] = useState<PrepTip[] | null>(null);
   const evalEngineRef = useRef<StockfishEngine | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const computedEvalsRef = useRef<GameEvalData[]>([]);
@@ -295,8 +310,11 @@ export default function ScoutPage() {
     // Phase 2: Full profile with analysis
     async function loadFullProfile() {
       try {
+        const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+        const since = sinceMs ? Date.now() - sinceMs : undefined;
+        const sinceQuery = since ? `?since=${since}` : "";
         const res = await fetch(
-          `/api/profile/${encodeURIComponent(username)}`
+          `/api/profile/${encodeURIComponent(username)}${sinceQuery}`
         );
 
         if (!res.ok) {
@@ -323,7 +341,7 @@ export default function ScoutPage() {
 
     loadBasic();
     loadFullProfile();
-  }, [username, isPGNMode]);
+  }, [username, isPGNMode, timeRange]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -353,11 +371,14 @@ export default function ScoutPage() {
   // Pre-warm bot-data server cache for the play page
   useEffect(() => {
     if (!profile || selectedSpeeds.length === 0) return;
-    const query = `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`;
+    const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+    const since = sinceMs ? Date.now() - sinceMs : undefined;
+    let query = `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`;
+    if (since) query += `&since=${since}`;
     fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`).catch(
       () => {}
     );
-  }, [profile, selectedSpeeds, username]);
+  }, [profile, selectedSpeeds, username, timeRange]);
 
   const toggleSpeed = useCallback((speed: string) => {
     setSelectedSpeeds((prev) => {
@@ -410,7 +431,9 @@ export default function ScoutPage() {
     setEnhancedErrorProfile(null);
     setUpgradeComplete(false);
     setTotalGameCount(null);
-  }, [selectedSpeeds]);
+    setEnhancedWeaknesses(null);
+    setEnhancedPrepTips(null);
+  }, [selectedSpeeds, timeRange]);
 
   const filteredData = useMemo((): FilteredData | null => {
     if (!profile) return null;
@@ -441,18 +464,21 @@ export default function ScoutPage() {
   }, [profile, selectedSpeeds]);
 
   // Drill-down: navigate to analysis page for a single game
+  // Flip perspective: the user would play the OPPOSITE color of the scouted player
   const handleAnalyzeGame = useCallback(
     (game: GameForDrilldown) => {
+      const userColor = game.playerColor === "white" ? "black" : "white";
       const storedGame = {
         pgn: game.pgn,
         result: game.result,
-        playerColor: game.playerColor,
-        opponentUsername: game.opponent,
+        playerColor: userColor,
+        opponentUsername: username,
+        opponentFideEstimate: profile?.fideEstimate?.rating,
       };
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
       router.push(`/analysis/${game.id}`);
     },
-    [router]
+    [router, username, profile]
   );
 
   // Drill-down: lazy-fetch raw Lichess games for opening expansion
@@ -496,6 +522,21 @@ export default function ScoutPage() {
     return lichessGamesToDrilldown(rawLichessGames, username);
   }, [rawLichessGames, username]);
 
+  // Build opening coverage map from raw Lichess games
+  const coverageByOpening = useMemo(() => {
+    if (!rawLichessGames) return undefined;
+    const map = new Map<string, { analyzed: number; total: number }>();
+    for (const g of rawLichessGames) {
+      if (!g.opening || g.variant !== "standard") continue;
+      const family = openingFamily(g.opening.name);
+      const entry = map.get(family) || { analyzed: 0, total: 0 };
+      entry.total++;
+      if (g.analysis && g.analysis.length > 0) entry.analyzed++;
+      map.set(family, entry);
+    }
+    return map;
+  }, [rawLichessGames]);
+
   // Handle upgrade request
   const handleUpgrade = useCallback(
     async (mode: EvalMode) => {
@@ -511,10 +552,13 @@ export default function ScoutPage() {
 
       try {
         // Lazy-fetch game moves from bot-data API
-        const query =
+        const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+        const sinceVal = sinceMs ? Date.now() - sinceMs : undefined;
+        let query =
           selectedSpeeds.length > 0
             ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
             : "";
+        if (sinceVal) query += `${query ? "&" : "?"}since=${sinceVal}`;
         const res = await fetch(
           `/api/bot-data/${encodeURIComponent(username)}${query}`
         );
@@ -609,6 +653,22 @@ export default function ScoutPage() {
         setEnhancedErrorProfile(merged);
         setUpgradeComplete(true);
 
+        // Recalculate weaknesses and prep tips with enhanced error data
+        if (filteredData) {
+          const updatedWeaknesses = detectWeaknessesFromErrorProfile(
+            merged,
+            filteredData.weaknesses
+          );
+          setEnhancedWeaknesses(updatedWeaknesses);
+
+          const updatedTips = generatePrepTips(
+            updatedWeaknesses,
+            filteredData.openings,
+            filteredData.style
+          );
+          setEnhancedPrepTips(updatedTips);
+        }
+
         // Cache in sessionStorage
         try {
           sessionStorage.setItem(
@@ -632,8 +692,15 @@ export default function ScoutPage() {
         }
       }
     },
-    [username, selectedSpeeds, filteredData]
+    [username, selectedSpeeds, timeRange, filteredData]
   );
+
+  // Cancel an in-progress upgrade
+  const handleCancelUpgrade = useCallback(() => {
+    abortRef.current?.abort();
+    setIsUpgrading(false);
+    setUpgradeProgress(null);
+  }, []);
 
   // Determine displayed error profile: enhanced if available, otherwise base
   const displayedErrorProfile =
@@ -658,10 +725,12 @@ export default function ScoutPage() {
         // Storage full — non-fatal
       }
     }
-    router.push(
-      `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`
-    );
-  }, [isUpgrading, enhancedErrorProfile, username, selectedSpeeds, router]);
+    const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+    const since = sinceMs ? Date.now() - sinceMs : undefined;
+    let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
+    if (since) playUrl += `&since=${since}`;
+    router.push(playUrl);
+  }, [isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
 
   if (fullLoading) {
     return (
@@ -941,36 +1010,64 @@ export default function ScoutPage() {
           </button>
         </div>
 
-        {/* Speed Filter */}
-        {availableSpeeds.length >= 1 && (
-          <div className="mb-4 flex items-center gap-2">
-            <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
-              Time Control
-            </span>
-            {availableSpeeds.map((speed) => {
-              const data = profile.bySpeed[speed];
-              const isActive = selectedSpeeds.includes(speed);
-              return (
-                <button
-                  key={speed}
-                  onClick={() => toggleSpeed(speed)}
-                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                    isActive
-                      ? "bg-green-600 text-white"
-                      : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
-                  <span
-                    className={isActive ? "text-green-200" : "text-zinc-600"}
+        {/* Filters */}
+        <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+          {/* Speed Filter */}
+          {availableSpeeds.length >= 1 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
+                Speed
+              </span>
+              {availableSpeeds.map((speed) => {
+                const data = profile.bySpeed[speed];
+                const isActive = selectedSpeeds.includes(speed);
+                return (
+                  <button
+                    key={speed}
+                    onClick={() => toggleSpeed(speed)}
+                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                      isActive
+                        ? "bg-green-600 text-white"
+                        : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                    }`}
                   >
-                    {data.games}
-                  </span>
-                </button>
-              );
-            })}
+                    {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
+                    <span
+                      className={isActive ? "text-green-200" : "text-zinc-600"}
+                    >
+                      {data.games}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Time Range Filter */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
+              Period
+            </span>
+            {TIME_RANGES.map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => {
+                  if (key !== timeRange) {
+                    setTimeRange(key);
+                    setFullLoading(true);
+                  }
+                }}
+                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                  timeRange === key
+                    ? "bg-green-600 text-white"
+                    : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-        )}
+        </div>
 
         {/* Player Card */}
         <PlayerCard profile={profile} filteredGames={filteredData.games} />
@@ -983,6 +1080,7 @@ export default function ScoutPage() {
                 errorProfile={displayedErrorProfile}
                 totalGames={displayedTotalGames}
                 onUpgrade={handleUpgrade}
+                onCancel={handleCancelUpgrade}
                 upgradeProgress={upgradeProgress}
                 isUpgrading={isUpgrading}
                 upgradeComplete={upgradeComplete}
@@ -1025,16 +1123,17 @@ export default function ScoutPage() {
                 onAnalyzeGame={handleAnalyzeGame}
                 onRequestGames={fetchLichessRawGames}
                 loadingGames={loadingLichessGames}
+                coverageByOpening={coverageByOpening}
               />
             )}
             {activeTab === "weaknesses" && (
               <WeaknessesTab
-                weaknesses={filteredData.weaknesses}
+                weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
                 username={username}
                 speeds={selectedSpeeds.join(",")}
               />
             )}
-            {activeTab === "prep" && <PrepTipsTab tips={profile.prepTips} />}
+            {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? profile.prepTips} />}
             {activeTab === "otb" && otbProfile && (
               <OTBAnalysisTab profile={otbProfile} />
             )}
@@ -1070,9 +1169,11 @@ export default function ScoutPage() {
                         // Storage full — non-fatal
                       }
                     }
-                    router.push(
-                      `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`
-                    );
+                    const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+                    const since = sinceMs ? Date.now() - sinceMs : undefined;
+                    let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
+                    if (since) playUrl += `&since=${since}`;
+                    router.push(playUrl);
                   }}
                   className="rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50"
                 >

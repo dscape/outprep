@@ -29,6 +29,7 @@ export default function AnalysisPage() {
   const gameId = params.gameId as string;
 
   const [analysis, setAnalysis] = useState<GameAnalysis | null>(null);
+  const [gameData, setGameData] = useState<StoredGame | null>(null);
   const [stage, setStage] = useState("");
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
@@ -42,39 +43,40 @@ export default function AnalysisPage() {
         return;
       }
 
-      const gameData: StoredGame = JSON.parse(raw);
+      const gd: StoredGame = JSON.parse(raw);
+      setGameData(gd); // Show board and context immediately
 
       try {
         // Step 0: Fetch opponent profile + opening in parallel
         setStage("Loading opponent profile...");
 
         const [profile, opening] = await Promise.all([
-          fetchProfile(gameData.opponentUsername),
-          lookupOpening(gameData.pgn),
+          fetchProfile(gd.opponentUsername),
+          lookupOpening(gd.pgn),
         ]);
 
         let moves: MoveEval[];
         let summary: AnalysisSummary;
 
         // Check for pre-computed analysis from live game analyzer
-        if (gameData.precomputedMoves && gameData.precomputedSummary) {
+        if (gd.precomputedMoves && gd.precomputedSummary) {
           // Skip Step 1 entirely — use pre-computed analysis (instant!)
           setStage("Loading pre-computed analysis...");
-          moves = gameData.precomputedMoves;
-          summary = gameData.precomputedSummary;
+          moves = gd.precomputedMoves;
+          summary = gd.precomputedSummary;
         } else {
-          // Fallback: run full Stockfish analysis (slow path, ~3-7 min)
+          // Fallback: run full Stockfish analysis (slow path)
           setStage("Running engine analysis...");
           const engine = new StockfishEngine();
           await engine.init();
 
           const result = await evaluateGame(
-            gameData.pgn,
+            gd.pgn,
             engine,
             (ply, total) => {
               setProgress(Math.round((ply / total) * 100));
             },
-            gameData.playerColor,
+            gd.playerColor,
           );
 
           moves = result.moves;
@@ -96,30 +98,30 @@ export default function AnalysisPage() {
 
         // Step 3: Position classification
         setStage("Classifying positions...");
-        const contexts = classifyPositions(gameData.pgn, moves);
+        const contexts = classifyPositions(gd.pgn, moves);
 
         // Step 4: Opponent context overlay
         setStage("Cross-referencing opponent patterns...");
         const keyMoments = profile
-          ? tagMoments(moves, contexts, profile, gameData.playerColor)
+          ? tagMoments(moves, contexts, profile, gd.playerColor)
           : [];
 
         // Step 5: Generate narrative
         setStage("Generating coaching analysis...");
         const chess = new Chess();
-        chess.loadPgn(gameData.pgn);
+        chess.loadPgn(gd.pgn);
         const totalMoves = Math.ceil(chess.history().length / 2);
 
-        const resultType = gameData.result === "1-0"
-          ? (gameData.playerColor === "white" ? "win" : "loss")
-          : gameData.result === "0-1"
-            ? (gameData.playerColor === "black" ? "win" : "loss")
+        const resultType = gd.result === "1-0"
+          ? (gd.playerColor === "white" ? "win" : "loss")
+          : gd.result === "0-1"
+            ? (gd.playerColor === "black" ? "win" : "loss")
             : "draw";
 
         const coachingNarrative = profile
           ? generateNarrative({
               result: resultType as "win" | "loss" | "draw",
-              playerColor: gameData.playerColor,
+              playerColor: gd.playerColor,
               opening,
               summary,
               keyMoments,
@@ -130,17 +132,17 @@ export default function AnalysisPage() {
 
         setAnalysis({
           gameId,
-          pgn: gameData.pgn,
-          result: gameData.result,
+          pgn: gd.pgn,
+          result: gd.result,
           opening,
           totalMoves,
-          playerColor: gameData.playerColor,
-          opponentUsername: gameData.opponentUsername,
+          playerColor: gd.playerColor,
+          opponentUsername: gd.opponentUsername,
           summary,
           moves,
           keyMoments,
           coachingNarrative,
-          opponentFideEstimate: gameData.opponentFideEstimate,
+          opponentFideEstimate: gd.opponentFideEstimate,
         });
 
         setStage("");
@@ -170,23 +172,103 @@ export default function AnalysisPage() {
     );
   }
 
+  // Progressive loading: show board and context while analysis runs
+  if (!analysis && gameData) {
+    const resultLabel = gameData.result === "1-0"
+      ? (gameData.playerColor === "white" ? "You won" : "You lost")
+      : gameData.result === "0-1"
+        ? (gameData.playerColor === "black" ? "You won" : "You lost")
+        : "Draw";
+
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="mx-auto max-w-3xl">
+          <div className="mb-6 flex items-center justify-between">
+            <button
+              onClick={() =>
+                router.push(`/scout/${encodeURIComponent(gameData.opponentUsername)}`)
+              }
+              className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              &larr; Back to {gameData.opponentUsername}
+            </button>
+          </div>
+
+          {/* Game context */}
+          <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4 mb-6">
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-zinc-300 font-medium">
+                vs {gameData.opponentUsername}
+              </span>
+              <span className="text-zinc-500">{gameData.result}</span>
+              <span className={`font-medium ${
+                resultLabel === "You won" ? "text-green-400" :
+                resultLabel === "You lost" ? "text-red-400" :
+                "text-zinc-400"
+              }`}>
+                {resultLabel}
+              </span>
+            </div>
+          </div>
+
+          {/* Board placeholder */}
+          <div className="flex justify-center mb-6">
+            <div className="w-[280px] sm:w-[320px] aspect-square rounded bg-zinc-800/50 border border-zinc-700/50 grid grid-cols-8 grid-rows-8 overflow-hidden">
+              {Array.from({ length: 64 }).map((_, i) => {
+                const row = Math.floor(i / 8);
+                const col = i % 8;
+                const isLight = (row + col) % 2 === 0;
+                return (
+                  <div
+                    key={i}
+                    className={isLight ? "bg-[#edeed1]/60" : "bg-[#779952]/60"}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
+          {/* Analysis progress */}
+          <div className="flex flex-col items-center">
+            <div className="h-8 w-8 rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-3" />
+            <p className="text-white font-medium text-sm mb-1">{stage}</p>
+            {progress > 0 && (
+              <div className="w-full max-w-xs mt-2">
+                <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-green-500 transition-all duration-300"
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <p className="mt-1 text-xs text-zinc-500 text-center">{progress}% complete</p>
+              </div>
+            )}
+          </div>
+
+          {/* Move list skeleton */}
+          <div className="mt-6 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4">
+            <div className="space-y-2">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="flex gap-3">
+                  <div className="h-4 w-6 rounded bg-zinc-700/50 animate-pulse" />
+                  <div className="h-4 w-16 rounded bg-zinc-700/50 animate-pulse" />
+                  <div className="h-4 w-16 rounded bg-zinc-700/50 animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Initial loading (before sessionStorage is read)
   if (!analysis) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
         <div className="w-full max-w-sm text-center">
           <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
-          <p className="text-white font-medium mb-2">{stage}</p>
-          {progress > 0 && (
-            <div className="mt-3">
-              <div className="h-1.5 w-full rounded-full bg-zinc-800 overflow-hidden">
-                <div
-                  className="h-full rounded-full bg-green-500 transition-all duration-300"
-                  style={{ width: `${progress}%` }}
-                />
-              </div>
-              <p className="mt-1 text-xs text-zinc-500">{progress}% complete</p>
-            </div>
-          )}
+          <p className="text-white font-medium mb-2">{stage || "Loading..."}</p>
         </div>
       </div>
     );

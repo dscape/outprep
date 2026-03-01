@@ -18,11 +18,13 @@ function setCache(key: string, data: unknown): void {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ username: string }> }
 ) {
   const { username } = await params;
-  const cacheKey = `profile:${username.toLowerCase()}`;
+  const sinceParam = request.nextUrl.searchParams.get("since");
+  const since = sinceParam ? parseInt(sinceParam) : undefined;
+  const cacheKey = `profile:${username.toLowerCase()}:${since || "all"}`;
 
   try {
     const cached = getCached(cacheKey);
@@ -33,7 +35,12 @@ export async function GET(
       fetchLichessGames(username, 500),
     ]);
 
-    const profile = buildProfile(user, games);
+    // Filter by time range if specified
+    const filtered = since
+      ? games.filter((g) => (g.createdAt ?? 0) >= since)
+      : games;
+
+    const profile = buildProfile(user, filtered);
     setCache(cacheKey, profile);
 
     return NextResponse.json(profile);
