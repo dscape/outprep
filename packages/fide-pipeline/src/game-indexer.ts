@@ -227,7 +227,7 @@ export function buildGameAliasMap(
   players: FIDEPlayer[],
   options: { minElo?: number } = {}
 ): Record<string, string> {
-  const minElo = options.minElo ?? 2000;
+  const minElo = options.minElo ?? 100;
   const playerByFideId = new Map<string, FIDEPlayer>();
   for (const p of players) playerByFideId.set(p.fideId, p);
 

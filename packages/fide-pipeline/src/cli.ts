@@ -613,7 +613,7 @@ program
   .command("process")
   .description("Process downloaded PGNs into player data")
   .option("--min-games <n>", "Minimum games per player", "3")
-  .option("--min-elo <n>", "Minimum Elo for game page indexing", "2000")
+  .option("--min-elo <n>", "Minimum Elo for game page indexing", "100")
   .action(async (opts) => {
     const minGames = parseInt(opts.minGames);
     const minElo = parseInt(opts.minElo);
@@ -729,7 +729,7 @@ program
   .requiredOption("--from <n>", "First TWIC issue number")
   .requiredOption("--to <n>", "Last TWIC issue number")
   .option("--min-games <n>", "Minimum games per player", "3")
-  .option("--min-elo <n>", "Minimum Elo for game page indexing", "2000")
+  .option("--min-elo <n>", "Minimum Elo for game page indexing", "100")
   .option("--prefix <p>", "Blob path prefix", "fide")
   .option("--delay <ms>", "Delay between downloads in ms", "500")
   .action(async (opts) => {
