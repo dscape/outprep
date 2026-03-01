@@ -5,7 +5,8 @@
  * filters by Elo threshold, and generates human-readable slugs.
  */
 
-import { writeSync } from "node:fs";
+import { writeSync, mkdirSync, writeFileSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { extractHeaders } from "./fast-parser";
 import { slugify, parseNameParts, resolveOpeningName } from "./aggregate";
 import type {
@@ -480,12 +481,14 @@ export interface GameProcessingState {
   minElo: number;
   filesWritten: number;
   maxRecentPerPlayer: number;
+  /** Directory for per-game JSON files (e.g. game-details/{event}/{matchup}.json). */
+  gameDetailsDir: string | null;
 }
 
 /** Create initial state for incremental game processing. */
 export function createGameProcessingState(
   players: FIDEPlayer[],
-  options: { minElo?: number; indexEntriesFd: number; gameAliasesFd: number; maxRecentPerPlayer?: number }
+  options: { minElo?: number; indexEntriesFd: number; gameAliasesFd: number; maxRecentPerPlayer?: number; gameDetailsDir?: string }
 ): GameProcessingState {
   const playerByFideId = new Map<string, FIDEPlayer>();
   for (const p of players) {
@@ -504,6 +507,7 @@ export function createGameProcessingState(
     minElo: options.minElo ?? 500,
     filesWritten: 0,
     maxRecentPerPlayer: options.maxRecentPerPlayer ?? 10,
+    gameDetailsDir: options.gameDetailsDir ?? null,
   };
 }
 
@@ -585,6 +589,14 @@ export function processGameDetailsChunk(
       pgn: game.rawPgn,
     };
     writeSync(gameDetailsFd, JSON.stringify(detail) + "\n");
+
+    // Write per-game JSON file for fast dev-mode lookups (slug's "/" becomes subdirectory)
+    if (state.gameDetailsDir) {
+      const filePath = join(state.gameDetailsDir, `${slug}.json`);
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, JSON.stringify(detail));
+    }
+
     state.filesWritten++;
 
     // Stream index entry to disk instead of accumulating in memory

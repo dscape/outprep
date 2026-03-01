@@ -144,7 +144,7 @@ async function loadGameFromJsonl(slug: string): Promise<GameDetail | null> {
   try {
     const fs = await import("node:fs");
     const path = await import("node:path");
-    const readline = await import("node:readline");
+    const { execSync } = await import("node:child_process");
 
     const jsonlPath = path.join(
       process.cwd(),
@@ -153,29 +153,25 @@ async function loadGameFromJsonl(slug: string): Promise<GameDetail | null> {
 
     if (!fs.existsSync(jsonlPath)) return null;
 
-    const rl = readline.createInterface({
-      input: fs.createReadStream(jsonlPath, { encoding: "utf-8" }),
-      crlfDelay: Infinity,
-    });
-
+    // Use native grep for fast search through 4.8GB JSONL
+    // grep -m 1 returns the first match and exits immediately
     const needle = `"slug":"${slug}"`;
+    const line = execSync(
+      `grep -m 1 -F ${JSON.stringify(needle)} ${JSON.stringify(jsonlPath)}`,
+      { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }
+    ).trim();
 
-    for await (const line of rl) {
-      if (!line) continue;
-      // Quick substring check before parsing (avoids JSON.parse on every line)
-      if (!line.includes(needle)) continue;
+    if (!line) return null;
 
-      const detail = JSON.parse(line) as GameDetail;
-      if (detail.slug === slug) {
-        // Evict oldest entry if cache is full
-        if (gameDetailCache.size >= GAME_DETAIL_CACHE_MAX) {
-          const firstKey = gameDetailCache.keys().next().value;
-          if (firstKey) gameDetailCache.delete(firstKey);
-        }
-        gameDetailCache.set(slug, detail);
-        rl.close();
-        return detail;
+    const detail = JSON.parse(line) as GameDetail;
+    if (detail.slug === slug) {
+      // Evict oldest entry if cache is full
+      if (gameDetailCache.size >= GAME_DETAIL_CACHE_MAX) {
+        const firstKey = gameDetailCache.keys().next().value;
+        if (firstKey) gameDetailCache.delete(firstKey);
       }
+      gameDetailCache.set(slug, detail);
+      return detail;
     }
 
     return null;
@@ -373,17 +369,16 @@ export async function getGameIndex(): Promise<GameIndex | null> {
  * Slugs may contain / (nested format), which maps to __ in disk filenames.
  */
 export async function getGame(slug: string): Promise<GameDetail | null> {
-  // Dev fallback: read single game detail file from disk
-  // Disk filenames use __ separator since slugs contain /
+  // Dev fallback: read per-game JSON file from disk
+  // Slug's "/" maps to subdirectories (e.g. game-details/event-slug/matchup.json)
   if (IS_DEV) {
     try {
       const fs = await import("node:fs");
       const path = await import("node:path");
-      const diskFilename = slug.replace(/\//g, "__");
       const gameFile = path.join(
         process.cwd(),
         "packages/fide-pipeline/data/processed/game-details",
-        `${diskFilename}.json`
+        `${slug}.json`
       );
       if (fs.existsSync(gameFile)) {
         return JSON.parse(fs.readFileSync(gameFile, "utf-8"));
@@ -392,7 +387,7 @@ export async function getGame(slug: string): Promise<GameDetail | null> {
       // fall through
     }
 
-    // JSONL fallback: stream game-details.jsonl to find the game
+    // JSONL fallback: grep for the game in the 4.8GB file
     const fromJsonl = await loadGameFromJsonl(slug);
     if (fromJsonl) return fromJsonl;
   }

@@ -29,7 +29,7 @@ import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync, openSync, writeSync, closeSync, unlinkSync, createReadStream } from "node:fs";
 import { createInterface } from "node:readline";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 
 // ─── Load .env from project root ────────────────────────────────────────────
 // Walk up from packages/fide-pipeline/ to find the root .env file.
@@ -62,6 +62,7 @@ const DATA_DIR = join(import.meta.dirname, "..", "data");
 const PROCESSED_DIR = join(DATA_DIR, "processed");
 const GAMES_DIR = join(PROCESSED_DIR, "games");
 const GAME_DETAILS_JSONL = join(PROCESSED_DIR, "game-details.jsonl");
+const GAME_DETAILS_DIR = join(PROCESSED_DIR, "game-details");
 const RATINGS_DIR = join(DATA_DIR, "ratings");
 
 function ensureDirs(): void {
@@ -339,7 +340,8 @@ async function processTwoPass(
   const gameAliasesFd = openSync(GAME_ALIASES_JSONL_TEMP, "w");
 
   console.log("  Initializing game processing state...");
-  const gameState = createGameProcessingState(players, { minElo: opts.minElo, indexEntriesFd, gameAliasesFd });
+  mkdirSync(GAME_DETAILS_DIR, { recursive: true });
+  const gameState = createGameProcessingState(players, { minElo: opts.minElo, indexEntriesFd, gameAliasesFd, gameDetailsDir: GAME_DETAILS_DIR });
   console.log(`  Ready to process ${pgnFiles.length} PGN files\n`);
 
   for (let fi = 0; fi < pgnFiles.length; fi++) {
@@ -531,9 +533,15 @@ program
     console.log("\n  Building game detail pages...");
     const gameDetails = buildGameDetails(games, players, { minElo: 0 });
     const gameIndex = buildGameIndex(gameDetails);
-    // Write game details as JSONL (one JSON object per line)
+    // Write game details as JSONL (one JSON object per line) + per-game JSON files
     const gameDetailsFd = openSync(GAME_DETAILS_JSONL, "w");
-    for (const detail of gameDetails) writeSync(gameDetailsFd, JSON.stringify(detail) + "\n");
+    mkdirSync(GAME_DETAILS_DIR, { recursive: true });
+    for (const detail of gameDetails) {
+      writeSync(gameDetailsFd, JSON.stringify(detail) + "\n");
+      const filePath = join(GAME_DETAILS_DIR, `${detail.slug}.json`);
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, JSON.stringify(detail));
+    }
     closeSync(gameDetailsFd);
     const gameDetailFilesWritten = gameDetails.length;
     console.log(`  ${gameDetailFilesWritten} game pages generated`);
