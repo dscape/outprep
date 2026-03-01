@@ -5,8 +5,7 @@
  * filters by Elo threshold, and generates human-readable slugs.
  */
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { writeSync } from "node:fs";
 import { extractHeaders } from "./fast-parser";
 import { slugify, parseNameParts, resolveOpeningName } from "./aggregate";
 import type {
@@ -106,7 +105,7 @@ export function buildGameDetails(
   players: FIDEPlayer[],
   options: { minElo?: number } = {}
 ): GameDetail[] {
-  const minElo = options.minElo ?? 2000;
+  const minElo = options.minElo ?? 500;
 
   // Build FIDE ID → player lookup
   const playerByFideId = new Map<string, FIDEPlayer>();
@@ -385,21 +384,6 @@ export function buildPlayerNotableGames(
  * Cleans the directory first to avoid stale files.
  * Uses __ separator in filenames since slugs now contain /.
  */
-export function writeGameFiles(games: GameDetail[], dir: string): number {
-  // Clean old files
-  if (existsSync(dir)) {
-    rmSync(dir, { recursive: true });
-  }
-  mkdirSync(dir, { recursive: true });
-
-  for (const game of games) {
-    const diskFilename = game.slug.replace(/\//g, "__");
-    writeFileSync(join(dir, `${diskFilename}.json`), JSON.stringify(game));
-  }
-
-  return games.length;
-}
-
 // ─── Incremental processing (for memory-efficient two-pass pipeline) ─────────
 
 /** Notable game candidate with score for ranking. */
@@ -479,7 +463,7 @@ export function createGameProcessingState(
     notableGamesMap: new Map(),
     gameAliases: new Map(),
     playerByFideId,
-    minElo: options.minElo ?? 2000,
+    minElo: options.minElo ?? 500,
     filesWritten: 0,
   };
 }
@@ -494,7 +478,7 @@ export function createGameProcessingState(
 export function processGameDetailsChunk(
   games: TWICGameHeader[],
   state: GameProcessingState,
-  gameDetailsDir: string
+  gameDetailsFd: number
 ): void {
   for (const game of games) {
     if (!game.whiteFideId || !game.blackFideId) continue;
@@ -561,8 +545,7 @@ export function processGameDetailsChunk(
       result: game.result,
       pgn: game.rawPgn,
     };
-    const diskFilename = slug.replace(/\//g, "__");
-    writeFileSync(join(gameDetailsDir, `${diskFilename}.json`), JSON.stringify(detail));
+    writeSync(gameDetailsFd, JSON.stringify(detail) + "\n");
     state.filesWritten++;
 
     // Accumulate lightweight index entry (no pgn)
@@ -653,7 +636,7 @@ export function finalizeGameProcessing(
   const gameIndex: GameIndex = {
     generatedAt: new Date().toISOString(),
     totalGames: state.indexEntries.length,
-    games: state.indexEntries,
+    games: state.indexEntries.slice(),
   };
 
   const playerRecentGames = new Map<string, RecentGame[]>();

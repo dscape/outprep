@@ -14,8 +14,9 @@
  */
 
 import { put } from "@vercel/blob";
-import { readFileSync, readdirSync, existsSync, writeFileSync, unlinkSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, writeFileSync, unlinkSync, createReadStream } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
 import type { FIDEPlayer, PlayerIndex, GameIndex } from "./types";
 
 const DEFAULT_PREFIX = "fide";
@@ -25,7 +26,8 @@ interface UploadOptions {
   onProgress?: (uploaded: number, total: number) => void;
   stateFile?: string; // Path to upload-state.json for resume
   fresh?: boolean; // Ignore resume state
-  gameDetailsDir?: string; // Directory with individual game detail JSON files
+  gameDetailsJsonl?: string; // Path to game-details.jsonl file
+  gameDetailCount?: number; // Total game details for progress calculation
   gameIndex?: GameIndex; // Game index to upload
   gameAliases?: Record<string, string>; // Legacy game slug → new slug map
 }
@@ -190,15 +192,11 @@ export async function uploadAllFromDisk(
     ? readdirSync(gamesDir).filter(f => f.endsWith(".json"))
     : [];
 
-  // Count game detail files on disk
-  const gameDetailFiles = opts?.gameDetailsDir && existsSync(opts.gameDetailsDir)
-    ? readdirSync(opts.gameDetailsDir).filter(f => f.endsWith(".json"))
-    : [];
-
   // +1 for game-index.json if present, +1 for game-aliases.json if present
   const gameIndexCount = opts?.gameIndex ? 1 : 0;
   const gameAliasCount = opts?.gameAliases ? 1 : 0;
-  const total = 2 + gameAliasCount + players.length + gameFiles.length + gameIndexCount + gameDetailFiles.length;
+  const gameDetailTotal = opts?.gameDetailCount ?? 0;
+  const total = 2 + gameAliasCount + players.length + gameFiles.length + gameIndexCount + gameDetailTotal;
   let uploaded = 0;
 
   // 1. Upload index
@@ -302,31 +300,62 @@ export async function uploadAllFromDisk(
     onProgress?.(uploaded, total);
   }
 
-  // 6. Upload game detail files in batches of 5
+  // 6. Upload game details from JSONL file (streaming, one line at a time)
   let gameDetailsUploaded = 0;
-  if (opts?.gameDetailsDir && gameDetailFiles.length > 0) {
-    for (let i = 0; i < gameDetailFiles.length; i += GAME_BATCH_SIZE) {
-      const batch = gameDetailFiles.slice(i, i + GAME_BATCH_SIZE);
+  if (opts?.gameDetailsJsonl && existsSync(opts.gameDetailsJsonl)) {
+    const rl = createInterface({
+      input: createReadStream(opts.gameDetailsJsonl, { encoding: "utf-8" }),
+      crlfDelay: Infinity,
+    });
+
+    let batch: { path: string; content: string }[] = [];
+
+    for await (const line of rl) {
+      if (!line.trim()) continue;
+      const detail = JSON.parse(line) as { slug: string };
+      const path = `${prefix}/game-details/${detail.slug}.json`;
+
+      if (!state.uploaded.has(path)) {
+        batch.push({ path, content: line });
+      } else {
+        gameDetailsUploaded++;
+        uploaded++;
+        onProgress?.(uploaded, total);
+      }
+
+      if (batch.length >= GAME_BATCH_SIZE) {
+        await Promise.all(
+          batch.map(async (item) => {
+            await retryWithBackoff(() =>
+              put(item.path, item.content, {
+                access: "public",
+                contentType: "application/json",
+                addRandomSuffix: false,
+              })
+            );
+            state.uploaded.add(item.path);
+            gameDetailsUploaded++;
+            uploaded++;
+            onProgress?.(uploaded, total);
+          })
+        );
+        batch = [];
+        saveState(stateFile, state);
+      }
+    }
+
+    // Flush remaining batch
+    if (batch.length > 0) {
       await Promise.all(
-        batch.map(async (fileName) => {
-          const diskSlug = fileName.replace(/\.json$/, "");
-          // Disk filenames use __ separator, blob paths use /
-          const blobSlug = diskSlug.replace(/__/g, "/");
-          const path = `${prefix}/game-details/${blobSlug}.json`;
-          if (!state.uploaded.has(path)) {
-            const detailPath = join(opts.gameDetailsDir!, fileName);
-            if (existsSync(detailPath)) {
-              const content = readFileSync(detailPath, "utf-8");
-              await retryWithBackoff(() =>
-                put(path, content, {
-                  access: "public",
-                  contentType: "application/json",
-                  addRandomSuffix: false,
-                })
-              );
-              state.uploaded.add(path);
-            }
-          }
+        batch.map(async (item) => {
+          await retryWithBackoff(() =>
+            put(item.path, item.content, {
+              access: "public",
+              contentType: "application/json",
+              addRandomSuffix: false,
+            })
+          );
+          state.uploaded.add(item.path);
           gameDetailsUploaded++;
           uploaded++;
           onProgress?.(uploaded, total);

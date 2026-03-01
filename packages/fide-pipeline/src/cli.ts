@@ -21,14 +21,12 @@ import {
   buildGameAliasMap,
   buildPlayerRecentGames,
   buildPlayerNotableGames,
-  writeGameFiles,
   createGameProcessingState,
   processGameDetailsChunk,
   finalizeGameProcessing,
 } from "./game-indexer";
 import type { TWICGameHeader, FIDEPlayer, GameIndex } from "./types";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync, openSync, writeSync, closeSync, renameSync } from "node:fs";
-import { rm } from "node:fs/promises";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, rmSync, appendFileSync, openSync, writeSync, closeSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,14 +60,13 @@ loadEnvFile();
 const DATA_DIR = join(import.meta.dirname, "..", "data");
 const PROCESSED_DIR = join(DATA_DIR, "processed");
 const GAMES_DIR = join(PROCESSED_DIR, "games");
-const GAME_DETAILS_DIR = join(PROCESSED_DIR, "game-details");
+const GAME_DETAILS_JSONL = join(PROCESSED_DIR, "game-details.jsonl");
 const RATINGS_DIR = join(DATA_DIR, "ratings");
 
 function ensureDirs(): void {
   if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
   if (!existsSync(PROCESSED_DIR)) mkdirSync(PROCESSED_DIR, { recursive: true });
   if (!existsSync(GAMES_DIR)) mkdirSync(GAMES_DIR, { recursive: true });
-  if (!existsSync(GAME_DETAILS_DIR)) mkdirSync(GAME_DETAILS_DIR, { recursive: true });
 }
 
 const program = new Command()
@@ -265,15 +262,9 @@ async function processTwoPass(
   mkdirSync(GAMES_TEMP_DIR, { recursive: true });
   const slugsWithGames = new Set<string>();
 
-  // Clean game-details dir before incremental writes — rename instantly, delete in background
-  let oldGameDetailsCleanup: Promise<void> | null = null;
-  if (existsSync(GAME_DETAILS_DIR)) {
-    const oldDir = `${GAME_DETAILS_DIR}-old-${Date.now()}`;
-    console.log("  Moving previous game-details directory aside...");
-    renameSync(GAME_DETAILS_DIR, oldDir);
-    oldGameDetailsCleanup = rm(oldDir, { recursive: true, force: true }).catch(() => {});
-  }
-  mkdirSync(GAME_DETAILS_DIR, { recursive: true });
+  // Open game-details JSONL file for incremental writes (one line per game detail)
+  if (existsSync(GAME_DETAILS_JSONL)) unlinkSync(GAME_DETAILS_JSONL);
+  const gameDetailsFd = openSync(GAME_DETAILS_JSONL, "w");
 
   console.log("  Initializing game processing state...");
   const gameState = createGameProcessingState(players, { minElo: opts.minElo });
@@ -315,10 +306,13 @@ async function processTwoPass(
       appendFileSync(join(GAMES_TEMP_DIR, `${slug}.jsonl`), lines);
     }
 
-    // Write game detail files immediately (no accumulation)
-    processGameDetailsChunk(games, gameState, GAME_DETAILS_DIR);
+    // Write game details to JSONL immediately (no accumulation)
+    processGameDetailsChunk(games, gameState, gameDetailsFd);
     // games + batchAppends freed at next iteration
   }
+
+  // Close game-details JSONL file
+  closeSync(gameDetailsFd);
 
   // Convert JSONL temp files to final JSON array files
   const totalSlugs = slugsWithGames.size;
@@ -391,15 +385,14 @@ async function processTwoPass(
   streamWriteRecord(join(PROCESSED_DIR, "game-aliases.json"), gameAliases);
 
   console.log(`\nProcessed data saved to ${PROCESSED_DIR}/`);
-  console.log(`  index.json:      ${index.totalPlayers} players`);
-  console.log(`  players.json:    ${players.length} player profiles`);
-  console.log(`  games/:          ${gameFilesWritten} game files`);
-  console.log(`  game-details/:   ${gameDetailFilesWritten} game pages`);
-  console.log(`  game-index.json: ${totalGamesIndexed} games indexed`);
-  console.log(`  aliases.json:    ${Object.keys(aliasMap).length} aliases`);
-  console.log(`  game-aliases:    ${totalGameAliases} game aliases\n`);
+  console.log(`  index.json:          ${index.totalPlayers} players`);
+  console.log(`  players.json:        ${players.length} player profiles`);
+  console.log(`  games/:              ${gameFilesWritten} game files`);
+  console.log(`  game-details.jsonl:  ${gameDetailFilesWritten} game pages`);
+  console.log(`  game-index.json:     ${totalGamesIndexed} games indexed`);
+  console.log(`  aliases.json:        ${Object.keys(aliasMap).length} aliases`);
+  console.log(`  game-aliases:        ${totalGameAliases} game aliases\n`);
 
-  // Background cleanup of old game-details directory — no need to wait, process will exit when done
   return { players, index, aliasMap, gameAliases, gameIndex, gameFilesWritten, gameDetailFilesWritten };
 }
 
@@ -466,7 +459,11 @@ program
     console.log("\n  Building game detail pages...");
     const gameDetails = buildGameDetails(games, players, { minElo: 0 });
     const gameIndex = buildGameIndex(gameDetails);
-    const gameDetailFilesWritten = writeGameFiles(gameDetails, GAME_DETAILS_DIR);
+    // Write game details as JSONL (one JSON object per line)
+    const gameDetailsFd = openSync(GAME_DETAILS_JSONL, "w");
+    for (const detail of gameDetails) writeSync(gameDetailsFd, JSON.stringify(detail) + "\n");
+    closeSync(gameDetailsFd);
+    const gameDetailFilesWritten = gameDetails.length;
     console.log(`  ${gameDetailFilesWritten} game pages generated`);
 
     // 5c. Build game alias map (legacy slugs → new slugs for 301 redirects)
@@ -529,7 +526,8 @@ program
 
       const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
         prefix: "fide-smoke",
-        gameDetailsDir: GAME_DETAILS_DIR,
+        gameDetailsJsonl: GAME_DETAILS_JSONL,
+        gameDetailCount: gameDetailFilesWritten,
         gameIndex,
         onProgress: (uploaded, total) => {
           if (uploaded % 100 === 0 || uploaded === total) {
@@ -662,9 +660,15 @@ program
     const gameIndex: GameIndex | undefined = existsSync(gameIndexPath)
       ? JSON.parse(readFileSync(gameIndexPath, "utf-8"))
       : undefined;
-    const gameDetailCount = existsSync(GAME_DETAILS_DIR)
-      ? readdirSync(GAME_DETAILS_DIR).filter(f => f.endsWith(".json")).length
-      : 0;
+
+    // Count game details from JSONL file
+    let gameDetailCount = 0;
+    if (existsSync(GAME_DETAILS_JSONL)) {
+      const content = readFileSync(GAME_DETAILS_JSONL, "utf-8");
+      for (let i = 0; i < content.length; i++) {
+        if (content[i] === "\n") gameDetailCount++;
+      }
+    }
 
     // Load game aliases if available
     const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
@@ -678,7 +682,8 @@ program
     const start = Date.now();
     const result = await uploadAllFromDisk(players, index, aliases, GAMES_DIR, {
       prefix: opts.prefix,
-      gameDetailsDir: existsSync(GAME_DETAILS_DIR) ? GAME_DETAILS_DIR : undefined,
+      gameDetailsJsonl: existsSync(GAME_DETAILS_JSONL) ? GAME_DETAILS_JSONL : undefined,
+      gameDetailCount,
       gameIndex,
       gameAliases,
       onProgress: (uploaded, total) => {
@@ -744,7 +749,8 @@ program
 
     const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
       prefix: opts.prefix,
-      gameDetailsDir: GAME_DETAILS_DIR,
+      gameDetailsJsonl: GAME_DETAILS_JSONL,
+      gameDetailCount: gameDetailFilesWritten,
       gameIndex,
       gameAliases,
       onProgress: (uploaded, total) => {

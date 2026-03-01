@@ -60,7 +60,7 @@ npm run fide-pipeline -- smoke
 
 ```bash
 # Step 1: Download TWIC zip files (~200 issues = ~4 years of OTB games)
-npm run fide-pipeline -- download --from 1433 --to 1633
+npm run fide-pipeline -- download --from 925 --to 1633
 
 # Step 2: Process PGNs + enrich with FIDE data
 npm run fide-pipeline -- process --min-games 3
