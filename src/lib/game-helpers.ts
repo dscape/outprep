@@ -2,6 +2,7 @@ import { OTBGame, LichessGame } from "./types";
 import { openingFamily } from "./profile-builder";
 import { classifyOpening } from "./analysis/eco-classifier";
 import { generateGameSlug } from "./game-slug";
+import { ECO_NAMES } from "../../packages/fide-pipeline/src/eco-names";
 
 export interface GameForDrilldown {
   id: string;
@@ -102,14 +103,26 @@ function extractPgnHeader(pgn: string, key: string): string | null {
 }
 
 /**
+ * Resolve an opening name using the same logic as the pipeline (aggregate.ts).
+ * Priority: ECO_NAMES map → PGN [Opening] header → ECO code → "Unknown"
+ */
+function resolveOpeningName(eco: string | null, opening: string | null): string {
+  if (eco && ECO_NAMES[eco]) return ECO_NAMES[eco];
+  if (opening && opening !== "?") return opening;
+  return eco || "Unknown";
+}
+
+/**
  * Normalize a FIDE name for case-insensitive matching.
- * Strips accents and lowercases.
+ * Strips accents, lowercases, and ensures consistent comma spacing
+ * (PGN uses "Caruana,F" while FIDE uses "Caruana, Fabiano").
  */
 function normalizeName(name: string): string {
   return name
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
+    .replace(/,/g, ", ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -131,7 +144,9 @@ export function fideGamesToDrilldown(
     const event = extractPgnHeader(pgn, "Event");
     const date = extractPgnHeader(pgn, "Date");
     const round = extractPgnHeader(pgn, "Round");
-    const rawOpening = extractPgnHeader(pgn, "Opening") || extractPgnHeader(pgn, "ECO") || "Unknown";
+    const eco = extractPgnHeader(pgn, "ECO");
+    const opening = extractPgnHeader(pgn, "Opening");
+    const resolvedOpening = resolveOpeningName(eco, opening);
     const whiteFideId = extractPgnHeader(pgn, "WhiteFideId") || "";
     const blackFideId = extractPgnHeader(pgn, "BlackFideId") || "";
 
@@ -152,7 +167,7 @@ export function fideGamesToDrilldown(
       white,
       black,
       result,
-      openingFamily: openingFamily(rawOpening),
+      openingFamily: openingFamily(resolvedOpening),
       playerColor,
       opponent,
       date: date || undefined,

@@ -2,7 +2,6 @@ import { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import {
   getGame,
-  getGameIndex,
   getGameAliasTarget,
   formatPlayerName,
 } from "@/lib/fide-blob";
@@ -13,12 +12,10 @@ import GameReplay from "@/components/GameReplay";
 export const revalidate = 604800; // 7 days
 export const dynamicParams = true;
 
-// Pre-render all game pages at build time
+// Game pages are generated on-demand via ISR (dynamicParams: true).
+// Avoids loading the 1.4GB game-index.json at build time.
 export async function generateStaticParams() {
-  const index = await getGameIndex();
-  if (!index) return [];
-
-  return index.games.map((g) => ({ slug: g.slug.split("/") }));
+  return [];
 }
 
 function formatDate(date: string): string {

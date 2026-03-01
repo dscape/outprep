@@ -43,6 +43,10 @@ let cachedGameIndex: { data: GameIndex; fetchedAt: number } | null = null;
 let cachedGameAliases: { data: Record<string, string>; fetchedAt: number } | null = null;
 const INDEX_CACHE_TTL = 60 * 60 * 1000; // 1 hour
 
+// In-memory LRU cache for individual game details looked up from JSONL
+const gameDetailCache = new Map<string, GameDetail>();
+const GAME_DETAIL_CACHE_MAX = 100;
+
 // ─── Local file fallback for development ──────────────────────────────────────
 
 let localData: {
@@ -121,6 +125,59 @@ async function loadLocalGames(slug: string): Promise<string[] | null> {
     if (fs.existsSync(gameFile)) {
       return JSON.parse(fs.readFileSync(gameFile, "utf-8"));
     }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Search game-details.jsonl for a specific game by slug.
+ * Streams line-by-line to avoid loading the entire 4.5GB file into memory.
+ * Caches results for subsequent lookups.
+ */
+async function loadGameFromJsonl(slug: string): Promise<GameDetail | null> {
+  if (gameDetailCache.has(slug)) {
+    return gameDetailCache.get(slug)!;
+  }
+
+  try {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const readline = await import("node:readline");
+
+    const jsonlPath = path.join(
+      process.cwd(),
+      "packages/fide-pipeline/data/processed/game-details.jsonl"
+    );
+
+    if (!fs.existsSync(jsonlPath)) return null;
+
+    const rl = readline.createInterface({
+      input: fs.createReadStream(jsonlPath, { encoding: "utf-8" }),
+      crlfDelay: Infinity,
+    });
+
+    const needle = `"slug":"${slug}"`;
+
+    for await (const line of rl) {
+      if (!line) continue;
+      // Quick substring check before parsing (avoids JSON.parse on every line)
+      if (!line.includes(needle)) continue;
+
+      const detail = JSON.parse(line) as GameDetail;
+      if (detail.slug === slug) {
+        // Evict oldest entry if cache is full
+        if (gameDetailCache.size >= GAME_DETAIL_CACHE_MAX) {
+          const firstKey = gameDetailCache.keys().next().value;
+          if (firstKey) gameDetailCache.delete(firstKey);
+        }
+        gameDetailCache.set(slug, detail);
+        rl.close();
+        return detail;
+      }
+    }
+
     return null;
   } catch {
     return null;
@@ -332,8 +389,12 @@ export async function getGame(slug: string): Promise<GameDetail | null> {
         return JSON.parse(fs.readFileSync(gameFile, "utf-8"));
       }
     } catch {
-      // fall through to Blob
+      // fall through
     }
+
+    // JSONL fallback: stream game-details.jsonl to find the game
+    const fromJsonl = await loadGameFromJsonl(slug);
+    if (fromJsonl) return fromJsonl;
   }
 
   return fetchBlobJson<GameDetail>(`${PREFIX}/game-details/${slug}.json`);
@@ -359,9 +420,16 @@ export async function getGameAliasTarget(slug: string): Promise<string | null> {
         "packages/fide-pipeline/data/processed/game-aliases.json"
       );
       if (fs.existsSync(aliasesPath)) {
-        const data = JSON.parse(fs.readFileSync(aliasesPath, "utf-8"));
-        cachedGameAliases = { data, fetchedAt: Date.now() };
-        return data[slug] ?? null;
+        const stat = fs.statSync(aliasesPath);
+        if (stat.size > 256 * 1024 * 1024) {
+          console.warn(
+            `[fide-blob] game-aliases.json is too large (${(stat.size / 1024 / 1024).toFixed(0)}MB), skipping local load`
+          );
+        } else {
+          const data = JSON.parse(fs.readFileSync(aliasesPath, "utf-8"));
+          cachedGameAliases = { data, fetchedAt: Date.now() };
+          return data[slug] ?? null;
+        }
       }
     } catch {
       // fall through to Blob
