@@ -14,6 +14,16 @@ import {
   normalizePlayerName,
 } from "./aggregate";
 import { uploadAllFromDisk } from "./upload";
+import {
+  ensureSchema,
+  upsertPlayers,
+  upsertPlayerAliases,
+  upsertGamesFromJsonl,
+  upsertGameAliases,
+  recordPipelineRun,
+  completePipelineRun,
+  failPipelineRun,
+} from "./upload-pg";
 import { loadFideData, enrichPlayers } from "./fide-enrichment";
 import {
   buildGameDetails,
@@ -793,6 +803,94 @@ program
     console.log(`  Players uploaded:  ${result.playersUploaded}`);
     console.log(`  Game files:        ${result.gamesUploaded}`);
     console.log(`  Game pages:        ${result.gameDetailsUploaded}\n`);
+  });
+
+// ─── upload-pg ───────────────────────────────────────────────────────────────
+
+program
+  .command("upload-pg")
+  .description("Upload processed data to Vercel Postgres (replaces Blob upload)")
+  .action(async () => {
+    if (!process.env.DATABASE_URL) {
+      console.error("DATABASE_URL environment variable is required.");
+      console.error("Set it in .env or use: docker compose up -d");
+      process.exit(1);
+    }
+
+    ensureDirs();
+
+    const playersPath = join(PROCESSED_DIR, "players.json");
+    if (!existsSync(playersPath)) {
+      console.error("Processed data not found. Run 'process' first.");
+      process.exit(1);
+    }
+
+    console.log("\n═══ Upload to Postgres ═══\n");
+    const start = Date.now();
+
+    // Ensure schema exists
+    console.log("Ensuring schema...");
+    await ensureSchema();
+
+    // Record pipeline run
+    const runId = await recordPipelineRun("upload-pg", new Date().toISOString());
+
+    try {
+      // Load players
+      console.log("Loading players...");
+      const players: FIDEPlayer[] = JSON.parse(readFileSync(playersPath, "utf-8"));
+      console.log(`  ${players.length} players loaded\n`);
+
+      // Upsert players
+      console.log("Upserting players...");
+      const playersUpserted = await upsertPlayers(players, (count, total) => {
+        if (count % 1000 === 0 || count === total) {
+          const pct = Math.round((count / total) * 100);
+          console.log(`  Players: ${count}/${total} (${pct}%)`);
+        }
+      });
+      console.log(`  ${playersUpserted} players upserted\n`);
+
+      // Upsert player aliases
+      console.log("Upserting player aliases...");
+      const aliasCount = await upsertPlayerAliases(players, (count) => {
+        if (count % 5000 === 0) {
+          console.log(`  Aliases: ${count}`);
+        }
+      });
+      console.log(`  ${aliasCount} aliases upserted\n`);
+
+      // Upsert games from JSONL
+      if (existsSync(GAME_DETAILS_JSONL)) {
+        console.log("Upserting games from JSONL...");
+        const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (count) => {
+          if (count % 10000 === 0) {
+            console.log(`  Games: ${count}`);
+          }
+        });
+        console.log(`  ${gamesUpserted} games upserted\n`);
+      }
+
+      // Upsert game aliases
+      const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
+      if (existsSync(gameAliasesPath)) {
+        console.log("Upserting game aliases...");
+        const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count) => {
+          if (count % 10000 === 0) {
+            console.log(`  Game aliases: ${count}`);
+          }
+        });
+        console.log(`  ${gameAliasCount} game aliases upserted\n`);
+      }
+
+      await completePipelineRun(runId);
+
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`\n═══ Postgres Upload Complete (${elapsed}s) ═══\n`);
+    } catch (e) {
+      await failPipelineRun(runId, String(e));
+      throw e;
+    }
   });
 
 // ─── full ─────────────────────────────────────────────────────────────────────

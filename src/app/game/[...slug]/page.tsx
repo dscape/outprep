@@ -1,10 +1,12 @@
 import { Metadata } from "next";
+import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import {
   getGame,
   getGameAliasTarget,
+  getGamePgn,
   formatPlayerName,
-} from "@/lib/fide-blob";
+} from "@/lib/db";
 import { TitleBadge } from "@/components/title-badge";
 import { CountryFlag } from "@/components/country-flag";
 import GameReplay from "@/components/GameReplay";
@@ -97,7 +99,7 @@ export default async function GamePage({
 }) {
   const { slug: slugParts } = await params;
   const slug = slugParts.join("/");
-  let game = await getGame(slug);
+  const game = await getGame(slug);
 
   if (!game) {
     // Check if this is a legacy slug that should redirect to the new URL
@@ -107,6 +109,9 @@ export default async function GamePage({
     }
     notFound();
   }
+
+  // Fetch PGN from Blob (stored separately to keep DB small)
+  const pgn = await getGamePgn(slug);
 
   const white = formatPlayerName(game.whiteName);
   const black = formatPlayerName(game.blackName);
@@ -148,12 +153,12 @@ export default async function GamePage({
 
       <div className="min-h-screen px-4 py-8">
         <div className="mx-auto max-w-3xl">
-          <a
+          <Link
             href="/"
             className="mb-6 inline-block text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             &larr; Back to search
-          </a>
+          </Link>
 
           {/* Players Header */}
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
@@ -249,10 +254,10 @@ export default async function GamePage({
           </div>
 
           {/* Game Replay + Analysis */}
-          {game.pgn && (
+          {pgn && (
             <div className="mt-8">
               <GameReplay
-                pgn={game.pgn}
+                pgn={pgn}
                 whiteName={white}
                 blackName={black}
               />

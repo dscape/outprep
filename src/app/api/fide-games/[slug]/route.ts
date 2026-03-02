@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getPlayerGames } from "@/lib/fide-blob";
+import { getPlayerGames } from "@/lib/practice-blob";
 
 export async function GET(
   _req: NextRequest,

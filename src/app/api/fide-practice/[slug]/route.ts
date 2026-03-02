@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { getPlayerGames } from "@/lib/fide-blob";
+import { getPlayerGames } from "@/lib/practice-blob";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
 

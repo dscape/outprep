@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "path": "/api/cron/twic-update",
+      "schedule": "0 6 * * 1"
+    },
+    {
+      "path": "/api/cron/fide-ratings",
+      "schedule": "0 6 1 * *"
+    }
+  ]
+}

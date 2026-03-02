@@ -2,11 +2,10 @@ import { Metadata } from "next";
 import { notFound, permanentRedirect } from "next/navigation";
 import {
   getPlayer,
-  getPlayerIndex,
   getAliasTarget,
   formatPlayerName,
-} from "@/lib/fide-blob";
-import type { FIDEPlayer } from "@/lib/fide-blob";
+} from "@/lib/db";
+import type { FIDEPlayer } from "@/lib/db";
 import { TitleBadge } from "@/components/title-badge";
 import { CountryFlag } from "@/components/country-flag";
 import PracticeLoader from "./practice-loader";
