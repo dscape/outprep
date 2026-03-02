@@ -38,5 +38,7 @@ export async function fetchLichessGames(
 
   const text = await res.text();
   const lines = text.trim().split("\n").filter(Boolean);
-  return lines.map((line) => JSON.parse(line));
+  const games: LichessGame[] = lines.map((line) => JSON.parse(line));
+  // Filter out games with no moves (noStart, aborted before any move, etc.)
+  return games.filter((g) => g.moves && g.moves.trim().length > 0);
 }

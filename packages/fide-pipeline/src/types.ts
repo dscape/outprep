@@ -25,6 +25,7 @@ export interface TWICGameHeader {
 export interface OpeningStats {
   eco: string;
   name: string;
+  family?: string;
   games: number;
   pct: number;
   winRate: number;

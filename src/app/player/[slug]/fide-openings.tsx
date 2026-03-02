@@ -11,6 +11,7 @@ interface FideOpeningsProps {
   black: OpeningStats[];
   playerSlug: string;
   playerName: string;
+  playerFideId?: string;
 }
 
 export default function FideOpenings({
@@ -18,6 +19,7 @@ export default function FideOpenings({
   black,
   playerSlug,
   playerName,
+  playerFideId,
 }: FideOpeningsProps) {
   const [games, setGames] = useState<GameForDrilldown[] | undefined>();
   const [loading, setLoading] = useState(false);
@@ -33,7 +35,7 @@ export default function FideOpenings({
       const data = await res.json();
       const rawPgns: string[] = data.games || [];
       const converted = rawPgns.map((pgn: string, i: number) =>
-        normalizedToGameForDrilldown(fromFidePGN(pgn, playerName, i))
+        normalizedToGameForDrilldown(fromFidePGN(pgn, playerName, i, playerFideId))
       );
       setGames(converted);
     } catch {
@@ -41,7 +43,7 @@ export default function FideOpenings({
     } finally {
       setLoading(false);
     }
-  }, [playerSlug, playerName, games, loading]);
+  }, [playerSlug, playerName, playerFideId, games, loading]);
 
   const handleAnalyze = useCallback((game: GameForDrilldown) => {
     // Navigate to the game page if we have a valid slug

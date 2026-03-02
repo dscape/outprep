@@ -63,6 +63,21 @@ export async function getAliasTarget(slug: string): Promise<string | null> {
   return (rows[0]?.canonical_slug as string) ?? null;
 }
 
+/**
+ * Get a player profile by FIDE ID.
+ * Uses the idx_players_fide_id index for efficient lookup.
+ */
+export async function getPlayerByFideId(fideId: string): Promise<FIDEPlayer | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`SELECT * FROM players WHERE fide_id = ${fideId}`;
+    if (rows.length === 0) return null;
+    return mapRowToPlayer(rows[0]);
+  } catch {
+    return null;
+  }
+}
+
 // ─── Game queries ────────────────────────────────────────────────────────────
 
 /**

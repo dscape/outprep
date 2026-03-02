@@ -66,7 +66,14 @@ export function fromLichessGame(
   else if (game.status === "draw" || game.status === "stalemate") result = "draw";
 
   const evals = game.analysis?.map(evalToCp);
-  const rawOpening = game.opening?.name || "Unknown";
+  let rawOpening = game.opening?.name || "";
+  let rawEco = game.opening?.eco || "";
+  if (!rawOpening && game.moves) {
+    const classified = classifyOpening(game.moves);
+    rawOpening = classified?.name || "Unknown";
+    rawEco = classified?.eco || rawEco;
+  }
+  if (!rawOpening) rawOpening = "Unknown";
 
   // Construct a minimal PGN from the moves field if the API didn't include one.
   // chess.js's loadPgn() needs proper PGN with move numbers.
@@ -89,7 +96,7 @@ export function fromLichessGame(
     black: { name: blackName, id: game.players.black.user?.id || "" },
     result,
     opening: {
-      eco: game.opening?.eco || "",
+      eco: rawEco,
       name: rawOpening,
       family: openingFamily(rawOpening),
     },
@@ -113,9 +120,9 @@ export function fromOTBGame(
   const lower = username.toLowerCase().replace(/[^a-z0-9]/g, "");
   const isWhite = game.white.toLowerCase().replace(/[^a-z0-9]/g, "").includes(lower);
 
-  let rawOpening = game.opening || "";
-  if (!rawOpening && game.eco) rawOpening = game.eco;
-  if (!rawOpening) {
+  // Prefer ECO_NAMES lookup (e.g., "Sicilian Defense") over raw PGN header (e.g., "Sicilian")
+  let rawOpening = resolveOpeningName(game.eco || null, game.opening || null);
+  if (rawOpening === "Unknown") {
     const classified = classifyOpening(game.moves);
     rawOpening = classified?.name || "Unknown";
   }
@@ -190,6 +197,7 @@ export function fromFidePGN(
   pgn: string,
   playerName: string,
   index: number,
+  playerFideId?: string,
 ): NormalizedGame {
   const normalizedPlayer = normalizeFideName(playerName);
   const white = extractPgnHeader(pgn, "White") || "White";
@@ -204,9 +212,15 @@ export function fromFidePGN(
   const whiteFideId = extractPgnHeader(pgn, "WhiteFideId") || "";
   const blackFideId = extractPgnHeader(pgn, "BlackFideId") || "";
 
-  const isWhite =
-    normalizeFideName(white).includes(normalizedPlayer) ||
-    normalizedPlayer.includes(normalizeFideName(white));
+  // Prefer FIDE ID matching over name matching for reliable color detection
+  let isWhite: boolean;
+  if (playerFideId && (whiteFideId || blackFideId)) {
+    isWhite = whiteFideId === playerFideId;
+  } else {
+    isWhite =
+      normalizeFideName(white).includes(normalizedPlayer) ||
+      normalizedPlayer.includes(normalizeFideName(white));
+  }
 
   const slug =
     whiteFideId && blackFideId

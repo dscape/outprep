@@ -214,6 +214,7 @@ function countMaterial(chess: Chess): { white: number; black: number } {
 
 interface OpeningAccumulator {
   ecoMap: Map<string, number>;
+  nameMap: Map<string, number>;
   name: string;
   wins: number;
   draws: number;
@@ -241,6 +242,7 @@ export function analyzeOpenings(
     if (!map.has(key)) {
       map.set(key, {
         ecoMap: new Map<string, number>(),
+        nameMap: new Map<string, number>(),
         name: key,
         wins: 0,
         draws: 0,
@@ -254,6 +256,9 @@ export function analyzeOpenings(
     if (game.opening.eco) {
       entry.ecoMap.set(game.opening.eco, (entry.ecoMap.get(game.opening.eco) || 0) + 1);
     }
+    if (game.opening.name && game.opening.name !== "Unknown") {
+      entry.nameMap.set(game.opening.name, (entry.nameMap.get(game.opening.name) || 0) + 1);
+    }
 
     if (game.result === "draw" || !game.result) {
       entry.draws++;
@@ -266,22 +271,32 @@ export function analyzeOpenings(
 
   const toStats = (map: Map<string, OpeningAccumulator>): OpeningStats[] => {
     const totalGames = Array.from(map.values()).reduce((sum, e) => sum + e.total, 0);
-    return Array.from(map.values())
-      .filter((e) => e.total >= minGames)
-      .sort((a, b) => b.total - a.total)
-      .map((e) => {
+    return Array.from(map.entries())
+      .filter(([, e]) => e.total >= minGames)
+      .sort(([, a], [, b]) => b.total - a.total)
+      .map(([family, e]) => {
         // Resolve to the most frequent ECO code in the group
         let bestEco = "";
-        let bestCount = 0;
+        let bestEcoCount = 0;
         for (const [eco, count] of e.ecoMap) {
-          if (count > bestCount) {
+          if (count > bestEcoCount) {
             bestEco = eco;
-            bestCount = count;
+            bestEcoCount = count;
+          }
+        }
+        // Resolve to the most frequent full opening name in the group
+        let bestName = family;
+        let bestNameCount = 0;
+        for (const [name, count] of e.nameMap) {
+          if (count > bestNameCount) {
+            bestName = name;
+            bestNameCount = count;
           }
         }
         return {
           eco: bestEco,
-          name: e.name,
+          name: bestName,
+          family,
           games: e.total,
           pct: totalGames > 0 ? Math.round((e.total / totalGames) * 100) : 0,
           winRate: Math.round((e.wins / e.total) * 100),

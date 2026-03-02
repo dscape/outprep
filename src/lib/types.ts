@@ -35,6 +35,7 @@ export interface Weakness {
 export interface OpeningStats {
   eco: string;
   name: string;
+  family?: string;
   games: number;
   pct: number;
   winRate: number;

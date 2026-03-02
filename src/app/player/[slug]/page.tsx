@@ -336,6 +336,7 @@ export default async function PlayerPage({
               black={player.openings.black}
               playerSlug={slug}
               playerName={name}
+              playerFideId={player.fideId}
             />
           </div>
 

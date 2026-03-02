@@ -51,7 +51,9 @@
       "Bash(git -C /Users/dscape/dev/outprep log --name-status --oneline -10)",
       "Bash(git -C /Users/dscape/dev/outprep diff HEAD~3..HEAD --stat)",
       "Bash(docker compose up -d)",
-      "Bash(kill 39361 40752 46229)"
+      "Bash(kill 39361 40752 46229)",
+      "Bash(git show 44f52f5 -- src/app/scout/[username]/page.tsx)",
+      "Bash(git show f3fe898 -- src/app/scout/[username]/page.tsx)"
     ]
   }
 }

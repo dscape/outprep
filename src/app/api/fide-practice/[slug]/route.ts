@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { getPlayerGames } from "@/lib/practice-blob";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
+import { getPlayerByFideId, formatPlayerName } from "@/lib/db";
 
 /**
  * Build an OTBProfile server-side for FIDE players.
@@ -13,10 +14,23 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  // When called without ?name= (e.g., direct navigation to /scout/slug?source=fide),
-  // derive a name from the slug by removing the trailing FIDE ID and replacing hyphens.
+
+  // Extract FIDE ID from slug (trailing digits after last hyphen)
+  const fideIdMatch = slug.match(/-(\d{4,})$/);
+  const fideId = fideIdMatch ? fideIdMatch[1] : null;
+
+  // Look up canonical player name from DB using FIDE ID
+  let displayName: string | null = null;
+  if (fideId) {
+    const player = await getPlayerByFideId(fideId);
+    if (player) {
+      displayName = formatPlayerName(player.name);
+    }
+  }
+
+  // Fallback: use ?name= param or derive from slug
   const nameParam = req.nextUrl.searchParams.get("name");
-  const playerName = nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
+  const playerName = displayName || nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
   const rawPgns = await getPlayerGames(slug);
 
   if (!rawPgns || rawPgns.length === 0) {
@@ -31,6 +45,11 @@ export async function GET(
   }
 
   const profile = analyzeOTBGames(otbGames, playerName);
+
+  // Override username with clean display name from DB (avoids PGN-format names)
+  if (displayName) {
+    profile.username = displayName;
+  }
 
   // Strip raw PGN text from each game to keep the payload small.
   // The moves, headers, and metadata are still available for display.

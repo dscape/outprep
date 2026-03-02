@@ -185,19 +185,20 @@ export default function OpeningsTab({
             </thead>
             <tbody>
               {openings.map((op) => {
-                const isExpanded = expandedOpening === op.name;
-                const matchingGames = gamesByOpening?.get(op.name) || [];
-                const coverage = coverageByOpening?.get(op.name);
+                const familyKey = op.family ?? op.name;
+                const isExpanded = expandedOpening === familyKey;
+                const matchingGames = gamesByOpening?.get(familyKey) || [];
+                const coverage = coverageByOpening?.get(familyKey);
 
                 return (
                   <OpeningRow
-                    key={`${op.eco}-${op.name}`}
+                    key={`${op.eco}-${familyKey}`}
                     op={op}
                     isExpanded={isExpanded}
                     isClickable={isClickable}
                     loadingGames={!!loadingGames && isExpanded && !games}
                     matchingGames={matchingGames}
-                    onToggle={() => handleRowClick(op.name)}
+                    onToggle={() => handleRowClick(familyKey)}
                     onAnalyzeGame={onAnalyzeGame}
                     coverage={coverage}
                     hasCoverageColumn={hasCoverage}
