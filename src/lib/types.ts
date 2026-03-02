@@ -62,11 +62,11 @@ export interface SpeedProfile {
 
 export interface PlayerProfile {
   username: string;
-  platform: "lichess";
+  platform: "lichess" | "fide" | "pgn";
   totalGames: number;
   analyzedGames: number;
-  ratings: PlayerRatings;
-  fideEstimate: FIDEEstimate;
+  ratings?: PlayerRatings;
+  fideEstimate?: FIDEEstimate;
   style: StyleMetrics;
   weaknesses: Weakness[];
   openings: {
@@ -74,9 +74,11 @@ export interface PlayerProfile {
     black: OpeningStats[];
   };
   prepTips: PrepTip[];
-  bySpeed: Record<string, SpeedProfile>;
+  bySpeed?: Record<string, SpeedProfile>;
   errorProfile?: ErrorProfile;
   lastComputed: number;
+  /** Original OTB games (only for pgn source) */
+  games?: OTBGame[];
 }
 
 export interface LichessUser {
@@ -166,13 +168,8 @@ export interface OTBGame {
   pgn: string; // raw PGN text
 }
 
-export interface OTBProfile {
-  games: OTBGame[];
-  totalGames: number;
-  style: StyleMetrics;
-  openings: { white: OpeningStats[]; black: OpeningStats[] };
-  weaknesses: Weakness[];
-}
+/** @deprecated Use PlayerProfile with platform: "pgn" instead */
+export type OTBProfile = PlayerProfile;
 
 // Import + re-export shared types from the engine package (single source of truth).
 // The import makes them available within this file; the export makes them available to consumers.

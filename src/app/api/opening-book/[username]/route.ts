@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessGames } from "@/lib/lichess";
 import { generateOpeningBook } from "@/lib/opening-book";
+import { fromLichessGame } from "@/lib/normalized-game";
 
 // In-memory cache for opening books
 const cache = new Map<string, { data: Uint8Array; expires: number }>();
@@ -27,12 +28,13 @@ export async function GET(
       });
     }
 
-    const games = await fetchLichessGames(username, 500);
-    let filtered = games.filter((g) => g.variant === "standard");
+    const rawGames = await fetchLichessGames(username, 500);
+    let filtered = rawGames.filter((g) => g.variant === "standard");
     if (speeds.length > 0) {
       filtered = filtered.filter((g) => speeds.includes(g.speed));
     }
-    const book = generateOpeningBook(filtered, username);
+    const normalized = filtered.map((g) => fromLichessGame(g, username));
+    const book = generateOpeningBook(normalized);
 
     cache.set(cacheKey, { data: book, expires: Date.now() + TTL });
 

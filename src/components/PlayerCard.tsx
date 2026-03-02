@@ -45,7 +45,7 @@ function ConfidenceBar({ confidence }: { confidence: number }) {
 
 export default function PlayerCard({ profile, filteredGames }: PlayerCardProps) {
   const displayGames = filteredGames ?? profile.analyzedGames;
-  const ratings = Object.entries(profile.ratings)
+  const ratings = Object.entries(profile.ratings || {})
     .filter(([, v]) => v !== undefined)
     .map(([k, v]) => ({ label: k, value: v as number }));
 
@@ -63,15 +63,17 @@ export default function PlayerCard({ profile, filteredGames }: PlayerCardProps) 
             )}
           </p>
         </div>
-        <div className="text-right" title="Estimated FIDE rating based on Lichess ratings, adjusted for time control and opponent strength">
-          <div className="text-3xl font-bold text-green-400">
-            ~{profile.fideEstimate.rating}
+        {profile.fideEstimate && (
+          <div className="text-right" title="Estimated FIDE rating based on Lichess ratings, adjusted for time control and opponent strength">
+            <div className="text-3xl font-bold text-green-400">
+              ~{profile.fideEstimate.rating}
+            </div>
+            <div className="text-xs text-zinc-500 uppercase tracking-wide">
+              Est. FIDE
+            </div>
+            <ConfidenceBar confidence={profile.fideEstimate.confidence} />
           </div>
-          <div className="text-xs text-zinc-500 uppercase tracking-wide">
-            Est. FIDE
-          </div>
-          <ConfidenceBar confidence={profile.fideEstimate.confidence} />
-        </div>
+        )}
       </div>
 
       {ratings.length > 0 && (

@@ -1,100 +1,39 @@
-import { OTBGame, OTBProfile, LichessGame } from "./types";
+import { OTBGame, PlayerProfile } from "./types";
 import {
   analyzeStyle,
   analyzeOpenings,
   detectWeaknesses,
+  generatePrepTips,
 } from "./profile-builder";
-import { classifyOpening } from "./analysis/eco-classifier";
+import { fromOTBGame } from "./normalized-game";
 
 /**
- * Analyze OTB games using the same analysis functions as Lichess games.
- * Converts OTBGame[] to LichessGame[] format (thin adapter) and runs
- * analyzeStyle, analyzeOpenings, and detectWeaknesses.
+ * Analyze OTB games using the unified NormalizedGame pipeline.
+ * Returns a PlayerProfile with platform: "pgn".
  */
 export function analyzeOTBGames(
   games: OTBGame[],
   playerName: string
-): OTBProfile {
-  // Resolve the exact player name string used in the PGN White/Black fields
+): PlayerProfile {
   const username = resolvePlayerName(games, playerName);
+  const normalized = games.map((g, i) => fromOTBGame(g, username, i));
 
-  // Convert OTB games to LichessGame-compatible format
-  const converted: LichessGame[] = games.map((g, i) =>
-    adaptOTBToLichess(g, i)
-  );
+  const style = analyzeStyle(normalized);
+  const openings = analyzeOpenings(normalized, 1);
+  const weaknesses = detectWeaknesses(normalized, style, openings, normalized.length);
+  const prepTips = generatePrepTips(weaknesses, openings, style);
 
-  const style = analyzeStyle(converted, username);
-  const openings = analyzeOpenings(converted, username, 1);
-  const weaknesses = detectWeaknesses(
-    converted,
+  return {
     username,
-    style,
-    openings,
-    converted.length
-  );
-
-  return {
-    games,
+    platform: "pgn",
     totalGames: games.length,
+    analyzedGames: games.length,
     style,
-    openings,
     weaknesses,
-  };
-}
-
-/**
- * Convert an OTBGame to the LichessGame shape expected by the analysis functions.
- * All OTB games are treated as classical, rated, standard variant.
- */
-function adaptOTBToLichess(
-  game: OTBGame,
-  index: number,
-): LichessGame {
-  return {
-    id: `otb-${index}`,
-    rated: true,
-    variant: "standard",
-    speed: "classical",
-    perf: "classical",
-    status: game.result === "1/2-1/2" ? "draw" : "mate",
-    players: {
-      white: {
-        user: {
-          name: game.white,
-          id: game.white.toLowerCase().replace(/[^a-z0-9]/g, ""),
-        },
-        rating: 0,
-      },
-      black: {
-        user: {
-          name: game.black,
-          id: game.black.toLowerCase().replace(/[^a-z0-9]/g, ""),
-        },
-        rating: 0,
-      },
-    },
-    winner:
-      game.result === "1-0"
-        ? "white"
-        : game.result === "0-1"
-          ? "black"
-          : undefined,
-    opening: (() => {
-      // Priority: PGN header → ECO classifier → fallback
-      if (game.eco || game.opening) {
-        return {
-          eco: game.eco || "",
-          name: game.opening || game.eco || "Unknown",
-          ply: 0,
-        };
-      }
-      const classified = classifyOpening(game.moves);
-      if (classified) {
-        return { eco: classified.eco, name: classified.name, ply: 0 };
-      }
-      return { eco: "", name: "Unknown", ply: 0 };
-    })(),
-    moves: game.moves,
+    openings,
+    prepTips,
+    lastComputed: Date.now(),
+    games,
   };
 }
 
@@ -117,7 +56,6 @@ function resolvePlayerName(games: OTBGame[], playerName: string): string {
     }
   }
 
-  // Return the most frequently matched player ID
   let bestId = playerName.toLowerCase().replace(/[^a-z0-9]/g, "");
   let bestCount = 0;
   for (const [id, count] of counts) {

@@ -31,7 +31,7 @@ export async function GET(
 
   // Strip raw PGN text from each game to keep the payload small.
   // The moves, headers, and metadata are still available for display.
-  const compactGames = profile.games.map((g) => ({
+  const compactGames = (profile.games || []).map((g) => ({
     white: g.white,
     black: g.black,
     result: g.result,

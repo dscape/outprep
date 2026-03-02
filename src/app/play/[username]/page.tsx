@@ -153,7 +153,7 @@ export default function PlayPage() {
         result,
         playerColor,
         opponentUsername: username,
-        opponentFideEstimate: profile?.fideEstimate.rating,
+        opponentFideEstimate: profile?.fideEstimate?.rating,
         ...(precomputedAnalysis ? {
           precomputedMoves: precomputedAnalysis.moves,
           precomputedSummary: precomputedAnalysis.summary,
@@ -209,7 +209,7 @@ export default function PlayPage() {
           <h2 className="text-2xl font-bold text-white mb-2">
             Play against {profile?.username}
           </h2>
-          {!!profile?.fideEstimate.rating && (
+          {!!profile?.fideEstimate?.rating && (
             <p className="text-zinc-400 mb-2">
               ~{profile.fideEstimate.rating} FIDE estimated
             </p>
@@ -291,7 +291,7 @@ export default function PlayPage() {
         <ChessBoard
           playerColor={playerColor}
           opponentUsername={profile?.username || username}
-          fideEstimate={profile?.fideEstimate.rating || 1500}
+          fideEstimate={profile?.fideEstimate?.rating || 1500}
           errorProfile={activeErrorProfile}
           openingTrie={
             botColor === "white" ? botData?.whiteTrie || null : botData?.blackTrie || null

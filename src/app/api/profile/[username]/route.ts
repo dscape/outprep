@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessUser, fetchLichessGames } from "@/lib/lichess";
 import { buildProfile } from "@/lib/profile-builder";
+import { fromLichessGame } from "@/lib/normalized-game";
 
 // Simple in-memory cache
 const cache = new Map<string, { data: unknown; expires: number }>();
@@ -40,7 +41,8 @@ export async function GET(
       ? games.filter((g) => (g.createdAt ?? 0) >= since)
       : games;
 
-    const profile = buildProfile(user, filtered);
+    const normalized = filtered.map((g) => fromLichessGame(g, user.username));
+    const profile = buildProfile(user, normalized);
     setCache(cacheKey, profile);
 
     return NextResponse.json(profile);

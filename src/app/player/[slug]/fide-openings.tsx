@@ -4,7 +4,7 @@ import { useState, useCallback } from "react";
 import OpeningsTab from "@/components/OpeningsTab";
 import type { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
-import { fideGamesToDrilldown } from "@/lib/game-helpers";
+import { fromFidePGN, normalizedToGameForDrilldown } from "@/lib/normalized-game";
 
 interface FideOpeningsProps {
   white: OpeningStats[];
@@ -32,7 +32,9 @@ export default function FideOpenings({
       if (!res.ok) throw new Error("Failed to load games");
       const data = await res.json();
       const rawPgns: string[] = data.games || [];
-      const converted = fideGamesToDrilldown(rawPgns, playerName);
+      const converted = rawPgns.map((pgn: string, i: number) =>
+        normalizedToGameForDrilldown(fromFidePGN(pgn, playerName, i))
+      );
       setGames(converted);
     } catch {
       setGames([]);

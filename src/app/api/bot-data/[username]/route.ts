@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessGames } from "@/lib/lichess";
 import type { OpeningTrie, ErrorProfile } from "@outprep/engine";
-import { buildOpeningTrie } from "@outprep/engine";
-import { buildErrorProfileFromLichess, lichessGameToGameRecord } from "@/lib/lichess-adapters";
+import { buildOpeningTrie, buildErrorProfileFromEvals } from "@outprep/engine";
+import { fromLichessGame, normalizedToGameRecord, normalizedToGameEvalData } from "@/lib/normalized-game";
 
 /**
  * Returns the bot data needed to play against an opponent:
@@ -37,8 +37,8 @@ export async function GET(
       return NextResponse.json(cached.data);
     }
 
-    const games = await fetchLichessGames(username, 500);
-    let filtered = games.filter((g) => g.variant === "standard");
+    const rawGames = await fetchLichessGames(username, 500);
+    let filtered = rawGames.filter((g) => g.variant === "standard");
     if (speeds.length > 0) {
       filtered = filtered.filter((g) => speeds.includes(g.speed));
     }
@@ -46,23 +46,23 @@ export async function GET(
       filtered = filtered.filter((g) => (g.createdAt ?? 0) >= since);
     }
 
-    const errorProfile = buildErrorProfileFromLichess(filtered, username);
-    const gameRecords = filtered.map((g) => lichessGameToGameRecord(g, username));
+    const normalized = filtered.map((g) => fromLichessGame(g, username));
+    const evalData = normalized
+      .map(normalizedToGameEvalData)
+      .filter((d): d is NonNullable<typeof d> => d !== null);
+    const errorProfile = buildErrorProfileFromEvals(evalData);
+    const gameRecords = normalized.map(normalizedToGameRecord);
     const whiteTrie = buildOpeningTrie(gameRecords, "white");
     const blackTrie = buildOpeningTrie(gameRecords, "black");
 
     // Extract game moves for client-side batch eval
     // playerColor = the profiled player's color (the opponent we're mimicking)
-    const gameMoves = filtered
+    const gameMoves = normalized
       .filter((g) => g.moves)
       .map((g) => ({
         moves: g.moves,
-        playerColor: (
-          g.players.white?.user?.id?.toLowerCase() === username.toLowerCase()
-            ? "white"
-            : "black"
-        ) as "white" | "black",
-        hasEvals: !!g.analysis && g.analysis.length > 0,
+        playerColor: g.playerColor,
+        hasEvals: !!g.evals && g.evals.length > 0,
       }));
 
     const data: BotData = { errorProfile, whiteTrie, blackTrie, gameMoves };

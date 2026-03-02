@@ -1,7 +1,6 @@
 import { Chess } from "chess.js";
 import {
   LichessUser,
-  LichessGame,
   PlayerProfile,
   SpeedProfile,
   StyleMetrics,
@@ -11,38 +10,48 @@ import {
   PlayerRatings,
 } from "./types";
 import type { ErrorProfile } from "@outprep/engine";
+import { buildErrorProfileFromEvals } from "@outprep/engine";
 import { estimateFIDE } from "./fide-estimator";
-import { buildErrorProfileFromLichess } from "./lichess-adapters";
+import type { NormalizedGame } from "./normalized-game";
+import { normalizedToGameEvalData } from "./normalized-game";
+
+function buildErrorProfile(games: NormalizedGame[]): ErrorProfile {
+  const evalData = games
+    .map(normalizedToGameEvalData)
+    .filter((d): d is NonNullable<typeof d> => d !== null);
+  return buildErrorProfileFromEvals(evalData);
+}
 
 export function buildProfile(
   user: LichessUser,
-  games: LichessGame[]
+  games: NormalizedGame[]
 ): PlayerProfile {
-  const standardGames = games.filter((g) => g.variant === "standard");
+  const standardGames = games.filter((g) => (g.variant ?? "standard") === "standard");
   const analyzedGames = standardGames.length;
 
   const ratings = extractRatings(user);
   const fideEstimate = estimateFIDE(user);
   // Aggregate analysis (all speeds combined)
-  const style = analyzeStyle(standardGames, user.username);
-  const openings = analyzeOpenings(standardGames, user.username);
-  const weaknesses = detectWeaknesses(standardGames, user.username, style, openings, analyzedGames);
+  const style = analyzeStyle(standardGames);
+  const openings = analyzeOpenings(standardGames);
+  const weaknesses = detectWeaknesses(standardGames, style, openings, analyzedGames);
   const prepTips = generatePrepTips(weaknesses, openings, style);
-  const errorProfile = buildErrorProfileFromLichess(standardGames, user.username);
+  const errorProfile = buildErrorProfile(standardGames);
 
-  // Per-speed breakdowns
+  // Per-speed breakdowns (only when games have speed info)
   const bySpeed: Record<string, SpeedProfile> = {};
-  const speedGroups = new Map<string, LichessGame[]>();
+  const speedGroups = new Map<string, NormalizedGame[]>();
   for (const g of standardGames) {
+    if (!g.speed) continue;
     const arr = speedGroups.get(g.speed) || [];
     arr.push(g);
     speedGroups.set(g.speed, arr);
   }
   for (const [speed, speedGames] of speedGroups) {
-    const speedStyle = analyzeStyle(speedGames, user.username);
-    const speedOpenings = analyzeOpenings(speedGames, user.username);
-    const speedWeaknesses = detectWeaknesses(speedGames, user.username, speedStyle, speedOpenings, speedGames.length);
-    const speedErrorProfile = buildErrorProfileFromLichess(speedGames, user.username);
+    const speedStyle = analyzeStyle(speedGames);
+    const speedOpenings = analyzeOpenings(speedGames);
+    const speedWeaknesses = detectWeaknesses(speedGames, speedStyle, speedOpenings, speedGames.length);
+    const speedErrorProfile = buildErrorProfile(speedGames);
     bySpeed[speed] = {
       games: speedGames.length,
       style: speedStyle,
@@ -78,7 +87,7 @@ function extractRatings(user: LichessUser): PlayerRatings {
   return ratings;
 }
 
-export function analyzeStyle(games: LichessGame[], username: string): StyleMetrics {
+export function analyzeStyle(games: NormalizedGame[]): StyleMetrics {
   let aggression = 50;
   let tactical = 50;
   let positional = 50;
@@ -95,15 +104,15 @@ export function analyzeStyle(games: LichessGame[], username: string): StyleMetri
   let gamesAnalyzed = 0;
 
   for (const game of games) {
-    if (!game.moves || game.variant !== "standard") continue;
+    if (!game.moves || (game.variant ?? "standard") !== "standard") continue;
 
     const moves = game.moves.split(" ");
     const moveCount = Math.floor(moves.length / 2);
     totalMoves += moveCount;
     gamesAnalyzed++;
 
-    const isWhite = game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
-    const won = (isWhite && game.winner === "white") || (!isWhite && game.winner === "black");
+    const isWhite = game.playerColor === "white";
+    const won = (isWhite && game.result === "white") || (!isWhite && game.result === "black");
 
     // Aggression: short decisive games, early piece activity
     if (moveCount < 30 && won) earlyAttacks++;
@@ -117,11 +126,10 @@ export function analyzeStyle(games: LichessGame[], username: string): StyleMetri
         try {
           chess.move(moves[i]);
           const material = countMaterial(chess);
-          const playerIsWhite = isWhite;
-          const myMaterial = playerIsWhite
+          const myMaterial = isWhite
             ? material.white
             : material.black;
-          const prevMyMaterial = playerIsWhite
+          const prevMyMaterial = isWhite
             ? prevMaterial.white
             : prevMaterial.black;
           if (prevMyMaterial - myMaterial >= 3 && i > 5) {
@@ -137,7 +145,7 @@ export function analyzeStyle(games: LichessGame[], username: string): StyleMetri
     }
 
     // Tactical: short decisive games suggest tactical play
-    if (moveCount < 40 && game.winner) tacticalWins++;
+    if (moveCount < 40 && game.result && game.result !== "draw") tacticalWins++;
 
     // Endgame: long games and conversion rate (30+ moves for blitz-friendliness)
     if (moveCount > 30) {
@@ -161,8 +169,8 @@ export function analyzeStyle(games: LichessGame[], username: string): StyleMetri
     const earlyLosses = games.filter((g) => {
       const moves = g.moves?.split(" ") || [];
       const moveCount = Math.floor(moves.length / 2);
-      const isWhite = g.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
-      const lost = (isWhite && g.winner === "black") || (!isWhite && g.winner === "white");
+      const isWhite = g.playerColor === "white";
+      const lost = (isWhite && g.result === "black") || (!isWhite && g.result === "white");
       return moveCount < 25 && lost;
     }).length;
     const earlyLossPct = (earlyLosses / gamesAnalyzed) * 100;
@@ -214,19 +222,21 @@ interface OpeningAccumulator {
 }
 
 export function analyzeOpenings(
-  games: LichessGame[],
-  username: string,
+  games: NormalizedGame[],
   minGames: number = 1,
 ): { white: OpeningStats[]; black: OpeningStats[] } {
   const whiteMap = new Map<string, OpeningAccumulator>();
   const blackMap = new Map<string, OpeningAccumulator>();
 
   for (const game of games) {
-    if (!game.opening || game.variant !== "standard") continue;
+    if (!game.opening.name || game.opening.name === "Unknown") {
+      if ((game.variant ?? "standard") !== "standard") continue;
+    }
+    if ((game.variant ?? "standard") !== "standard") continue;
 
-    const isWhite = game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
+    const isWhite = game.playerColor === "white";
     const map = isWhite ? whiteMap : blackMap;
-    const key = openingFamily(game.opening.name);
+    const key = game.opening.family;
 
     if (!map.has(key)) {
       map.set(key, {
@@ -241,11 +251,13 @@ export function analyzeOpenings(
 
     const entry = map.get(key)!;
     entry.total++;
-    entry.ecoMap.set(game.opening.eco, (entry.ecoMap.get(game.opening.eco) || 0) + 1);
+    if (game.opening.eco) {
+      entry.ecoMap.set(game.opening.eco, (entry.ecoMap.get(game.opening.eco) || 0) + 1);
+    }
 
-    if (!game.winner) {
+    if (game.result === "draw" || !game.result) {
       entry.draws++;
-    } else if ((isWhite && game.winner === "white") || (!isWhite && game.winner === "black")) {
+    } else if ((isWhite && game.result === "white") || (!isWhite && game.result === "black")) {
       entry.wins++;
     } else {
       entry.losses++;
@@ -293,8 +305,7 @@ export function openingFamily(name: string): string {
 }
 
 export function detectWeaknesses(
-  games: LichessGame[],
-  username: string,
+  games: NormalizedGame[],
   style: StyleMetrics,
   openings: { white: OpeningStats[]; black: OpeningStats[] },
   analyzedGames: number
@@ -317,12 +328,12 @@ export function detectWeaknesses(
   let quickLosses = 0;
   let totalStandard = 0;
   for (const game of games) {
-    if (game.variant !== "standard" || !game.moves) continue;
+    if ((game.variant ?? "standard") !== "standard" || !game.moves) continue;
     totalStandard++;
     const moves = game.moves.split(" ");
     const moveCount = Math.floor(moves.length / 2);
-    const isWhite = game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
-    const lost = (isWhite && game.winner === "black") || (!isWhite && game.winner === "white");
+    const isWhite = game.playerColor === "white";
+    const lost = (isWhite && game.result === "black") || (!isWhite && game.result === "white");
     if (moveCount < 25 && lost) quickLosses++;
   }
 

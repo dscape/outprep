@@ -15,12 +15,10 @@ import FideOpenings from "./fide-openings";
 export const revalidate = 604800; // 7 days
 export const dynamicParams = true;
 
-// Pre-render all player pages at build time
+// Player pages are generated on-demand via ISR (dynamicParams: true).
+// Avoids pre-rendering 80K+ pages at build time which exceeds cache/timeout limits.
 export async function generateStaticParams() {
-  const index = await getPlayerIndex();
-  if (!index) return [];
-
-  return index.players.map((p) => ({ slug: p.slug }));
+  return [];
 }
 
 export async function generateMetadata({

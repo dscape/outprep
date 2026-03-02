@@ -1,5 +1,5 @@
 import { Chess } from "chess.js";
-import { LichessGame } from "./types";
+import type { NormalizedGame } from "./normalized-game";
 
 interface BookEntry {
   hash: bigint;
@@ -13,8 +13,7 @@ interface BookEntry {
  * Returns a Uint8Array in polyglot .bin format.
  */
 export function generateOpeningBook(
-  games: LichessGame[],
-  username: string,
+  games: NormalizedGame[],
   maxPly = 30,
   minGames = 3
 ): Uint8Array {
@@ -22,10 +21,9 @@ export function generateOpeningBook(
   const positionMoves = new Map<string, Map<string, number>>();
 
   for (const game of games) {
-    if (!game.moves || game.variant !== "standard") continue;
+    if (!game.moves || (game.variant ?? "standard") !== "standard") continue;
 
-    const isWhite =
-      game.players.white?.user?.id?.toLowerCase() === username.toLowerCase();
+    const isWhite = game.playerColor === "white";
     const moves = game.moves.split(" ");
     const chess = new Chess();
 

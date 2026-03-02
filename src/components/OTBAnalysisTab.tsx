@@ -234,7 +234,7 @@ export default function OTBAnalysisTab({ profile }: OTBAnalysisTabProps) {
                 </tr>
               </thead>
               <tbody>
-                {profile.games.map((g, i) => (
+                {(profile.games || []).map((g, i) => (
                   <tr
                     key={i}
                     className="border-b border-zinc-800 text-zinc-300"

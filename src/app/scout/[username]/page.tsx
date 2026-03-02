@@ -26,17 +26,15 @@ import PrepTipsTab from "@/components/PrepTipsTab";
 import OTBUploader from "@/components/OTBUploader";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
 import ErrorProfileCard from "@/components/ErrorProfileCard";
-import {
-  GameForDrilldown,
-  otbGamesToDrilldown,
-  lichessGamesToDrilldown,
-} from "@/lib/game-helpers";
+import type { GameForDrilldown } from "@/lib/game-helpers";
 import {
   openingFamily,
   detectWeaknessesFromErrorProfile,
   generatePrepTips,
 } from "@/lib/profile-builder";
 import { LichessGame } from "@/lib/types";
+import { fromLichessGame, fromOTBGame, normalizedToGameForDrilldown } from "@/lib/normalized-game";
+import type { NormalizedGame } from "@/lib/normalized-game";
 
 type Tab = "openings" | "weaknesses" | "prep" | "otb";
 
@@ -119,7 +117,7 @@ function mergeSpeedProfiles(
     endSum = 0;
 
   for (const s of speeds) {
-    const sp = profile.bySpeed[s];
+    const sp = profile.bySpeed?.[s];
     if (!sp) continue;
     totalGames += sp.games;
     aggSum += sp.style.aggression * sp.games;
@@ -140,7 +138,7 @@ function mergeSpeedProfiles(
       : profile.style;
 
   const openingsSets = speeds
-    .map((s) => profile.bySpeed[s]?.openings)
+    .map((s) => profile.bySpeed?.[s]?.openings)
     .filter(
       (o): o is { white: OpeningStats[]; black: OpeningStats[] } => !!o
     );
@@ -149,7 +147,7 @@ function mergeSpeedProfiles(
   const seen = new Set<string>();
   const weaknesses: Weakness[] = [];
   for (const s of speeds) {
-    for (const w of profile.bySpeed[s]?.weaknesses || []) {
+    for (const w of profile.bySpeed?.[s]?.weaknesses || []) {
       if (!seen.has(w.area)) {
         seen.add(w.area);
         weaknesses.push(w);
@@ -159,7 +157,7 @@ function mergeSpeedProfiles(
 
   // Merge error profiles across speeds
   const errorProfiles = speeds
-    .map((s) => profile.bySpeed[s]?.errorProfile)
+    .map((s) => profile.bySpeed?.[s]?.errorProfile)
     .filter((e): e is ErrorProfile => !!e && e.gamesAnalyzed > 0);
   const errorProfile =
     errorProfiles.length > 0 ? mergeErrorProfiles(errorProfiles) : undefined;
@@ -248,8 +246,8 @@ export default function ScoutPage() {
   const computedEvalsRef = useRef<GameEvalData[]>([]);
   const profileRef = useRef<PlayerProfile | null>(null);
 
-  // Drill-down: raw Lichess games for opening expansion
-  const [rawLichessGames, setRawLichessGames] = useState<LichessGame[] | null>(null);
+  // Drill-down: normalized games for opening expansion
+  const [rawLichessGames, setRawLichessGames] = useState<NormalizedGame[] | null>(null);
   const [loadingLichessGames, setLoadingLichessGames] = useState(false);
 
   // Load OTB data and cached enhanced profile from sessionStorage on mount
@@ -353,6 +351,11 @@ export default function ScoutPage() {
     loadFullProfile(isTimeRangeChange);
   }, [username, isPGNMode, timeRange]);
 
+  // Reset drill-down cache when time range changes
+  useEffect(() => {
+    setRawLichessGames(null);
+  }, [timeRange]);
+
   // Cleanup on unmount
   useEffect(() => {
     return () => {
@@ -447,7 +450,7 @@ export default function ScoutPage() {
 
   const filteredData = useMemo((): FilteredData | null => {
     if (!profile) return null;
-    const allSpeeds = Object.keys(profile.bySpeed);
+    const allSpeeds = Object.keys(profile.bySpeed || {});
 
     // All speeds selected or none → use aggregate
     if (
@@ -465,7 +468,7 @@ export default function ScoutPage() {
 
     // Single speed → use pre-computed
     if (selectedSpeeds.length === 1) {
-      const sp = profile.bySpeed[selectedSpeeds[0]];
+      const sp = profile.bySpeed?.[selectedSpeeds[0]];
       if (sp) return { ...sp };
     }
 
@@ -502,12 +505,15 @@ export default function ScoutPage() {
     if (rawLichessGames || loadingLichessGames || isPGNMode) return;
     setLoadingLichessGames(true);
     try {
+      const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+      const since = sinceMs ? Date.now() - sinceMs : undefined;
       const params = new URLSearchParams({
         max: "500",
         rated: "true",
         pgnInJson: "true",
         opening: "true",
       });
+      if (since) params.set("since", String(since));
       const res = await fetch(
         `https://lichess.org/api/games/user/${encodeURIComponent(username)}?${params}`,
         { headers: { Accept: "application/x-ndjson" } }
@@ -518,36 +524,40 @@ export default function ScoutPage() {
       }
       const text = await res.text();
       const lines = text.trim().split("\n").filter(Boolean);
-      const games: LichessGame[] = lines.map((line) => JSON.parse(line));
-      setRawLichessGames(games);
+      const lichessGames: LichessGame[] = lines.map((line) => JSON.parse(line));
+      const normalized = lichessGames.map((g) => fromLichessGame(g, username));
+      setRawLichessGames(normalized);
     } catch (err) {
       console.error("Failed to fetch Lichess games:", err);
     } finally {
       setLoadingLichessGames(false);
     }
-  }, [username, rawLichessGames, loadingLichessGames, isPGNMode]);
+  }, [username, rawLichessGames, loadingLichessGames, isPGNMode, timeRange]);
 
   // Drill-down: memoize converted games
   const pgnDrilldownGames = useMemo(() => {
     if (!isPGNMode || !otbProfile?.games) return undefined;
-    return otbGamesToDrilldown(otbProfile.games, username);
+    return otbProfile.games.map((g, i) =>
+      normalizedToGameForDrilldown(fromOTBGame(g, username, i))
+    );
   }, [isPGNMode, otbProfile, username]);
 
   const lichessDrilldownGames = useMemo(() => {
     if (!rawLichessGames) return undefined;
-    return lichessGamesToDrilldown(rawLichessGames, username);
-  }, [rawLichessGames, username]);
+    return rawLichessGames.map(normalizedToGameForDrilldown);
+  }, [rawLichessGames]);
 
   // Build opening coverage map from raw Lichess games
   const coverageByOpening = useMemo(() => {
     if (!rawLichessGames) return undefined;
     const map = new Map<string, { analyzed: number; total: number }>();
     for (const g of rawLichessGames) {
-      if (!g.opening || g.variant !== "standard") continue;
-      const family = openingFamily(g.opening.name);
+      if (!g.opening.name || g.opening.name === "Unknown") continue;
+      if ((g.variant ?? "standard") !== "standard") continue;
+      const family = g.opening.family;
       const entry = map.get(family) || { analyzed: 0, total: 0 };
       entry.total++;
-      if (g.analysis && g.analysis.length > 0) entry.analyzed++;
+      if (g.evals && g.evals.length > 0) entry.analyzed++;
       map.set(family, entry);
     }
     return map;
@@ -996,7 +1006,7 @@ export default function ScoutPage() {
 
   if (!profile || !filteredData) return null;
 
-  const availableSpeeds = Object.keys(profile.bySpeed).sort(
+  const availableSpeeds = Object.keys(profile.bySpeed || {}).sort(
     (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
   );
 
@@ -1035,7 +1045,7 @@ export default function ScoutPage() {
                 Speed
               </span>
               {availableSpeeds.map((speed) => {
-                const data = profile.bySpeed[speed];
+                const data = profile.bySpeed?.[speed];
                 const isActive = selectedSpeeds.includes(speed);
                 return (
                   <button
@@ -1051,7 +1061,7 @@ export default function ScoutPage() {
                     <span
                       className={isActive ? "text-green-200" : "text-zinc-600"}
                     >
-                      {data.games}
+                      {data?.games}
                     </span>
                   </button>
                 );
