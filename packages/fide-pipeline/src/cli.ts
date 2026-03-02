@@ -843,18 +843,18 @@ program
 
       // Upsert players
       console.log("Upserting players...");
-      const playersUpserted = await upsertPlayers(players, (count, total) => {
+      const playersResult = await upsertPlayers(players, (count, total, ins, upd) => {
         if (count % 100 === 0 || count === total) {
           const pct = Math.round((count / total) * 100);
-          console.log(`  Players: ${count}/${total} (${pct}%)`);
+          console.log(`  Players: ${count}/${total} (${pct}%) — ${ins} new, ${upd} updated`);
         }
       });
-      console.log(`  ${playersUpserted} players upserted\n`);
+      console.log(`  ${playersResult.total} players upserted (${playersResult.inserted} new, ${playersResult.updated} updated)\n`);
 
       // Upsert player aliases
       console.log("Upserting player aliases...");
       const aliasCount = await upsertPlayerAliases(players, (count) => {
-        if (count % 500 === 0) {
+        if (count % 100 === 0) {
           console.log(`  Aliases: ${count}`);
         }
       });
@@ -864,7 +864,7 @@ program
       if (existsSync(GAME_DETAILS_JSONL)) {
         console.log("Upserting games from JSONL...");
         const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (count) => {
-          if (count % 1000 === 0) {
+          if (count % 100 === 0) {
             console.log(`  Games: ${count}`);
           }
         });
@@ -876,7 +876,7 @@ program
       if (existsSync(gameAliasesPath)) {
         console.log("Upserting game aliases...");
         const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count) => {
-          if (count % 1000 === 0) {
+          if (count % 100 === 0) {
             console.log(`  Game aliases: ${count}`);
           }
         });

@@ -29,17 +29,19 @@ import type { FIDEPlayer, GameDetail } from "./types";
  */
 export async function upsertPlayers(
   players: FIDEPlayer[],
-  onProgress?: (count: number, total: number) => void,
-): Promise<number> {
+  onProgress?: (count: number, total: number, inserted: number, updated: number) => void,
+): Promise<{ total: number; inserted: number; updated: number }> {
   const BATCH = 100;
-  let upserted = 0;
+  let count = 0;
+  let inserted = 0;
+  let updated = 0;
 
   for (let i = 0; i < players.length; i += BATCH) {
     const batch = players.slice(i, i + BATCH);
 
     await sqlTransaction(async (tx) => {
       for (const p of batch) {
-        await tx`
+        const [row] = await tx`
           INSERT INTO players (
             slug, fide_id, name, title, federation, birth_year,
             fide_rating, standard_rating, rapid_rating, blitz_rating,
@@ -58,8 +60,8 @@ export async function upsertPlayers(
             ${JSON.stringify(p.notableGames ?? [])},
             NOW()
           )
-          ON CONFLICT (slug) DO UPDATE SET
-            fide_id = EXCLUDED.fide_id,
+          ON CONFLICT (fide_id) DO UPDATE SET
+            slug = EXCLUDED.slug,
             name = EXCLUDED.name,
             title = EXCLUDED.title,
             federation = EXCLUDED.federation,
@@ -78,15 +80,18 @@ export async function upsertPlayers(
             recent_games = EXCLUDED.recent_games,
             notable_games = EXCLUDED.notable_games,
             updated_at = NOW()
+          RETURNING xmax::text::bigint AS xmax
         `;
-        upserted++;
+        count++;
+        if (Number(row.xmax) === 0) inserted++;
+        else updated++;
       }
     });
 
-    onProgress?.(upserted, players.length);
+    onProgress?.(count, players.length, inserted, updated);
   }
 
-  return upserted;
+  return { total: count, inserted, updated };
 }
 
 /**
