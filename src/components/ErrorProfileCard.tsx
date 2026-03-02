@@ -140,29 +140,17 @@ export default function ErrorProfileCard({
   isUpgrading = false,
   upgradeComplete = false,
 }: ErrorProfileCardProps) {
-  // No analyzed games yet — show a nudge to run analysis instead of hiding the card
+  // No analyzed games yet — auto-scan will trigger shortly
   if (errorProfile.gamesAnalyzed === 0 && !isUpgrading) {
-    if (!onUpgrade || !totalGames || totalGames === 0) return null;
-    const unevalCount = totalGames;
-    const quickTime = estimateTime(unevalCount, "sampling");
+    if (!totalGames || totalGames === 0) return null;
     return (
       <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
         <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide mb-3">
           Error Profile
         </h3>
-        <div className="rounded-lg border border-yellow-600/30 bg-yellow-900/10 px-4 py-3">
-          <p className="text-sm text-zinc-300 mb-1">No engine analysis yet</p>
-          <p className="text-xs text-zinc-500 mb-3">
-            Run a quick scan to detect mistakes and blunders across {unevalCount} games.
-            This powers the error profile, weakness detection, and prep tips.
-          </p>
-          <button
-            onClick={() => onUpgrade("sampling")}
-            className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-green-500"
-          >
-            Quick Scan {quickTime < 120 ? `(${formatTime(quickTime)})` : ""}
-          </button>
-        </div>
+        <p className="text-xs text-zinc-500">
+          Preparing analysis of {totalGames} games...
+        </p>
       </div>
     );
   }
@@ -261,58 +249,30 @@ export default function ErrorProfileCard({
         </div>
       </div>
 
-      {/* Quick scan nudge when it would take < 30 seconds */}
-      {hasUnevaluatedGames && !isUpgrading && !upgradeComplete && onUpgrade &&
-        estimateTime(unevaluatedCount, "sampling") < 30 && (
-        <div className="mt-4 border-t border-zinc-700/50 pt-4">
-          <div className="rounded-lg border border-green-600/30 bg-green-900/10 px-3 py-2.5 flex items-center justify-between">
-            <p className="text-xs text-zinc-300">
-              Quick scan will only take{" "}
-              <span className="font-medium text-green-400">
-                {formatTime(estimateTime(unevaluatedCount, "sampling"))}
-              </span>
-              {" "}for {unevaluatedCount} games
-            </p>
-            <button
-              onClick={() => onUpgrade("sampling")}
-              className="ml-3 shrink-0 rounded-md bg-green-600 px-3 py-1 text-xs font-medium text-white transition-colors hover:bg-green-500"
-            >
-              Start scan
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* Upgrade section — shown when quick scan would take >= 30 seconds */}
-      {hasUnevaluatedGames && !isUpgrading && !upgradeComplete && onUpgrade &&
-        estimateTime(unevaluatedCount, "sampling") >= 30 && (
-        <div className="mt-4 border-t border-zinc-700/50 pt-4">
-          <p className="text-xs text-zinc-500 mb-3">
-            Based on {errorProfile.gamesAnalyzed} of {totalGames} games.
-            Analyze the remaining {unevaluatedCount} for a more accurate
-            profile.
+      {/* Re-analyze option — shown after scan completes */}
+      {upgradeComplete && onUpgrade && !isUpgrading && (
+        <div className="mt-4 border-t border-zinc-700/50 pt-3 flex items-center justify-between">
+          <p className="text-xs text-zinc-500">
+            {totalGames} games analyzed
           </p>
-          <div className="flex gap-2">
-            <button
-              onClick={() => onUpgrade("sampling")}
-              title="Samples every other move at depth 10. Fast but approximate — good for a general picture."
-              className="flex-1 rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:border-zinc-500/50"
-            >
-              Quick scan{" "}
-              <span className="text-zinc-500">
-                {formatTime(estimateTime(unevaluatedCount, "sampling"))}
-              </span>
+          <div className="relative group">
+            <button className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
+              Re-analyze ▾
             </button>
-            <button
-              onClick={() => onUpgrade("comprehensive")}
-              title="Analyzes every move at depth 12. More accurate but takes longer."
-              className="flex-1 rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-3 py-2 text-xs font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50 hover:border-zinc-500/50"
-            >
-              Deep analysis{" "}
-              <span className="text-zinc-500">
-                {formatTime(estimateTime(unevaluatedCount, "comprehensive"))}
-              </span>
-            </button>
+            <div className="hidden group-hover:block absolute right-0 top-full mt-1 rounded-md border border-zinc-700 bg-zinc-800 shadow-lg z-10 min-w-[160px]">
+              <button
+                onClick={() => onUpgrade("sampling")}
+                className="block w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 rounded-t-md"
+              >
+                Quick scan (depth 10)
+              </button>
+              <button
+                onClick={() => onUpgrade("comprehensive")}
+                className="block w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 rounded-b-md"
+              >
+                Deep analysis (depth 12)
+              </button>
+            </div>
           </div>
         </div>
       )}

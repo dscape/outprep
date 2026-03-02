@@ -30,15 +30,15 @@ export default function PracticeLoader({
 
       const profile = await res.json();
 
-      // Store compact profile in sessionStorage (PGN text already stripped server-side)
+      // Store compact profile in sessionStorage keyed by slug (clean URL)
       sessionStorage.setItem(
-        `pgn-import:${playerName}`,
+        `fide-import:${slug}`,
         JSON.stringify(profile)
       );
 
-      // Navigate to scout page in PGN mode
+      // Navigate to scout page in FIDE mode (uses slug for clean URL)
       router.push(
-        `/scout/${encodeURIComponent(playerName)}?source=pgn`
+        `/scout/${encodeURIComponent(slug)}?source=fide`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load games");

@@ -50,7 +50,8 @@
       "Bash(git -C /Users/dscape/dev/outprep log --oneline -20)",
       "Bash(git -C /Users/dscape/dev/outprep log --name-status --oneline -10)",
       "Bash(git -C /Users/dscape/dev/outprep diff HEAD~3..HEAD --stat)",
-      "Bash(docker compose up -d)"
+      "Bash(docker compose up -d)",
+      "Bash(kill 39361 40752 46229)"
     ]
   }
 }

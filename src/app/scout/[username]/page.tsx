@@ -211,7 +211,9 @@ export default function ScoutPage() {
   const searchParams = useSearchParams();
   const rawUsername = params.username as string;
   const username = decodeURIComponent(rawUsername);
-  const isPGNMode = searchParams.get("source") === "pgn";
+  const sourceParam = searchParams.get("source");
+  const isFIDEMode = sourceParam === "fide";
+  const isPGNMode = sourceParam === "pgn" || isFIDEMode;
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [basicData, setBasicData] = useState<{
@@ -245,6 +247,8 @@ export default function ScoutPage() {
   const abortRef = useRef<AbortController | null>(null);
   const computedEvalsRef = useRef<GameEvalData[]>([]);
   const profileRef = useRef<PlayerProfile | null>(null);
+  const filteredDataRef = useRef<FilteredData | null>(null);
+  const initialFilterSetRef = useRef(false);
 
   // Drill-down: normalized games for opening expansion
   const [rawLichessGames, setRawLichessGames] = useState<NormalizedGame[] | null>(null);
@@ -278,9 +282,10 @@ export default function ScoutPage() {
   useEffect(() => {
     if (isPGNMode) {
       try {
-        const stored = sessionStorage.getItem(
-          `pgn-import:${username}`
-        );
+        // Try fide-import key first (slug-based), then legacy pgn-import
+        const stored =
+          sessionStorage.getItem(`fide-import:${username}`) ||
+          sessionStorage.getItem(`pgn-import:${username}`);
         if (stored) {
           setOtbProfile(JSON.parse(stored));
         } else {
@@ -410,25 +415,27 @@ export default function ScoutPage() {
       setOtbProfile(otb);
       if (!isPGNMode) setActiveTab("otb");
       try {
-        const key = isPGNMode
-          ? `pgn-import:${username}`
-          : `otb:${username}`;
+        const key = isFIDEMode
+          ? `fide-import:${username}`
+          : isPGNMode
+            ? `pgn-import:${username}`
+            : `otb:${username}`;
         sessionStorage.setItem(key, JSON.stringify(otb));
       } catch {
         // Storage full — non-fatal
       }
     },
-    [username, isPGNMode]
+    [username, isPGNMode, isFIDEMode]
   );
 
   const handleOtbClear = useCallback(() => {
     setOtbProfile(null);
     if (activeTab === "otb") setActiveTab("openings");
     try {
-      if (isPGNMode) {
-        sessionStorage.removeItem(
-          `pgn-import:${username}`
-        );
+      if (isFIDEMode) {
+        sessionStorage.removeItem(`fide-import:${username}`);
+      } else if (isPGNMode) {
+        sessionStorage.removeItem(`pgn-import:${username}`);
       } else {
         sessionStorage.removeItem(`otb:${username}`);
       }
@@ -436,11 +443,18 @@ export default function ScoutPage() {
       // Ignore
     }
     if (isPGNMode) router.push("/");
-  }, [username, activeTab, isPGNMode, router]);
+  }, [username, activeTab, isPGNMode, isFIDEMode, router]);
 
   // Clear enhanced (upgrade) error profile when speed filter changes
-  // so the base speed-filtered profile is used instead
+  // so the base speed-filtered profile is used instead.
+  // Skip on initial mount (when selectedSpeeds is first set from profile load).
   useEffect(() => {
+    if (!initialFilterSetRef.current) {
+      if (selectedSpeeds.length > 0) {
+        initialFilterSetRef.current = true;
+      }
+      return;
+    }
     setEnhancedErrorProfile(null);
     setUpgradeComplete(false);
     setTotalGameCount(null);
@@ -475,6 +489,9 @@ export default function ScoutPage() {
     // Multi-speed merge
     return mergeSpeedProfiles(profile, selectedSpeeds);
   }, [profile, selectedSpeeds]);
+
+  // Keep ref in sync for use in async callbacks
+  filteredDataRef.current = filteredData;
 
   // Compute prep tips for the current filter selection
   const filteredPrepTips = useMemo((): PrepTip[] => {
@@ -680,17 +697,19 @@ export default function ScoutPage() {
         setUpgradeComplete(true);
 
         // Recalculate weaknesses and prep tips with enhanced error data
-        if (filteredData) {
+        // Use ref to get fresh filteredData (avoids stale closure)
+        const currentFilteredData = filteredDataRef.current;
+        if (currentFilteredData) {
           const updatedWeaknesses = detectWeaknessesFromErrorProfile(
             merged,
-            filteredData.weaknesses
+            currentFilteredData.weaknesses
           );
           setEnhancedWeaknesses(updatedWeaknesses);
 
           const updatedTips = generatePrepTips(
             updatedWeaknesses,
-            filteredData.openings,
-            filteredData.style
+            currentFilteredData.openings,
+            currentFilteredData.style
           );
           setEnhancedPrepTips(updatedTips);
         }
@@ -718,7 +737,9 @@ export default function ScoutPage() {
         }
       }
     },
-    [username, selectedSpeeds, timeRange, filteredData]
+    // filteredData accessed via filteredDataRef to avoid stale closures
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [username, selectedSpeeds, timeRange]
   );
 
   // Cancel an in-progress upgrade
@@ -727,6 +748,23 @@ export default function ScoutPage() {
     setIsUpgrading(false);
     setUpgradeProgress(null);
   }, []);
+
+  // Auto-start quick scan when profile loads and there are unevaluated games
+  const autoScanTriggeredRef = useRef(false);
+  useEffect(() => {
+    if (
+      filteredData &&
+      !enhancedErrorProfile &&
+      !isUpgrading &&
+      !upgradeComplete &&
+      !isPGNMode &&
+      !autoScanTriggeredRef.current &&
+      filteredData.games > 0
+    ) {
+      autoScanTriggeredRef.current = true;
+      handleUpgrade("sampling");
+    }
+  }, [filteredData, enhancedErrorProfile, isUpgrading, upgradeComplete, isPGNMode, handleUpgrade]);
 
   // Determine displayed error profile: enhanced if available, otherwise base
   const displayedErrorProfile =
@@ -859,7 +897,10 @@ export default function ScoutPage() {
   if (isPGNMode) {
     if (!otbProfile) return null;
 
-    const displayName = username;
+    // In FIDE mode, username is a slug — use the profile's name instead
+    const displayName = isFIDEMode && otbProfile.username
+      ? otbProfile.username
+      : username;
     const pgnTabs: ["openings" | "weaknesses", string][] = [
       ["openings", "Openings"],
       ["weaknesses", "Weaknesses"],
@@ -1019,6 +1060,15 @@ export default function ScoutPage() {
 
   return (
     <div className="min-h-screen px-4 py-8">
+      {/* Top progress bar for auto-scan */}
+      {isUpgrading && upgradeProgress && (
+        <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-zinc-900">
+          <div
+            className="h-full bg-green-500 transition-all duration-500"
+            style={{ width: `${upgradeProgress.pct}%` }}
+          />
+        </div>
+      )}
       <div className="mx-auto max-w-3xl">
         <div className="mb-6 flex items-center justify-between">
           <button
@@ -1101,11 +1151,16 @@ export default function ScoutPage() {
         <PlayerCard profile={profile} filteredGames={filteredData.games} />
 
         {/* Error Profile */}
-        {displayedErrorProfile &&
-          (displayedErrorProfile.gamesAnalyzed > 0 || isUpgrading) && (
+        {(displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
             <div className="mt-4">
               <ErrorProfileCard
-                errorProfile={displayedErrorProfile}
+                errorProfile={displayedErrorProfile || {
+                  opening: { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 },
+                  middlegame: { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 },
+                  endgame: { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 },
+                  overall: { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 },
+                  gamesAnalyzed: 0,
+                }}
                 totalGames={displayedTotalGames}
                 onUpgrade={handleUpgrade}
                 onCancel={handleCancelUpgrade}

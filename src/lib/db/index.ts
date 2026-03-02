@@ -180,6 +180,15 @@ export function formatPlayerName(name: string): string {
 
 // ─── Row mappers ─────────────────────────────────────────────────────────────
 
+/** Parse a JSONB value that may come back as a string or already-parsed object. */
+function jsonb<T>(val: unknown, fallback: T): T {
+  if (val == null) return fallback;
+  if (typeof val === "string") {
+    try { return JSON.parse(val) as T; } catch { return fallback; }
+  }
+  return val as T;
+}
+
 function mapRowToPlayer(row: Record<string, unknown>): FIDEPlayer {
   return {
     name: row.name as string,
@@ -189,14 +198,11 @@ function mapRowToPlayer(row: Record<string, unknown>): FIDEPlayer {
     fideRating: row.fide_rating as number,
     title: (row.title as string) ?? null,
     gameCount: row.game_count as number,
-    recentEvents: (row.recent_events as string[]) ?? [],
+    recentEvents: jsonb<string[]>(row.recent_events, []),
     lastSeen: row.last_seen
       ? formatDateForPlayer(row.last_seen as Date)
       : "",
-    openings: (row.openings as FIDEPlayer["openings"]) ?? {
-      white: [],
-      black: [],
-    },
+    openings: jsonb<FIDEPlayer["openings"]>(row.openings, { white: [], black: [] }),
     winRate: row.win_rate as number,
     drawRate: row.draw_rate as number,
     lossRate: row.loss_rate as number,
@@ -205,8 +211,8 @@ function mapRowToPlayer(row: Record<string, unknown>): FIDEPlayer {
     standardRating: (row.standard_rating as number) ?? undefined,
     rapidRating: (row.rapid_rating as number) ?? undefined,
     blitzRating: (row.blitz_rating as number) ?? undefined,
-    recentGames: (row.recent_games as FIDEPlayer["recentGames"]) ?? [],
-    notableGames: (row.notable_games as FIDEPlayer["notableGames"]) ?? [],
+    recentGames: jsonb<FIDEPlayer["recentGames"]>(row.recent_games, []),
+    notableGames: jsonb<FIDEPlayer["notableGames"]>(row.notable_games, []),
   };
 }
 

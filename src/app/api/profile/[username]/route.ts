@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessUser, fetchLichessGames } from "@/lib/lichess";
 import { buildProfile } from "@/lib/profile-builder";
 import { fromLichessGame } from "@/lib/normalized-game";
+import type { LichessUser, LichessGame } from "@/lib/types";
 
 // Simple in-memory cache
 const cache = new Map<string, { data: unknown; expires: number }>();
@@ -25,25 +26,37 @@ export async function GET(
   const { username } = await params;
   const sinceParam = request.nextUrl.searchParams.get("since");
   const since = sinceParam ? parseInt(sinceParam) : undefined;
-  const cacheKey = `profile:${username.toLowerCase()}:${since || "all"}`;
+  const profileCacheKey = `profile:${username.toLowerCase()}:${since || "all"}`;
 
   try {
-    const cached = getCached(cacheKey);
-    if (cached) return NextResponse.json(cached);
+    // Fast path: profile already built for this time range
+    const cachedProfile = getCached(profileCacheKey);
+    if (cachedProfile) return NextResponse.json(cachedProfile);
 
-    const [user, games] = await Promise.all([
-      fetchLichessUser(username),
-      fetchLichessGames(username, 500),
-    ]);
+    // Get raw data from cache or Lichess (cached by username only)
+    const userCacheKey = `user:${username.toLowerCase()}`;
+    const gamesCacheKey = `games:${username.toLowerCase()}`;
+
+    let user = getCached(userCacheKey) as LichessUser | null;
+    let games = getCached(gamesCacheKey) as LichessGame[] | null;
+
+    if (!user || !games) {
+      [user, games] = await Promise.all([
+        fetchLichessUser(username),
+        fetchLichessGames(username, 500),
+      ]);
+      setCache(userCacheKey, user);
+      setCache(gamesCacheKey, games);
+    }
 
     // Filter by time range if specified
     const filtered = since
       ? games.filter((g) => (g.createdAt ?? 0) >= since)
       : games;
 
-    const normalized = filtered.map((g) => fromLichessGame(g, user.username));
-    const profile = buildProfile(user, normalized);
-    setCache(cacheKey, profile);
+    const normalized = filtered.map((g) => fromLichessGame(g, user!.username));
+    const profile = buildProfile(user!, normalized);
+    setCache(profileCacheKey, profile);
 
     return NextResponse.json(profile);
   } catch (error) {

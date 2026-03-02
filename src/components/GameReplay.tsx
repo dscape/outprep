@@ -378,6 +378,7 @@ export default function GameReplay({
   /* ── Copy PGN + Lichess import ──────────────────────── */
   const [copiedPgn, setCopiedPgn] = useState(false);
   const [lichessImporting, setLichessImporting] = useState(false);
+  const [lichessError, setLichessError] = useState<string | null>(null);
 
   const handleCopyPgn = useCallback(async () => {
     try {
@@ -398,17 +399,38 @@ export default function GameReplay({
 
   const handleOpenLichess = useCallback(async () => {
     setLichessImporting(true);
+    setLichessError(null);
     try {
+      // Sanitize PGN: keep only standard headers Lichess accepts
+      const allowedHeaders = new Set([
+        "Event", "Site", "Date", "Round", "White", "Black",
+        "Result", "WhiteElo", "BlackElo", "ECO", "FEN", "SetUp",
+        "TimeControl", "Variant",
+      ]);
+      const cleanedPgn = pgn
+        .replace(/\[(\w+)\s+"[^"]*"\]\s*\n?/g, (match, header) =>
+          allowedHeaders.has(header) ? match : ""
+        )
+        .replace(/^\s*\n/gm, "");
+
       const res = await fetch("/api/lichess-import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pgn }),
+        body: JSON.stringify({ pgn: cleanedPgn }),
       });
-      if (!res.ok) throw new Error(`Import failed: ${res.status}`);
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `Import failed (${res.status})`);
+      }
       const data = await res.json();
-      if (data.url) window.open(data.url, "_blank");
+      if (data.url) {
+        window.open(data.url, "_blank");
+      } else {
+        throw new Error("No URL returned from Lichess import");
+      }
     } catch (err) {
       console.error("Lichess import failed:", err);
+      setLichessError(err instanceof Error ? err.message : "Import failed");
     } finally {
       setLichessImporting(false);
     }
@@ -453,39 +475,34 @@ export default function GameReplay({
           </div>
 
           {/* Navigation buttons */}
-          <div className="flex items-center justify-center gap-2 mt-3">
+          <div className="flex items-center justify-center gap-1.5 mt-3">
             <button
               onClick={goFirst}
-              className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors"
+              className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
               title="First move (Home)"
             >
-              ⏮
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="4" x2="5" y2="20"/><polyline points="13 4 7 12 13 20"/></svg>
             </button>
             <button
               onClick={goPrev}
-              className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors"
+              className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
               title="Previous move (←)"
             >
-              ◀
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
             </button>
-            <span className="text-xs text-zinc-600 font-mono min-w-[60px] text-center">
-              {currentPly === 0
-                ? "Start"
-                : `${Math.ceil(currentPly / 2)}${currentPly % 2 === 1 ? "." : "..."}`}
-            </span>
             <button
               onClick={goNext}
-              className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors"
+              className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-4 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
               title="Next move (→)"
             >
-              ▶
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
             </button>
             <button
               onClick={goLast}
-              className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors"
+              className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
               title="Last move (End)"
             >
-              ⏭
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 4 17 12 11 20"/><line x1="19" y1="4" x2="19" y2="20"/></svg>
             </button>
             <button
               onClick={() =>
@@ -493,10 +510,10 @@ export default function GameReplay({
                   o === "white" ? "black" : "white"
                 )
               }
-              className="rounded px-2 py-1 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white transition-colors ml-2"
+              className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors ml-1"
               title="Flip board"
             >
-              ⟲
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
             </button>
           </div>
           <p className="text-[10px] text-zinc-600 text-center mt-1">
@@ -669,6 +686,9 @@ export default function GameReplay({
         >
           {lichessImporting ? "Importing..." : "Open on Lichess"}
         </button>
+        {lichessError && (
+          <p className="text-xs text-red-400">{lichessError}</p>
+        )}
       </div>
     </div>
   );

@@ -39,54 +39,64 @@ export async function upsertPlayers(
   for (let i = 0; i < players.length; i += BATCH) {
     const batch = players.slice(i, i + BATCH);
 
-    await sqlTransaction(async (tx) => {
-      for (const p of batch) {
-        const [row] = await tx`
-          INSERT INTO players (
-            slug, fide_id, name, title, federation, birth_year,
-            fide_rating, standard_rating, rapid_rating, blitz_rating,
-            game_count, win_rate, draw_rate, loss_rate, last_seen,
-            recent_events, openings, recent_games, notable_games, updated_at
-          ) VALUES (
-            ${p.slug}, ${p.fideId}, ${p.name}, ${p.title ?? null},
-            ${p.federation ?? null}, ${p.birthYear ?? null},
-            ${p.fideRating}, ${p.standardRating ?? null},
-            ${p.rapidRating ?? null}, ${p.blitzRating ?? null},
-            ${p.gameCount}, ${p.winRate}, ${p.drawRate}, ${p.lossRate},
-            ${p.lastSeen ? parseFideDate(p.lastSeen) : null},
-            ${JSON.stringify(p.recentEvents)},
-            ${JSON.stringify(p.openings)},
-            ${JSON.stringify(p.recentGames ?? [])},
-            ${JSON.stringify(p.notableGames ?? [])},
-            NOW()
-          )
-          ON CONFLICT (fide_id) DO UPDATE SET
-            slug = EXCLUDED.slug,
-            name = EXCLUDED.name,
-            title = EXCLUDED.title,
-            federation = EXCLUDED.federation,
-            birth_year = EXCLUDED.birth_year,
-            fide_rating = EXCLUDED.fide_rating,
-            standard_rating = EXCLUDED.standard_rating,
-            rapid_rating = EXCLUDED.rapid_rating,
-            blitz_rating = EXCLUDED.blitz_rating,
-            game_count = EXCLUDED.game_count,
-            win_rate = EXCLUDED.win_rate,
-            draw_rate = EXCLUDED.draw_rate,
-            loss_rate = EXCLUDED.loss_rate,
-            last_seen = EXCLUDED.last_seen,
-            recent_events = EXCLUDED.recent_events,
-            openings = EXCLUDED.openings,
-            recent_games = EXCLUDED.recent_games,
-            notable_games = EXCLUDED.notable_games,
-            updated_at = NOW()
-          RETURNING xmax::text::bigint AS xmax
-        `;
-        count++;
-        if (Number(row.xmax) === 0) inserted++;
-        else updated++;
-      }
-    });
+    const rows = batch.map((p) => ({
+      slug: p.slug,
+      fide_id: p.fideId,
+      name: p.name,
+      title: p.title ?? null,
+      federation: p.federation ?? null,
+      birth_year: p.birthYear ?? null,
+      fide_rating: p.fideRating,
+      standard_rating: p.standardRating ?? null,
+      rapid_rating: p.rapidRating ?? null,
+      blitz_rating: p.blitzRating ?? null,
+      game_count: p.gameCount,
+      win_rate: p.winRate,
+      draw_rate: p.drawRate,
+      loss_rate: p.lossRate,
+      last_seen: p.lastSeen ? parseFideDate(p.lastSeen) : null,
+      recent_events: JSON.stringify(p.recentEvents),
+      openings: JSON.stringify(p.openings),
+      recent_games: JSON.stringify(p.recentGames ?? []),
+      notable_games: JSON.stringify(p.notableGames ?? []),
+      updated_at: new Date(),
+    }));
+
+    const result = await sqlTransaction(async (tx) => tx`
+      INSERT INTO players ${tx(rows,
+        'slug', 'fide_id', 'name', 'title', 'federation', 'birth_year',
+        'fide_rating', 'standard_rating', 'rapid_rating', 'blitz_rating',
+        'game_count', 'win_rate', 'draw_rate', 'loss_rate', 'last_seen',
+        'recent_events', 'openings', 'recent_games', 'notable_games', 'updated_at',
+      )}
+      ON CONFLICT (fide_id) DO UPDATE SET
+        slug = EXCLUDED.slug,
+        name = EXCLUDED.name,
+        title = EXCLUDED.title,
+        federation = EXCLUDED.federation,
+        birth_year = EXCLUDED.birth_year,
+        fide_rating = EXCLUDED.fide_rating,
+        standard_rating = EXCLUDED.standard_rating,
+        rapid_rating = EXCLUDED.rapid_rating,
+        blitz_rating = EXCLUDED.blitz_rating,
+        game_count = EXCLUDED.game_count,
+        win_rate = EXCLUDED.win_rate,
+        draw_rate = EXCLUDED.draw_rate,
+        loss_rate = EXCLUDED.loss_rate,
+        last_seen = EXCLUDED.last_seen,
+        recent_events = EXCLUDED.recent_events,
+        openings = EXCLUDED.openings,
+        recent_games = EXCLUDED.recent_games,
+        notable_games = EXCLUDED.notable_games,
+        updated_at = EXCLUDED.updated_at
+      RETURNING xmax::text::bigint AS xmax
+    `);
+
+    for (const row of result) {
+      count++;
+      if (Number(row.xmax) === 0) inserted++;
+      else updated++;
+    }
 
     onProgress?.(count, players.length, inserted, updated);
   }
@@ -108,23 +118,30 @@ export async function upsertPlayerAliases(
   for (let i = 0; i < players.length; i += BATCH) {
     const batch = players.slice(i, i + BATCH);
 
-    await sqlTransaction(async (tx) => {
-      for (const p of batch) {
-        // Delete existing aliases for this player
-        await tx`DELETE FROM player_aliases WHERE canonical_slug = ${p.slug}`;
+    // Collect all aliases for this batch
+    const allAliases: { alias_slug: string; canonical_slug: string }[] = [];
+    const slugsToDelete: string[] = [];
+    for (const p of batch) {
+      slugsToDelete.push(p.slug);
+      for (const alias of p.aliases) {
+        allAliases.push({ alias_slug: alias, canonical_slug: p.slug });
+      }
+    }
 
-        // Insert new aliases
-        for (const alias of p.aliases) {
-          await tx`
-            INSERT INTO player_aliases (alias_slug, canonical_slug)
-            VALUES (${alias}, ${p.slug})
-            ON CONFLICT (alias_slug) DO UPDATE SET canonical_slug = ${p.slug}
-          `;
-          count++;
-        }
+    await sqlTransaction(async (tx) => {
+      // Bulk delete existing aliases for all players in this batch
+      await tx`DELETE FROM player_aliases WHERE canonical_slug = ANY(${slugsToDelete})`;
+
+      // Bulk insert all aliases in one statement
+      if (allAliases.length > 0) {
+        await tx`
+          INSERT INTO player_aliases ${tx(allAliases, 'alias_slug', 'canonical_slug')}
+          ON CONFLICT (alias_slug) DO UPDATE SET canonical_slug = EXCLUDED.canonical_slug
+        `;
       }
     });
 
+    count += allAliases.length;
     onProgress?.(count);
   }
 
@@ -194,30 +211,40 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
   }
 
   // 2. Insert game metadata (no pgn) into Postgres
+  const rows = games.map((g) => ({
+    slug: g.slug,
+    white_name: g.whiteName,
+    black_name: g.blackName,
+    white_slug: g.whiteSlug || null,
+    black_slug: g.blackSlug || null,
+    white_fide_id: g.whiteFideId,
+    black_fide_id: g.blackFideId,
+    white_elo: g.whiteElo,
+    black_elo: g.blackElo,
+    white_title: g.whiteTitle ?? null,
+    black_title: g.blackTitle ?? null,
+    white_federation: g.whiteFederation ?? null,
+    black_federation: g.blackFederation ?? null,
+    event: g.event,
+    site: g.site ?? null,
+    date: parseFideDate(g.date),
+    round: g.round ?? null,
+    eco: g.eco ?? null,
+    opening: g.opening ?? null,
+    variation: g.variation ?? null,
+    result: g.result,
+  }));
+
   await sqlTransaction(async (tx) => {
-    for (const g of games) {
-      await tx`
-        INSERT INTO games (
-          slug, white_name, black_name, white_slug, black_slug,
-          white_fide_id, black_fide_id, white_elo, black_elo,
-          white_title, black_title, white_federation, black_federation,
-          event, site, date, round, eco, opening, variation, result
-        ) VALUES (
-          ${g.slug}, ${g.whiteName}, ${g.blackName},
-          ${g.whiteSlug || null}, ${g.blackSlug || null},
-          ${g.whiteFideId}, ${g.blackFideId},
-          ${g.whiteElo}, ${g.blackElo},
-          ${g.whiteTitle ?? null}, ${g.blackTitle ?? null},
-          ${g.whiteFederation ?? null}, ${g.blackFederation ?? null},
-          ${g.event}, ${g.site ?? null},
-          ${parseFideDate(g.date)},
-          ${g.round ?? null}, ${g.eco ?? null},
-          ${g.opening ?? null}, ${g.variation ?? null},
-          ${g.result}
-        )
-        ON CONFLICT (slug) DO NOTHING
-      `;
-    }
+    await tx`
+      INSERT INTO games ${tx(rows,
+        'slug', 'white_name', 'black_name', 'white_slug', 'black_slug',
+        'white_fide_id', 'black_fide_id', 'white_elo', 'black_elo',
+        'white_title', 'black_title', 'white_federation', 'black_federation',
+        'event', 'site', 'date', 'round', 'eco', 'opening', 'variation', 'result',
+      )}
+      ON CONFLICT (slug) DO NOTHING
+    `;
   });
 }
 
@@ -244,17 +271,19 @@ export async function upsertGameAliases(
   for (let i = 0; i < entries.length; i += BATCH) {
     const batch = entries.slice(i, i + BATCH);
 
+    const rows = batch.map(([legacy, canonical]) => ({
+      legacy_slug: legacy,
+      canonical_slug: canonical,
+    }));
+
     await sqlTransaction(async (tx) => {
-      for (const [legacy, canonical] of batch) {
-        await tx`
-          INSERT INTO game_aliases (legacy_slug, canonical_slug)
-          VALUES (${legacy}, ${canonical})
-          ON CONFLICT (legacy_slug) DO UPDATE SET canonical_slug = ${canonical}
-        `;
-        count++;
-      }
+      await tx`
+        INSERT INTO game_aliases ${tx(rows, 'legacy_slug', 'canonical_slug')}
+        ON CONFLICT (legacy_slug) DO UPDATE SET canonical_slug = EXCLUDED.canonical_slug
+      `;
     });
 
+    count += batch.length;
     onProgress?.(count);
   }
 

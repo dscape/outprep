@@ -67,7 +67,6 @@ export function lichessGamesToDrilldown(
 
   return games.map((g) => {
     const whiteId = g.players.white.user?.id?.toLowerCase() || "";
-    const blackId = g.players.black.user?.id?.toLowerCase() || "";
     const isWhite = whiteId === lowerUser;
     const playerColor: "white" | "black" = isWhite ? "white" : "black";
 
