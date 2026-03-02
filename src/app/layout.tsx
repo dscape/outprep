@@ -32,7 +32,7 @@ export const metadata: Metadata = {
       "Scout any chess player, study their openings and weaknesses, then practice against a bot that plays like them.",
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "outprep - Practice Against Any Chess Player",
     description:
       "Scout, study, and practice against any chess player.",

@@ -183,6 +183,44 @@ export async function getGameSlugsForSitemap(
   }
 }
 
+// ─── Homepage queries ────────────────────────────────────────────────────────
+
+/**
+ * Get top-rated players for the homepage featured section.
+ */
+export async function getTopPlayers(
+  limit: number,
+): Promise<
+  Array<{
+    slug: string;
+    name: string;
+    title: string | null;
+    fideRating: number;
+    federation: string | null;
+    gameCount: number;
+  }>
+> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT slug, name, title, fide_rating, federation, game_count
+      FROM players
+      ORDER BY fide_rating DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      slug: r.slug as string,
+      name: r.name as string,
+      title: (r.title as string) ?? null,
+      fideRating: r.fide_rating as number,
+      federation: (r.federation as string) ?? null,
+      gameCount: r.game_count as number,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 /**

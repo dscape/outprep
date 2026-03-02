@@ -83,11 +83,20 @@ export async function generateMetadata({
       type: "article",
       url: `https://outprep.xyz/game/${slug}`,
       siteName: "outprep",
+      images: [
+        {
+          url: `https://outprep.xyz/api/og/game?slug=${encodeURIComponent(slug)}`,
+          width: 1200,
+          height: 630,
+          alt: `${white} vs ${black}`,
+        },
+      ],
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title: `${white} vs ${black} - ${game.event}`,
       description: `${wTitle}${game.whiteElo} vs ${bTitle}${game.blackElo} | ${resultText}${openingTag}`,
+      images: [`https://outprep.xyz/api/og/game?slug=${encodeURIComponent(slug)}`],
     },
   };
 }
@@ -120,28 +129,56 @@ export default async function GamePage({
   // JSON-LD structured data
   const jsonLd = {
     "@context": "https://schema.org",
-    "@type": "SportsEvent",
-    name: `${white} vs ${black} - ${game.event}${game.round ? ` Round ${game.round}` : ""}`,
-    sport: "Chess",
-    startDate: game.date.replace(/\./g, "-"),
-    ...(game.site ? { location: { "@type": "Place", name: game.site } } : {}),
-    competitor: [
+    "@graph": [
       {
-        "@type": "Person",
-        name: white,
-        ...(game.whiteSlug
-          ? { url: `https://outprep.xyz/player/${game.whiteSlug}` }
-          : {}),
+        "@type": "SportsEvent",
+        name: `${white} vs ${black} - ${game.event}${game.round ? ` Round ${game.round}` : ""}`,
+        sport: "Chess",
+        startDate: game.date.replace(/\./g, "-"),
+        ...(game.site ? { location: { "@type": "Place", name: game.site } } : {}),
+        competitor: [
+          {
+            "@type": "Person",
+            name: white,
+            ...(game.whiteSlug
+              ? { url: `https://outprep.xyz/player/${game.whiteSlug}` }
+              : {}),
+          },
+          {
+            "@type": "Person",
+            name: black,
+            ...(game.blackSlug
+              ? { url: `https://outprep.xyz/player/${game.blackSlug}` }
+              : {}),
+          },
+        ],
+        description: `Chess game: ${game.opening ? `${game.opening} (${game.eco})` : game.eco ?? "Unknown opening"}. Result: ${game.result}`,
       },
       {
-        "@type": "Person",
-        name: black,
-        ...(game.blackSlug
-          ? { url: `https://outprep.xyz/player/${game.blackSlug}` }
-          : {}),
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            position: 1,
+            name: "Home",
+            item: "https://outprep.xyz",
+          },
+          ...(game.whiteSlug
+            ? [{
+                "@type": "ListItem",
+                position: 2,
+                name: white,
+                item: `https://outprep.xyz/player/${game.whiteSlug}`,
+              }]
+            : []),
+          {
+            "@type": "ListItem",
+            position: game.whiteSlug ? 3 : 2,
+            name: `${white} vs ${black}`,
+          },
+        ],
       },
     ],
-    description: `Chess game: ${game.opening ? `${game.opening} (${game.eco})` : game.eco ?? "Unknown opening"}. Result: ${game.result}`,
   };
 
   return (
@@ -153,12 +190,29 @@ export default async function GamePage({
 
       <div className="min-h-screen px-4 py-8">
         <div className="mx-auto max-w-3xl">
-          <Link
-            href="/"
-            className="mb-6 inline-block text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            &larr; Back to search
-          </Link>
+          <nav className="mb-6 flex items-center gap-2 text-sm text-zinc-500">
+            <Link
+              href="/"
+              className="hover:text-zinc-300 transition-colors"
+            >
+              Home
+            </Link>
+            {game.whiteSlug && (
+              <>
+                <span>/</span>
+                <Link
+                  href={`/player/${game.whiteSlug}`}
+                  className="hover:text-zinc-300 transition-colors"
+                >
+                  {white}
+                </Link>
+              </>
+            )}
+            <span>/</span>
+            <span className="text-zinc-400 truncate">
+              vs {black}
+            </span>
+          </nav>
 
           {/* Players Header */}
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">

@@ -11,6 +11,7 @@ export async function generateMetadata({
   return {
     title: `Practice Against ${decoded}`,
     description: `Play against an AI that mimics ${decoded}'s playing style. Built from real game analysis.`,
+    robots: { index: false, follow: false },
     openGraph: {
       title: `Practice Against ${decoded}`,
       description: `Play against an AI that mimics ${decoded}'s playing style.`,

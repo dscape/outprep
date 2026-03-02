@@ -11,7 +11,17 @@ export async function generateMetadata({
   return {
     title: `${decoded} - Chess Scouting Report`,
     description: `Scouting report for ${decoded}. Openings, weaknesses, playing style, and preparation tips.`,
+    alternates: {
+      canonical: `https://outprep.xyz/scout/${username}`,
+    },
     openGraph: {
+      title: `${decoded} - Scouting Report`,
+      description: `Study ${decoded}'s openings, weaknesses, and playing style.`,
+      url: `https://outprep.xyz/scout/${username}`,
+      siteName: "outprep",
+    },
+    twitter: {
+      card: "summary_large_image",
       title: `${decoded} - Scouting Report`,
       description: `Study ${decoded}'s openings, weaknesses, and playing style.`,
     },

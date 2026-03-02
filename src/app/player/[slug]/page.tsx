@@ -56,7 +56,7 @@ export async function generateMetadata({
       siteName: "outprep",
     },
     twitter: {
-      card: "summary",
+      card: "summary_large_image",
       title: `Prepare Against ${name}`,
       description: `${titleBadge}${ratingSummary} | ${player.gameCount} games analyzed`,
     },
@@ -181,6 +181,22 @@ export default async function PlayerPage({
           "Practice against any chess player with an AI that plays like them",
         applicationCategory: "Game",
         operatingSystem: "Web",
+      },
+      {
+        "@type": "BreadcrumbList",
+        itemListElement: [
+          {
+            "@type": "ListItem",
+            position: 1,
+            name: "Home",
+            item: "https://outprep.xyz",
+          },
+          {
+            "@type": "ListItem",
+            position: 2,
+            name: name,
+          },
+        ],
       },
     ],
   };
