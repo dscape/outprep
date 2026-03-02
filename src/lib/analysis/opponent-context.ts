@@ -42,7 +42,7 @@ export function tagMoments(
       } else if (move.classification === "blunder" || move.classification === "mistake") {
         const matchedWeakness = matchWeakness(context, profile, weaknessAreas);
         if (matchedWeakness) {
-          tag = "PREDICTED";
+          tag = "THEIR WEAKNESS";
           description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
           weaknessContext = `Consistent with their ${matchedWeakness} weakness`;
         } else if (context?.tacticalMotifs && context.tacticalMotifs.length > 0) {
@@ -64,11 +64,14 @@ export function tagMoments(
       }
     } else {
       // Player's move
-      if (move.classification === "blunder" || move.classification === "mistake") {
-        tag = "YOUR ERROR";
-        description = `${pPossessive} ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+      if (move.classification === "blunder") {
+        tag = "BLUNDER";
+        description = `${pPossessive} blunder on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+      } else if (move.classification === "mistake") {
+        tag = "MISTAKE";
+        description = `${pPossessive} mistake on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
       } else if (move.evalDelta <= -30 && exploitsWeakness(context, profile, weaknessAreas)) {
-        tag = "PREP HIT";
+        tag = "WELL PLAYED";
         description = playerName
           ? `${playerName} exploited the opponent's known weakness on move ${moveNum}.`
           : `Great move! You exploited the opponent's known weakness on move ${moveNum}.`;
@@ -76,7 +79,7 @@ export function tagMoments(
         tag = "EXPLOITED";
         description = `Strong move ${move.san} on move ${moveNum} gained a significant advantage.`;
       } else {
-        // Inaccuracy (50-100cp loss) — NOT "YOUR ERROR"
+        // Inaccuracy (50-100cp loss)
         tag = "INACCURACY";
         description = `Inaccuracy on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
       }
@@ -86,7 +89,7 @@ export function tagMoments(
       moveNum,
       ply: move.ply,
       san: move.san,
-      bestMoveSan: (tag === "YOUR ERROR" || tag === "INACCURACY" ||
+      bestMoveSan: (tag === "BLUNDER" || tag === "MISTAKE" || tag === "INACCURACY" ||
         move.classification === "blunder" || move.classification === "mistake")
         ? (move.bestMoveSan || move.bestMove)
         : undefined,

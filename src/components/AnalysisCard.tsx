@@ -58,12 +58,13 @@ function parsePgnHeaders(pgn: string): Record<string, string> {
 
 function TagBadge({ tag }: { tag: MomentTag }) {
   const styles: Record<MomentTag, string> = {
-    "EXPECTED":    "bg-zinc-600/30 text-zinc-300 border-zinc-500/30",
-    "PREP HIT":   "bg-green-600/20 text-green-400 border-green-500/30",
-    "YOUR ERROR": "bg-red-600/20 text-red-400 border-red-500/30",
-    "INACCURACY": "bg-orange-600/20 text-orange-400 border-orange-500/30",
-    "EXPLOITED":  "bg-purple-600/20 text-purple-400 border-purple-500/30",
-    "PREDICTED":  "bg-yellow-600/20 text-yellow-400 border-yellow-500/30",
+    "EXPECTED":        "bg-zinc-600/30 text-zinc-300 border-zinc-500/30",
+    "WELL PLAYED":     "bg-green-600/20 text-green-400 border-green-500/30",
+    "BLUNDER":         "bg-red-600/20 text-red-400 border-red-500/30",
+    "MISTAKE":         "bg-red-600/20 text-red-400 border-red-500/30",
+    "INACCURACY":      "bg-orange-600/20 text-orange-400 border-orange-500/30",
+    "EXPLOITED":       "bg-purple-600/20 text-purple-400 border-purple-500/30",
+    "THEIR WEAKNESS":  "bg-yellow-600/20 text-yellow-400 border-yellow-500/30",
   };
 
   return (

@@ -12,6 +12,7 @@ import { generateNarrative } from "@/lib/analysis/template-engine";
 import { lookupOpening } from "@/lib/analysis/opening-lookup";
 import { describeMoveError } from "@/lib/analysis/move-descriptions";
 import AnalysisCard from "@/components/AnalysisCard";
+import GameReplay from "@/components/GameReplay";
 
 interface StoredGame {
   pgn: string;
@@ -214,25 +215,15 @@ export default function AnalysisPage() {
             </div>
           </div>
 
-          {/* Board placeholder */}
-          <div className="flex justify-center mb-6">
-            <div className="w-[280px] sm:w-[320px] aspect-square rounded bg-zinc-800/50 border border-zinc-700/50 grid grid-cols-8 grid-rows-8 overflow-hidden">
-              {Array.from({ length: 64 }).map((_, i) => {
-                const row = Math.floor(i / 8);
-                const col = i % 8;
-                const isLight = (row + col) % 2 === 0;
-                return (
-                  <div
-                    key={i}
-                    className={isLight ? "bg-[#edeed1]/60" : "bg-[#779952]/60"}
-                  />
-                );
-              })}
-            </div>
-          </div>
+          {/* Playable game replay while analysis runs */}
+          <GameReplay
+            pgn={gameData.pgn}
+            whiteName={gameData.playerColor === "white" ? playerLabel : gameData.opponentUsername}
+            blackName={gameData.playerColor === "black" ? playerLabel : gameData.opponentUsername}
+          />
 
           {/* Analysis progress */}
-          <div className="flex flex-col items-center">
+          <div className="mt-6 flex flex-col items-center">
             <div className="h-8 w-8 rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-3" />
             <p className="text-white font-medium text-sm mb-1">{stage}</p>
             {progress > 0 && (
@@ -246,19 +237,6 @@ export default function AnalysisPage() {
                 <p className="mt-1 text-xs text-zinc-500 text-center">{progress}% complete</p>
               </div>
             )}
-          </div>
-
-          {/* Move list skeleton */}
-          <div className="mt-6 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4">
-            <div className="space-y-2">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="flex gap-3">
-                  <div className="h-4 w-6 rounded bg-zinc-700/50 animate-pulse" />
-                  <div className="h-4 w-16 rounded bg-zinc-700/50 animate-pulse" />
-                  <div className="h-4 w-16 rounded bg-zinc-700/50 animate-pulse" />
-                </div>
-              ))}
-            </div>
           </div>
         </div>
       </div>

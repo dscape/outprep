@@ -257,7 +257,6 @@ export function analyzeOpenings(
     return Array.from(map.values())
       .filter((e) => e.total >= minGames)
       .sort((a, b) => b.total - a.total)
-      .slice(0, 15)
       .map((e) => {
         // Resolve to the most frequent ECO code in the group
         let bestEco = "";
