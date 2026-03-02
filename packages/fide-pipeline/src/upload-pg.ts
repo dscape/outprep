@@ -305,7 +305,7 @@ export async function ensureSchema(): Promise<void> {
   const { rows } = await sql`
     SELECT COUNT(*)::int AS count
     FROM information_schema.tables
-    WHERE table_schema = 'current_user' OR table_name = 'players'
+    WHERE table_schema = 'public' AND table_name = 'players'
   `;
 
   if ((rows[0].count as number) === 0) {
@@ -404,6 +404,7 @@ export async function ensureSchema(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_games_white_fide_id ON games (white_fide_id)`;
     await sql`CREATE INDEX IF NOT EXISTS idx_games_black_fide_id ON games (black_fide_id)`;
     await sql`CREATE UNIQUE INDEX IF NOT EXISTS idx_pipeline_runs_unique ON pipeline_runs (run_type, identifier)`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_players_name_trgm ON players USING GIN (name gin_trgm_ops)`;
 
     console.log("  Schema created.");
   }

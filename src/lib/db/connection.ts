@@ -58,12 +58,16 @@ export function sql(
  *   });
  */
 export async function sqlTransaction<T>(
-  fn: (sql: postgres.TransactionSql) => Promise<T>,
+  // postgres.TransactionSql loses call signatures due to TypeScript's Omit behavior.
+  // Using postgres.Sql preserves the tagged template literal call signature for callers.
+  fn: (sql: postgres.Sql) => T | Promise<T>,
 ): Promise<T> {
   if (!rawSql) {
     throw new Error("DATABASE_URL is not configured");
   }
-  return rawSql.begin(fn) as Promise<T>;
+  return rawSql.begin(
+    fn as unknown as (sql: postgres.TransactionSql) => T | Promise<T>,
+  ) as Promise<T>;
 }
 
 /**

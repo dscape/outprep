@@ -8,15 +8,22 @@
 
 import postgres from "postgres";
 
-const connectionString = process.env.DATABASE_URL;
+let rawSql: postgres.Sql | null = null;
 
-const rawSql = connectionString
-  ? postgres(connectionString, {
+function getRawSql(): postgres.Sql {
+  if (!rawSql) {
+    const connectionString = process.env.DATABASE_URL;
+    if (!connectionString) {
+      throw new Error("DATABASE_URL is not configured");
+    }
+    rawSql = postgres(connectionString, {
       max: 5,
       idle_timeout: 20,
       connect_timeout: 10,
-    })
-  : null;
+    });
+  }
+  return rawSql;
+}
 
 /**
  * Tagged template wrapper that returns `{ rows }` to match the
@@ -27,10 +34,7 @@ export function sql(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ...values: any[]
 ): Promise<{ rows: Record<string, unknown>[] }> {
-  if (!rawSql) {
-    throw new Error("DATABASE_URL is not configured");
-  }
-  return rawSql(strings, ...values).then((result) => ({
+  return getRawSql()(strings, ...values).then((result) => ({
     rows: Array.from(result) as Record<string, unknown>[],
   }));
 }
@@ -40,17 +44,21 @@ export function sql(
  * Auto-commits on success, auto-rolls back on error.
  */
 export async function sqlTransaction<T>(
-  fn: (sql: postgres.TransactionSql) => Promise<T>,
+  // postgres.TransactionSql loses call signatures due to TypeScript's Omit behavior.
+  // Using postgres.Sql preserves the tagged template literal call signature for callers.
+  fn: (sql: postgres.Sql) => T | Promise<T>,
 ): Promise<T> {
-  if (!rawSql) {
-    throw new Error("DATABASE_URL is not configured");
-  }
-  return rawSql.begin(fn) as Promise<T>;
+  return getRawSql().begin(
+    fn as unknown as (sql: postgres.TransactionSql) => T | Promise<T>,
+  ) as Promise<T>;
 }
 
 /**
  * Graceful shutdown.
  */
 export async function closeSql(): Promise<void> {
-  if (rawSql) await rawSql.end();
+  if (rawSql) {
+    await rawSql.end();
+    rawSql = null;
+  }
 }
