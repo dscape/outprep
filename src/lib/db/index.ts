@@ -15,6 +15,10 @@
 import { sql } from "./connection";
 import { list } from "@vercel/blob";
 
+// In-memory cache for blob URLs to reduce list() API calls (quota-sensitive)
+const blobUrlCache = new Map<string, { url: string | null; ts: number }>();
+const BLOB_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 // Re-export types needed by consumers
 export type {
   FIDEPlayer,
@@ -258,9 +262,19 @@ export async function getGamePgn(slug: string): Promise<string | null> {
   }
 
   try {
-    const result = await list({ prefix: `fide/game-pgn/${slug}.txt`, limit: 1 });
-    if (result.blobs.length === 0) return null;
-    const res = await fetch(result.blobs[0].url, { next: { revalidate: 604800 } });
+    const blobPath = `fide/game-pgn/${slug}.txt`;
+    // Check cache first to avoid burning list() quota
+    let url: string | null = null;
+    const cached = blobUrlCache.get(blobPath);
+    if (cached && Date.now() - cached.ts < BLOB_CACHE_TTL_MS) {
+      url = cached.url;
+    } else {
+      const result = await list({ prefix: blobPath, limit: 1 });
+      url = result.blobs.length > 0 ? result.blobs[0].url : null;
+      blobUrlCache.set(blobPath, { url, ts: Date.now() });
+    }
+    if (!url) return null;
+    const res = await fetch(url, { next: { revalidate: 604800 } });
     return res.ok ? await res.text() : null;
   } catch {
     return null;

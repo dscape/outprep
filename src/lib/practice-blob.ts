@@ -14,6 +14,10 @@ import { list } from "@vercel/blob";
 const PREFIX = "fide";
 const IS_DEV = process.env.NODE_ENV === "development";
 
+// In-memory cache for blob URLs to reduce list() API calls (quota-sensitive)
+const blobUrlCache = new Map<string, { url: string | null; ts: number }>();
+const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
+
 // ─── Local file fallback for development ──────────────────────────────────────
 
 /**
@@ -44,12 +48,17 @@ async function loadLocalGames(slug: string): Promise<string[] | null> {
  * Find the Blob URL for a given path by listing blobs with that prefix.
  */
 async function findBlobUrl(path: string): Promise<string | null> {
+  // Check cache first to avoid burning list() quota
+  const cached = blobUrlCache.get(path);
+  if (cached && Date.now() - cached.ts < CACHE_TTL_MS) {
+    return cached.url;
+  }
+
   try {
     const result = await list({ prefix: path, limit: 1 });
-    if (result.blobs.length > 0) {
-      return result.blobs[0].url;
-    }
-    return null;
+    const url = result.blobs.length > 0 ? result.blobs[0].url : null;
+    blobUrlCache.set(path, { url, ts: Date.now() });
+    return url;
   } catch {
     return null;
   }

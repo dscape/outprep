@@ -430,7 +430,14 @@ export default function GameReplay({
       }
     } catch (err) {
       console.error("Lichess import failed:", err);
-      setLichessError(err instanceof Error ? err.message : "Import failed");
+      // Fallback: copy PGN to clipboard and open Lichess paste page
+      try {
+        await navigator.clipboard.writeText(pgn);
+        setLichessError("Import failed — PGN copied to clipboard. Paste it on the Lichess page.");
+      } catch {
+        setLichessError("Import failed — use Copy PGN and paste at lichess.org/paste");
+      }
+      window.open("https://lichess.org/paste", "_blank");
     } finally {
       setLichessImporting(false);
     }

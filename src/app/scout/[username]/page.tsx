@@ -288,12 +288,48 @@ export default function ScoutPage() {
           sessionStorage.getItem(`pgn-import:${username}`);
         if (stored) {
           setOtbProfile(JSON.parse(stored));
-        } else {
-          setError("PGN data not found. Please go back and re-upload.");
+          setFullLoading(false);
+          return;
         }
       } catch {
-        setError("Failed to load PGN data.");
+        // Parse error — fall through to API fetch
       }
+
+      // No sessionStorage data (quota exceeded, cleared, or direct nav)
+      // In FIDE mode, re-fetch from API
+      if (isFIDEMode) {
+        (async () => {
+          try {
+            const res = await fetch(
+              `/api/fide-practice/${encodeURIComponent(username)}`
+            );
+            if (!res.ok) {
+              const body = await res.json().catch(() => ({}));
+              setError(body.error || "Failed to load games");
+              setFullLoading(false);
+              return;
+            }
+            const profile = await res.json();
+            setOtbProfile(profile);
+            // Try to cache for next time
+            try {
+              sessionStorage.setItem(
+                `fide-import:${username}`,
+                JSON.stringify(profile)
+              );
+            } catch {
+              // Quota exceeded — non-fatal
+            }
+          } catch {
+            setError("Failed to load games. Please try again.");
+          } finally {
+            setFullLoading(false);
+          }
+        })();
+        return;
+      }
+
+      setError("PGN data not found. Please go back and re-upload.");
       setFullLoading(false);
       return;
     }
@@ -1062,9 +1098,9 @@ export default function ScoutPage() {
     <div className="min-h-screen px-4 py-8">
       {/* Top progress bar for auto-scan */}
       {isUpgrading && upgradeProgress && (
-        <div className="fixed top-0 left-0 right-0 z-50 h-1 bg-zinc-900">
+        <div className="fixed top-0 left-0 right-0 z-50 h-1.5 bg-zinc-900 overflow-hidden">
           <div
-            className="h-full bg-green-500 transition-all duration-500"
+            className="h-full bg-green-500 transition-[width] duration-500"
             style={{ width: `${upgradeProgress.pct}%` }}
           />
         </div>

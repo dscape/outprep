@@ -171,11 +171,11 @@ export default function ErrorProfileCard({
         </h3>
         <span
           className="text-xs text-zinc-600 cursor-help"
-          title="Games with engine evaluations (from Lichess or Stockfish) that rate each move's quality, detecting mistakes and blunders."
+          title="Games analyzed with Stockfish to rate each move's quality, detecting mistakes and blunders."
         >
           {upgradeComplete && totalGames
             ? `${totalGames} games analyzed`
-            : `${errorProfile.gamesAnalyzed} games with engine analysis`}
+            : `${errorProfile.gamesAnalyzed} games analyzed`}
         </span>
       </div>
 
@@ -309,7 +309,7 @@ export default function ErrorProfileCard({
           </div>
           <div className="h-1.5 w-full rounded-full bg-zinc-700/50 overflow-hidden">
             <div
-              className="h-full rounded-full bg-green-500 transition-all duration-500"
+              className="h-full rounded-full bg-green-500 transition-[width] duration-500"
               style={{ width: `${upgradeProgress.pct}%` }}
             />
           </div>

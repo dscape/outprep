@@ -31,10 +31,14 @@ export default function PracticeLoader({
       const profile = await res.json();
 
       // Store compact profile in sessionStorage keyed by slug (clean URL)
-      sessionStorage.setItem(
-        `fide-import:${slug}`,
-        JSON.stringify(profile)
-      );
+      try {
+        sessionStorage.setItem(
+          `fide-import:${slug}`,
+          JSON.stringify(profile)
+        );
+      } catch {
+        // sessionStorage quota exceeded — scout page will re-fetch from API
+      }
 
       // Navigate to scout page in FIDE mode (uses slug for clean URL)
       router.push(
