@@ -3,6 +3,7 @@ import { getPlayerGames } from "@/lib/practice-blob";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
 import { getPlayerByFideId, formatPlayerName } from "@/lib/db";
+import type { PlayerRatings } from "@/lib/types";
 
 /**
  * Build an OTBProfile server-side for FIDE players.
@@ -19,12 +20,19 @@ export async function GET(
   const fideIdMatch = slug.match(/-(\d{4,})$/);
   const fideId = fideIdMatch ? fideIdMatch[1] : null;
 
-  // Look up canonical player name from DB using FIDE ID
+  // Look up canonical player name and ratings from DB using FIDE ID
   let displayName: string | null = null;
+  let fideRatings: PlayerRatings | undefined;
   if (fideId) {
     const player = await getPlayerByFideId(fideId);
     if (player) {
       displayName = formatPlayerName(player.name);
+      // Populate ratings from official FIDE data
+      const ratings: PlayerRatings = {};
+      if (player.standardRating) ratings.classical = player.standardRating;
+      if (player.rapidRating) ratings.rapid = player.rapidRating;
+      if (player.blitzRating) ratings.blitz = player.blitzRating;
+      if (Object.keys(ratings).length > 0) fideRatings = ratings;
     }
   }
 
@@ -51,6 +59,11 @@ export async function GET(
     profile.username = displayName;
   }
 
+  // Attach FIDE ratings if available
+  if (fideRatings) {
+    profile.ratings = fideRatings;
+  }
+
   // Strip raw PGN text from each game to keep the payload small.
   // The moves, headers, and metadata are still available for display.
   const compactGames = (profile.games || []).map((g) => ({
@@ -61,6 +74,7 @@ export async function GET(
     event: g.event,
     eco: g.eco,
     opening: g.opening,
+    timeControl: g.timeControl,
     moves: g.moves,
     pgn: "", // Stripped — fetch individual PGN on-demand if needed
   }));

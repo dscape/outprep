@@ -32,6 +32,7 @@ import {
   detectWeaknessesFromErrorProfile,
   generatePrepTips,
 } from "@/lib/profile-builder";
+import { analyzeOTBGames } from "@/lib/otb-analyzer";
 import { LichessGame } from "@/lib/types";
 import { fromLichessGame, fromOTBGame, normalizedToGameForDrilldown } from "@/lib/normalized-game";
 import type { NormalizedGame } from "@/lib/normalized-game";
@@ -279,6 +280,17 @@ export default function ScoutPage() {
     }
   }, [username]);
 
+  // Helper: bridge otbProfile into the shared profile + selectedSpeeds state
+  const bridgePgnProfile = useCallback((otb: PlayerProfile) => {
+    setOtbProfile(otb);
+    setProfile(otb);
+    profileRef.current = otb;
+    const speeds = Object.keys(otb.bySpeed || {}).sort(
+      (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
+    );
+    setSelectedSpeeds(speeds.length > 0 ? speeds : ["classical"]);
+  }, []);
+
   useEffect(() => {
     if (isPGNMode) {
       try {
@@ -287,7 +299,8 @@ export default function ScoutPage() {
           sessionStorage.getItem(`fide-import:${username}`) ||
           sessionStorage.getItem(`pgn-import:${username}`);
         if (stored) {
-          setOtbProfile(JSON.parse(stored));
+          const parsed = JSON.parse(stored) as PlayerProfile;
+          bridgePgnProfile(parsed);
           setFullLoading(false);
           return;
         }
@@ -309,13 +322,13 @@ export default function ScoutPage() {
               setFullLoading(false);
               return;
             }
-            const profile = await res.json();
-            setOtbProfile(profile);
+            const data = await res.json();
+            bridgePgnProfile(data);
             // Try to cache for next time
             try {
               sessionStorage.setItem(
                 `fide-import:${username}`,
-                JSON.stringify(profile)
+                JSON.stringify(data)
               );
             } catch {
               // Quota exceeded — non-fatal
@@ -330,6 +343,41 @@ export default function ScoutPage() {
       }
 
       setError("PGN data not found. Please go back and re-upload.");
+      setFullLoading(false);
+      return;
+    }
+
+    // PGN mode date filtering: when timeRange changes, re-analyze filtered games
+    if (isPGNMode && otbProfile?.games && timeRange !== "all") {
+      setTimeRangeLoading(true);
+      const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+      if (sinceMs) {
+        const cutoff = Date.now() - sinceMs;
+        const filtered = otbProfile.games.filter(g => {
+          if (!g.date) return true; // Keep games without dates
+          const parsed = new Date(g.date.replace(/\./g, "-"));
+          return !isNaN(parsed.getTime()) && parsed.getTime() >= cutoff;
+        });
+        if (filtered.length > 0) {
+          const reanalyzed = analyzeOTBGames(filtered, otbProfile.username);
+          // Preserve ratings from the original profile
+          if (otbProfile.ratings) reanalyzed.ratings = otbProfile.ratings;
+          setProfile(reanalyzed);
+          profileRef.current = reanalyzed;
+          const speeds = Object.keys(reanalyzed.bySpeed || {}).sort(
+            (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
+          );
+          setSelectedSpeeds(speeds.length > 0 ? speeds : ["classical"]);
+        }
+      }
+      setTimeRangeLoading(false);
+      setFullLoading(false);
+      return;
+    }
+
+    // PGN mode "all time" — restore full profile
+    if (isPGNMode && otbProfile) {
+      bridgePgnProfile(otbProfile);
       setFullLoading(false);
       return;
     }
@@ -390,7 +438,8 @@ export default function ScoutPage() {
     // Only show full loading skeleton on initial load, not time range changes
     const isTimeRangeChange = !!profileRef.current;
     loadFullProfile(isTimeRangeChange);
-  }, [username, isPGNMode, timeRange]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [username, isPGNMode, isFIDEMode, timeRange, bridgePgnProfile]);
 
   // Reset drill-down cache when time range changes
   useEffect(() => {
@@ -422,9 +471,9 @@ export default function ScoutPage() {
     }
   }, [profile, username, isPGNMode]);
 
-  // Pre-warm bot-data server cache for the play page
+  // Pre-warm bot-data server cache for the play page (Lichess only)
   useEffect(() => {
-    if (!profile || selectedSpeeds.length === 0) return;
+    if (!profile || selectedSpeeds.length === 0 || isPGNMode) return;
     const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
     const since = sinceMs ? Date.now() - sinceMs : undefined;
     let query = `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`;
@@ -448,8 +497,12 @@ export default function ScoutPage() {
 
   const handleOtbReady = useCallback(
     (otb: OTBProfile) => {
-      setOtbProfile(otb);
-      if (!isPGNMode) setActiveTab("otb");
+      if (isPGNMode) {
+        bridgePgnProfile(otb);
+      } else {
+        setOtbProfile(otb);
+        setActiveTab("otb");
+      }
       try {
         const key = isFIDEMode
           ? `fide-import:${username}`
@@ -461,7 +514,7 @@ export default function ScoutPage() {
         // Storage full — non-fatal
       }
     },
-    [username, isPGNMode, isFIDEMode]
+    [username, isPGNMode, isFIDEMode, bridgePgnProfile]
   );
 
   const handleOtbClear = useCallback(() => {
@@ -594,10 +647,12 @@ export default function ScoutPage() {
   }, [username, rawLichessGames, loadingLichessGames, isPGNMode, timeRange]);
 
   // Drill-down: memoize converted games
+  // Use otbProfile.username (resolved player name) for color detection, not URL slug
   const pgnDrilldownGames = useMemo(() => {
     if (!isPGNMode || !otbProfile?.games) return undefined;
+    const playerName = otbProfile.username || username;
     return otbProfile.games.map((g, i) =>
-      normalizedToGameForDrilldown(fromOTBGame(g, username, i))
+      normalizedToGameForDrilldown(fromOTBGame(g, playerName, i))
     );
   }, [isPGNMode, otbProfile, username]);
 
@@ -817,6 +872,10 @@ export default function ScoutPage() {
     totalGameCount ?? filteredData?.games ?? undefined;
 
   const handlePracticeClick = useCallback(() => {
+    if (isPGNMode) {
+      router.push(`/play/${encodeURIComponent(username)}?source=pgn`);
+      return;
+    }
     if (isUpgrading) {
       setShowPlayConfirm(true);
       return;
@@ -836,7 +895,7 @@ export default function ScoutPage() {
     let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
     if (since) playUrl += `&since=${since}`;
     router.push(playUrl);
-  }, [isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
+  }, [isPGNMode, isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
 
   if (fullLoading) {
     return (
@@ -935,159 +994,10 @@ export default function ScoutPage() {
     );
   }
 
-  // PGN-only mode: render from OTB profile without Lichess data
-  if (isPGNMode) {
-    if (!otbProfile) return null;
-
-    // In FIDE mode, username is a slug — use the profile's name instead
-    const displayName = isFIDEMode && otbProfile.username
-      ? otbProfile.username
-      : username;
-    const pgnTabs: ["openings" | "weaknesses", string][] = [
-      ["openings", "Openings"],
-      ["weaknesses", "Weaknesses"],
-    ];
-
-    const styleEntries = [
-      ["Aggression", otbProfile.style.aggression],
-      ["Tactical", otbProfile.style.tactical],
-      ["Positional", otbProfile.style.positional],
-      ["Endgame", otbProfile.style.endgame],
-    ] as const;
-
-    return (
-      <div className="min-h-screen px-4 py-8">
-        <div className="mx-auto max-w-3xl">
-          <div className="mb-6 flex items-center justify-between">
-            <button
-              onClick={() => router.push("/")}
-              className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-            >
-              &larr; Back to search
-            </button>
-            <button
-              onClick={() =>
-                router.push(
-                  `/play/${encodeURIComponent(username)}?source=pgn`
-                )
-              }
-              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
-              style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
-            >
-              Practice &#9654;
-            </button>
-          </div>
-
-          {/* Player Card */}
-          <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
-            <div>
-              <h2 className="text-2xl font-bold text-white">{displayName}</h2>
-              <p className="text-sm text-zinc-400 mt-1">
-                {otbProfile.totalGames} game
-                {otbProfile.totalGames !== 1 ? "s" : ""} analyzed from PGN
-              </p>
-            </div>
-
-            <div className="mt-6 space-y-3">
-              <div className="flex items-baseline justify-between">
-                <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide">
-                  Playing Style
-                </h3>
-                {otbProfile.style.sampleSize < 30 && (
-                  <span className="text-xs text-zinc-500">
-                    Based on {otbProfile.style.sampleSize} games
-                  </span>
-                )}
-              </div>
-              {styleEntries.map(([label, value]) => (
-                <div key={label} className="flex items-center gap-3">
-                  <span className="w-24 text-sm text-zinc-400">{label}</span>
-                  <div className="flex-1 h-2 rounded-full bg-zinc-700 overflow-hidden">
-                    <div
-                      className={`h-full rounded-full transition-all duration-700 ${
-                        value >= 75
-                          ? "bg-green-500"
-                          : value >= 50
-                            ? "bg-yellow-500"
-                            : value >= 25
-                              ? "bg-orange-500"
-                              : "bg-red-500"
-                      }`}
-                      style={{ width: `${value}%` }}
-                    />
-                  </div>
-                  <span className="w-8 text-right text-sm font-mono text-zinc-300">
-                    {value}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Add more PGN games */}
-          <OTBUploader
-            username={displayName}
-            onProfileReady={handleOtbReady}
-            existingProfile={otbProfile}
-            onClear={handleOtbClear}
-          />
-
-          {/* Tabs */}
-          <div className="mt-8">
-            <div className="flex gap-1 border-b border-zinc-800">
-              {pgnTabs.map(([key, label]) => (
-                <button
-                  key={key}
-                  onClick={() => setActiveTab(key)}
-                  className={`px-4 py-2.5 text-sm font-medium transition-colors border-b-2 -mb-px ${
-                    activeTab === key
-                      ? "border-green-500 text-white"
-                      : "border-transparent text-zinc-500 hover:text-zinc-300"
-                  }`}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            <div className="mt-6 tab-content">
-              {activeTab === "openings" && (
-                <OpeningsTab
-                  white={otbProfile.openings.white}
-                  black={otbProfile.openings.black}
-                  games={pgnDrilldownGames}
-                  onAnalyzeGame={handleAnalyzeGame}
-                />
-              )}
-              {activeTab === "weaknesses" && (
-                <WeaknessesTab
-                  weaknesses={otbProfile.weaknesses}
-                  username={displayName}
-                  speeds=""
-                />
-              )}
-            </div>
-          </div>
-
-          {/* Practice button */}
-          <div className="mt-8 flex flex-col items-center">
-            <button
-              onClick={() =>
-                router.push(
-                  `/play/${encodeURIComponent(username)}?source=pgn`
-                )
-              }
-              className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
-            >
-              Practice against {displayName}
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (!profile || !filteredData) return null;
+
+  // In FIDE mode, username is a slug — use the profile's resolved name
+  const displayName = isPGNMode && profile.username ? profile.username : profile.username;
 
   const availableSpeeds = Object.keys(profile.bySpeed || {}).sort(
     (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
@@ -1097,7 +1007,7 @@ export default function ScoutPage() {
     ["openings", "Openings"],
     ["weaknesses", "Weaknesses"],
     ["prep", "Prep Tips"],
-    ...(otbProfile ? [["otb", "OTB Games"] as [Tab, string]] : []),
+    ...(!isPGNMode && otbProfile ? [["otb", "OTB Games"] as [Tab, string]] : []),
   ];
 
   return (
@@ -1192,8 +1102,8 @@ export default function ScoutPage() {
         {/* Player Card */}
         <PlayerCard profile={profile} filteredGames={filteredData.games} />
 
-        {/* Error Profile */}
-        {(displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
+        {/* Error Profile — only for Lichess mode (PGN games don't have engine evals) */}
+        {!isPGNMode && (displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
             <div className="mt-4">
               <ErrorProfileCard
                 errorProfile={displayedErrorProfile || {
@@ -1215,7 +1125,7 @@ export default function ScoutPage() {
 
         {/* OTB PGN Upload */}
         <OTBUploader
-          username={username}
+          username={displayName}
           onProfileReady={handleOtbReady}
           existingProfile={otbProfile}
           onClear={handleOtbClear}
@@ -1244,17 +1154,17 @@ export default function ScoutPage() {
               <OpeningsTab
                 white={filteredData.openings.white}
                 black={filteredData.openings.black}
-                games={lichessDrilldownGames}
+                games={isPGNMode ? pgnDrilldownGames : lichessDrilldownGames}
                 onAnalyzeGame={handleAnalyzeGame}
-                onRequestGames={fetchLichessRawGames}
-                loadingGames={loadingLichessGames}
-                coverageByOpening={coverageByOpening}
+                onRequestGames={isPGNMode ? undefined : fetchLichessRawGames}
+                loadingGames={isPGNMode ? false : loadingLichessGames}
+                coverageByOpening={isPGNMode ? undefined : coverageByOpening}
               />
             )}
             {activeTab === "weaknesses" && (
               <WeaknessesTab
                 weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
-                username={username}
+                username={displayName}
                 speeds={selectedSpeeds.join(",")}
               />
             )}
@@ -1271,7 +1181,7 @@ export default function ScoutPage() {
             onClick={handlePracticeClick}
             className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
           >
-            Practice against {profile.username}
+            Practice against {displayName}
           </button>
           <p className="text-xs text-zinc-500 mt-1">
             Bot trained on {filteredData.games} {selectedSpeeds.join(" + ")} game{filteredData.games !== 1 ? "s" : ""}

@@ -1,4 +1,4 @@
-import { OTBGame, PlayerProfile } from "./types";
+import { OTBGame, PlayerProfile, SpeedProfile } from "./types";
 import {
   analyzeStyle,
   analyzeOpenings,
@@ -6,10 +6,11 @@ import {
   generatePrepTips,
 } from "./profile-builder";
 import { fromOTBGame } from "./normalized-game";
+import type { NormalizedGame } from "./normalized-game";
 
 /**
  * Analyze OTB games using the unified NormalizedGame pipeline.
- * Returns a PlayerProfile with platform: "pgn".
+ * Returns a PlayerProfile with platform: "pgn" and per-speed breakdowns.
  */
 export function analyzeOTBGames(
   games: OTBGame[],
@@ -23,6 +24,27 @@ export function analyzeOTBGames(
   const weaknesses = detectWeaknesses(normalized, style, openings, normalized.length);
   const prepTips = generatePrepTips(weaknesses, openings, style);
 
+  // Per-speed breakdowns (same pattern as buildProfile in profile-builder.ts)
+  const bySpeed: Record<string, SpeedProfile> = {};
+  const speedGroups = new Map<string, NormalizedGame[]>();
+  for (const g of normalized) {
+    if (!g.speed) continue;
+    const arr = speedGroups.get(g.speed) || [];
+    arr.push(g);
+    speedGroups.set(g.speed, arr);
+  }
+  for (const [speed, speedGames] of speedGroups) {
+    const speedStyle = analyzeStyle(speedGames);
+    const speedOpenings = analyzeOpenings(speedGames);
+    const speedWeaknesses = detectWeaknesses(speedGames, speedStyle, speedOpenings, speedGames.length);
+    bySpeed[speed] = {
+      games: speedGames.length,
+      style: speedStyle,
+      openings: speedOpenings,
+      weaknesses: speedWeaknesses,
+    };
+  }
+
   return {
     username,
     platform: "pgn",
@@ -32,6 +54,7 @@ export function analyzeOTBGames(
     weaknesses,
     openings,
     prepTips,
+    bySpeed,
     lastComputed: Date.now(),
     games,
   };
@@ -57,6 +80,11 @@ function resolvePlayerName(games: OTBGame[], playerName: string): string {
     const pgnLower = pgnName.toLowerCase();
     // Direct substring match
     if (pgnLower.includes(lower)) return true;
+    // Reverse alphanumeric substring match — handles abbreviated FIDE names
+    // e.g. PGN "Caruana,F" → "caruanaf", player "Caruana, Fabiano" → "caruanafabiano"
+    const pgnAlpha = pgnLower.replace(/[^a-z0-9]/g, "");
+    const playerAlpha = lower.replace(/[^a-z0-9]/g, "");
+    if (pgnAlpha.length >= 4 && playerAlpha.includes(pgnAlpha)) return true;
     // Word-based match: all name words appear in the PGN name
     if (nameWords.length >= 2) {
       const pgnNormalized = pgnLower.replace(/[^a-z\s]/g, " ");

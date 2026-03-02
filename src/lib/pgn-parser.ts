@@ -40,6 +40,7 @@ export function parsePGNFile(pgnText: string, playerName: string): OTBGame[] {
         event: headers["Event"],
         eco: headers["ECO"],
         opening: headers["Opening"],
+        timeControl: headers["TimeControl"],
         moves,
         pgn: rawPgn,
       });
@@ -78,6 +79,7 @@ export function parseAllPGNGames(pgnText: string): OTBGame[] {
         event: headers["Event"],
         eco: headers["ECO"],
         opening: headers["Opening"],
+        timeControl: headers["TimeControl"],
         moves,
         pgn: rawPgn,
       });

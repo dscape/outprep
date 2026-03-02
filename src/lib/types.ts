@@ -165,6 +165,7 @@ export interface OTBGame {
   event?: string;
   eco?: string;
   opening?: string;
+  timeControl?: string; // raw TimeControl header (e.g. "180", "600+5", "1/259200")
   moves: string; // space-separated SAN
   pgn: string; // raw PGN text
 }

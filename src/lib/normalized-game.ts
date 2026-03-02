@@ -111,6 +111,48 @@ export function fromLichessGame(
   };
 }
 
+/**
+ * Classify a PGN TimeControl header value into a speed category.
+ *
+ * Chess.com formats:
+ *   "180"        → 3 min total (blitz)
+ *   "600+5"      → 600 base + 5 increment (rapid)
+ *   "60+1"       → 60 base + 1 increment (bullet)
+ *   "1/259200"   → correspondence (excluded)
+ *
+ * Speed thresholds (total = base + 40 * increment):
+ *   bullet    < 180s  (3 min)
+ *   blitz     < 480s  (8 min)
+ *   rapid     < 1500s (25 min)
+ *   classical >= 1500s
+ */
+export function classifyTimeControl(tc: string | undefined): string | undefined {
+  if (!tc) return undefined;
+  // Correspondence: "1/259200" format — exclude
+  if (tc.includes("/")) return undefined;
+  const parts = tc.split("+");
+  const base = parseInt(parts[0], 10);
+  if (isNaN(base)) return undefined;
+  const increment = parts.length > 1 ? parseInt(parts[1], 10) : 0;
+  const estimated = base + 40 * (isNaN(increment) ? 0 : increment);
+  if (estimated < 180) return "bullet";
+  if (estimated < 480) return "blitz";
+  if (estimated < 1500) return "rapid";
+  return "classical";
+}
+
+/**
+ * Classify speed from FIDE event name.
+ * Matches keywords like "Rapid", "Blitz" in event titles.
+ */
+export function classifyEventSpeed(event: string | undefined): string | undefined {
+  if (!event) return undefined;
+  const lower = event.toLowerCase();
+  if (/\brapid\b/.test(lower)) return "rapid";
+  if (/\bblitz\b/.test(lower)) return "blitz";
+  return undefined;
+}
+
 export function fromOTBGame(
   game: OTBGame,
   username: string,
@@ -118,7 +160,10 @@ export function fromOTBGame(
 ): NormalizedGame {
   // Normalize to alphanumeric for matching (handles slug-format names and PGN "Last, First" format)
   const lower = username.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const isWhite = game.white.toLowerCase().replace(/[^a-z0-9]/g, "").includes(lower);
+  const whiteNorm = game.white.toLowerCase().replace(/[^a-z0-9]/g, "");
+  // Check both directions: PGN name contains username, or username contains PGN name
+  // (handles abbreviated FIDE names like "Caruana,F" for "Caruana, Fabiano")
+  const isWhite = whiteNorm.includes(lower) || (whiteNorm.length >= 4 && lower.includes(whiteNorm));
 
   // Prefer ECO_NAMES lookup (e.g., "Sicilian Defense") over raw PGN header (e.g., "Sicilian")
   let rawOpening = resolveOpeningName(game.eco || null, game.opening || null);
@@ -164,7 +209,7 @@ export function fromOTBGame(
     source: "pgn",
     playerColor: isWhite ? "white" : "black",
     variant: "standard",
-    speed: "classical",
+    speed: classifyTimeControl(game.timeControl) || classifyEventSpeed(game.event) || "classical",
     date: game.date,
     event: game.event,
   };
