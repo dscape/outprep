@@ -142,7 +142,7 @@ export interface AnalysisSummary {
   inaccuracies: number;
 }
 
-export type MomentTag = "EXPECTED" | "WELL PLAYED" | "BLUNDER" | "MISTAKE" | "INACCURACY" | "EXPLOITED" | "THEIR WEAKNESS";
+export type MomentTag = "EXPECTED" | "WELL PLAYED" | "BLUNDER" | "MISTAKE" | "INACCURACY" | "EXPLOITED" | "WEAKNESS";
 
 export interface KeyMoment {
   moveNum: number;

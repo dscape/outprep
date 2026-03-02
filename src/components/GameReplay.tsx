@@ -401,46 +401,13 @@ export default function GameReplay({
     setLichessImporting(true);
     setLichessError(null);
     try {
-      // Sanitize PGN: keep only standard headers Lichess accepts
-      const allowedHeaders = new Set([
-        "Event", "Site", "Date", "Round", "White", "Black",
-        "Result", "WhiteElo", "BlackElo", "ECO", "FEN", "SetUp",
-        "TimeControl", "Variant",
-      ]);
-      const cleanedPgn = pgn
-        .replace(/\[(\w+)\s+"[^"]*"\]\s*\n?/g, (match, header) =>
-          allowedHeaders.has(header) ? match : ""
-        )
-        .replace(/^\s*\n/gm, "");
-
-      const res = await fetch("/api/lichess-import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pgn: cleanedPgn }),
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Import failed (${res.status})`);
-      }
-      const data = await res.json();
-      if (data.url) {
-        window.open(data.url, "_blank");
-      } else {
-        throw new Error("No URL returned from Lichess import");
-      }
-    } catch (err) {
-      console.error("Lichess import failed:", err);
-      // Fallback: copy PGN to clipboard and open Lichess paste page
-      try {
-        await navigator.clipboard.writeText(pgn);
-        setLichessError("Import failed — PGN copied to clipboard. Paste it on the Lichess page.");
-      } catch {
-        setLichessError("Import failed — use Copy PGN and paste at lichess.org/paste");
-      }
-      window.open("https://lichess.org/paste", "_blank");
-    } finally {
-      setLichessImporting(false);
+      await navigator.clipboard.writeText(pgn);
+      setLichessError("PGN copied — paste it on the Lichess page.");
+    } catch {
+      setLichessError("Copy PGN first, then paste at lichess.org/paste");
     }
+    window.open("https://lichess.org/paste", "_blank");
+    setLichessImporting(false);
   }, [pgn]);
 
   if (parsedMoves.length === 0) {

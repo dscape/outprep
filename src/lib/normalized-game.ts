@@ -68,9 +68,22 @@ export function fromLichessGame(
   const evals = game.analysis?.map(evalToCp);
   const rawOpening = game.opening?.name || "Unknown";
 
+  // Construct a minimal PGN from the moves field if the API didn't include one.
+  // chess.js's loadPgn() needs proper PGN with move numbers.
+  let pgn = game.pgn || "";
+  if (!pgn && game.moves) {
+    const sans = game.moves.split(/\s+/);
+    const parts: string[] = [];
+    for (let i = 0; i < sans.length; i++) {
+      if (i % 2 === 0) parts.push(`${Math.floor(i / 2) + 1}.`);
+      parts.push(sans[i]);
+    }
+    pgn = parts.join(" ");
+  }
+
   return {
     id: game.id,
-    pgn: game.pgn || "",
+    pgn,
     moves: game.moves,
     white: { name: whiteName, id: game.players.white.user?.id || "" },
     black: { name: blackName, id: game.players.black.user?.id || "" },
@@ -96,8 +109,9 @@ export function fromOTBGame(
   username: string,
   index: number,
 ): NormalizedGame {
-  const lower = username.toLowerCase();
-  const isWhite = game.white.toLowerCase().includes(lower);
+  // Normalize to alphanumeric for matching (handles slug-format names and PGN "Last, First" format)
+  const lower = username.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const isWhite = game.white.toLowerCase().replace(/[^a-z0-9]/g, "").includes(lower);
 
   let rawOpening = game.opening || "";
   if (!rawOpening && game.eco) rawOpening = game.eco;
@@ -106,9 +120,21 @@ export function fromOTBGame(
     rawOpening = classified?.name || "Unknown";
   }
 
+  // Construct a minimal PGN from the moves field if pgn is empty (e.g., stripped compact games)
+  let pgn = game.pgn || "";
+  if (!pgn && game.moves) {
+    const sans = game.moves.split(/\s+/);
+    const parts: string[] = [];
+    for (let i = 0; i < sans.length; i++) {
+      if (i % 2 === 0) parts.push(`${Math.floor(i / 2) + 1}.`);
+      parts.push(sans[i]);
+    }
+    pgn = parts.join(" ");
+  }
+
   return {
     id: `otb-${index}`,
-    pgn: game.pgn,
+    pgn,
     moves: game.moves,
     white: {
       name: game.white,

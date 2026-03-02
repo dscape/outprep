@@ -51,7 +51,7 @@ export function generateNarrative(input: NarrativeInput): string {
   // Key moment analysis
   const prepHits = keyMoments.filter((m) => m.tag === "WELL PLAYED");
   const errors = keyMoments.filter((m) => m.tag === "BLUNDER" || m.tag === "MISTAKE");
-  const predicted = keyMoments.filter((m) => m.tag === "THEIR WEAKNESS");
+  const predicted = keyMoments.filter((m) => m.tag === "WEAKNESS");
 
   if (prepHits.length > 0) {
     const hit = prepHits[0];

@@ -50,7 +50,7 @@ export default function AnalysisPage() {
 
       try {
         // Step 0: Fetch opponent profile + opening in parallel
-        setStage("Loading opponent profile...");
+        setStage("Fetching opponent data...");
 
         const [profile, opening] = await Promise.all([
           fetchProfile(gd.opponentUsername),

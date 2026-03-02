@@ -42,9 +42,9 @@ export function tagMoments(
       } else if (move.classification === "blunder" || move.classification === "mistake") {
         const matchedWeakness = matchWeakness(context, profile, weaknessAreas);
         if (matchedWeakness) {
-          tag = "THEIR WEAKNESS";
+          tag = "WEAKNESS";
           description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
-          weaknessContext = `Consistent with their ${matchedWeakness} weakness`;
+          weaknessContext = `Consistent with known ${matchedWeakness} weakness`;
         } else if (context?.tacticalMotifs && context.tacticalMotifs.length > 0) {
           tag = "EXPECTED";
           description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;

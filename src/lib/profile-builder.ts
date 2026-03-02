@@ -506,7 +506,7 @@ export function generatePrepTips(
   // Style-based tips
   if (style.aggression > 70) {
     tips.push({
-      title: "Play solidly against their aggression",
+      title: "Play solidly against the aggression",
       description: "This player is highly aggressive. Avoid sharp tactical lines where they feel comfortable. Aim for solid, positional play and let them overextend.",
     });
   } else if (style.aggression < 30) {
@@ -521,7 +521,7 @@ export function generatePrepTips(
     if (weakness.area === "Endgame Conversion") {
       tips.push({
         title: "Steer into endgames",
-        description: "Their endgame is weak. Trade pieces when you have an advantage and aim for technical endgame positions.",
+        description: "Weak endgame. Trade pieces when you have an advantage and aim for technical endgame positions.",
       });
     } else if (weakness.area === "Tactical Vulnerability") {
       tips.push({
@@ -530,7 +530,7 @@ export function generatePrepTips(
       });
     } else if (weakness.area.startsWith("Weak in")) {
       tips.push({
-        title: `Exploit their ${weakness.area.replace("Weak in ", "")} weakness`,
+        title: `Exploit ${weakness.area.replace("Weak in ", "")} weakness`,
         description: weakness.description,
       });
     }

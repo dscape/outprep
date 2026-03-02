@@ -13,7 +13,10 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  const playerName = req.nextUrl.searchParams.get("name") || slug;
+  // When called without ?name= (e.g., direct navigation to /scout/slug?source=fide),
+  // derive a name from the slug by removing the trailing FIDE ID and replacing hyphens.
+  const nameParam = req.nextUrl.searchParams.get("name");
+  const playerName = nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
   const rawPgns = await getPlayerGames(slug);
 
   if (!rawPgns || rawPgns.length === 0) {

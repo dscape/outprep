@@ -160,9 +160,8 @@ export default function OpeningsTab({
       {/* Coverage nudge banner */}
       {coverageStats && coverageStats.total > 0 && coverageStats.analyzed < coverageStats.total * 0.5 && (
         <div className="mb-4 rounded-lg border border-zinc-700/40 bg-zinc-800/30 px-3 py-2 text-xs text-zinc-400">
-          Only {coverageStats.analyzed} of {coverageStats.total} games have engine analysis
-          (move-by-move evaluation that detects mistakes and blunders).
-          Run a Quick Scan above for a more accurate error profile.
+          {coverageStats.analyzed} of {coverageStats.total} games have Lichess engine analysis.
+          The Quick Scan runs automatically to build a more accurate error profile.
         </div>
       )}
 

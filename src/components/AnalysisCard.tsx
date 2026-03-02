@@ -64,7 +64,7 @@ function TagBadge({ tag }: { tag: MomentTag }) {
     "MISTAKE":         "bg-red-600/20 text-red-400 border-red-500/30",
     "INACCURACY":      "bg-orange-600/20 text-orange-400 border-orange-500/30",
     "EXPLOITED":       "bg-purple-600/20 text-purple-400 border-purple-500/30",
-    "THEIR WEAKNESS":  "bg-yellow-600/20 text-yellow-400 border-yellow-500/30",
+    "WEAKNESS":        "bg-yellow-600/20 text-yellow-400 border-yellow-500/30",
   };
 
   return (
@@ -288,31 +288,17 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
       window.open(`https://lichess.org/${analysis.gameId}`, "_blank");
       return;
     }
-    // Non-Lichess game (OTB, played, synthetic) — import via Lichess API
+    // Non-Lichess game (OTB, played, synthetic) — copy PGN and open Lichess paste
     setLichessImporting(true);
     setLichessError(null);
     try {
-      const res = await fetch("/api/lichess-import", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pgn: analysis.pgn }),
-      });
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(errorData.error || `Import failed: ${res.status}`);
-      }
-      const data = await res.json();
-      if (data.url) {
-        window.open(data.url, "_blank");
-      } else {
-        throw new Error("No URL returned from Lichess import");
-      }
-    } catch (err) {
-      console.error("Lichess import failed:", err);
-      setLichessError(err instanceof Error ? err.message : "Import failed");
-    } finally {
-      setLichessImporting(false);
+      await navigator.clipboard.writeText(analysis.pgn);
+      setLichessError("PGN copied — paste it on the Lichess page.");
+    } catch {
+      setLichessError("Copy PGN first, then paste at lichess.org/paste");
     }
+    window.open("https://lichess.org/paste", "_blank");
+    setLichessImporting(false);
   }, [analysis.gameId, analysis.pgn]);
 
   // Group moves into pairs: (white, black)

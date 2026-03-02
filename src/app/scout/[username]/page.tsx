@@ -491,11 +491,17 @@ export default function ScoutPage() {
       }
       return;
     }
+    // Abort any in-progress scan before resetting
+    abortRef.current?.abort();
+    setIsUpgrading(false);
+    setUpgradeProgress(null);
     setEnhancedErrorProfile(null);
     setUpgradeComplete(false);
     setTotalGameCount(null);
     setEnhancedWeaknesses(null);
     setEnhancedPrepTips(null);
+    // Reset so auto-scan re-triggers for the new filter selection
+    autoScanTriggeredRef.current = false;
   }, [selectedSpeeds, timeRange]);
 
   const filteredData = useMemo((): FilteredData | null => {

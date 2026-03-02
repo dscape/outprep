@@ -40,30 +40,56 @@ export function analyzeOTBGames(
 /**
  * Find the exact player name string as it appears in the PGN White/Black fields.
  * Uses case-insensitive substring matching and returns the most common match.
+ * Also handles slug-format names (e.g., "arif-abdul-hafiz-7104227") by extracting
+ * name parts and matching them against PGN player names.
  */
 function resolvePlayerName(games: OTBGame[], playerName: string): string {
   const lower = playerName.toLowerCase();
-  const counts = new Map<string, number>();
+  // counts maps alphanumeric ID → { count, originalName }
+  const counts = new Map<string, { count: number; name: string }>();
+
+  // Extract name words from the input (handles slug format with trailing FIDE ID)
+  const slugParts = lower.split(/[-\s,]+/).filter(Boolean);
+  // Remove trailing numeric FIDE ID if present
+  const nameWords = slugParts.filter(p => !/^\d{4,}$/.test(p));
+
+  function nameMatches(pgnName: string): boolean {
+    const pgnLower = pgnName.toLowerCase();
+    // Direct substring match
+    if (pgnLower.includes(lower)) return true;
+    // Word-based match: all name words appear in the PGN name
+    if (nameWords.length >= 2) {
+      const pgnNormalized = pgnLower.replace(/[^a-z\s]/g, " ");
+      return nameWords.every(w => pgnNormalized.includes(w));
+    }
+    return false;
+  }
 
   for (const g of games) {
-    if (g.white.toLowerCase().includes(lower)) {
+    if (nameMatches(g.white)) {
       const id = g.white.toLowerCase().replace(/[^a-z0-9]/g, "");
-      counts.set(id, (counts.get(id) || 0) + 1);
+      const entry = counts.get(id) || { count: 0, name: g.white };
+      entry.count++;
+      counts.set(id, entry);
     }
-    if (g.black.toLowerCase().includes(lower)) {
+    if (nameMatches(g.black)) {
       const id = g.black.toLowerCase().replace(/[^a-z0-9]/g, "");
-      counts.set(id, (counts.get(id) || 0) + 1);
+      const entry = counts.get(id) || { count: 0, name: g.black };
+      entry.count++;
+      counts.set(id, entry);
     }
   }
 
   let bestId = playerName.toLowerCase().replace(/[^a-z0-9]/g, "");
+  let bestName = playerName;
   let bestCount = 0;
-  for (const [id, count] of counts) {
+  for (const [id, { count, name }] of counts) {
     if (count > bestCount) {
       bestId = id;
+      bestName = name;
       bestCount = count;
     }
   }
 
-  return bestId;
+  return bestName;
 }
