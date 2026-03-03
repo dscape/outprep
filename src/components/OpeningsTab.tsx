@@ -323,7 +323,9 @@ function OpeningRow({
                                 e.stopPropagation();
                                 onAnalyzeGame(g);
                               }}
-                              className="rounded bg-green-600/80 px-2.5 py-0.5 text-xs font-medium text-white transition-colors hover:bg-green-500"
+                              disabled={g.id.startsWith("fide-game-")}
+                              className="rounded bg-green-600/80 px-2.5 py-0.5 text-xs font-medium text-white transition-colors hover:bg-green-500 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-green-600/80"
+                              title={g.id.startsWith("fide-game-") ? "Game details not available (team event)" : undefined}
                             >
                               Analyze
                             </button>

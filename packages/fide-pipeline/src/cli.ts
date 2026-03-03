@@ -185,33 +185,6 @@ function streamWriteJsonArray(filePath: string, items: unknown[]): void {
  * Stream-write the GameIndex object — the `games` array is written element
  * by element so we never stringify the entire index at once.
  */
-function streamWriteGameIndex(filePath: string, gameIndex: GameIndex): void {
-  const fd = openSync(filePath, "w");
-  writeSync(fd, `{"generatedAt":${JSON.stringify(gameIndex.generatedAt)},"totalGames":${gameIndex.totalGames},"games":[`);
-  for (let i = 0; i < gameIndex.games.length; i++) {
-    if (i > 0) writeSync(fd, ",");
-    writeSync(fd, JSON.stringify(gameIndex.games[i]));
-  }
-  writeSync(fd, "]}");
-  closeSync(fd);
-}
-
-/**
- * Stream-write a Record<string,string> as JSON one key at a time to avoid
- * building the entire string in memory.
- */
-function streamWriteRecord(filePath: string, record: Record<string, string>): void {
-  const fd = openSync(filePath, "w");
-  writeSync(fd, "{");
-  let first = true;
-  for (const key of Object.keys(record)) {
-    if (!first) writeSync(fd, ",");
-    writeSync(fd, `${JSON.stringify(key)}:${JSON.stringify(record[key])}`);
-    first = false;
-  }
-  writeSync(fd, "}");
-  closeSync(fd);
-}
 
 /**
  * Stream-write game-index.json from a JSONL temp file of GameIndexEntry objects.
@@ -773,7 +746,8 @@ program
         input: createReadStream(GAME_DETAILS_JSONL, { encoding: "utf-8" }),
         crlfDelay: Infinity,
       });
-      for await (const _ of rl) gameDetailCount++;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      for await (const _line of rl) gameDetailCount++;
     }
 
     // Game aliases: stream from disk (355MB+) instead of reading into memory

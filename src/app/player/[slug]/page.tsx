@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import {
   getPlayer,
@@ -124,7 +125,7 @@ export default async function PlayerPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  let player = await getPlayer(slug);
+  const player = await getPlayer(slug);
 
   if (!player) {
     // Check if this slug is an alias that should redirect to the canonical URL
@@ -210,12 +211,12 @@ export default async function PlayerPage({
 
       <div className="min-h-screen px-4 py-8">
         <div className="mx-auto max-w-3xl">
-          <a
+          <Link
             href="/"
             className="mb-6 inline-block text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             &larr; Back to search
-          </a>
+          </Link>
 
           {/* Hero Section */}
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
