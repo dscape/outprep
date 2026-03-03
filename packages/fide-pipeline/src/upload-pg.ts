@@ -16,12 +16,70 @@
  */
 
 import { sql, sqlTransaction } from "./db";
-import { put } from "@vercel/blob";
-import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
+import { put, list } from "@vercel/blob";
+import { createReadStream, existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import pLimit from "p-limit";
 
 import type { FIDEPlayer, GameDetail } from "./types";
+
+// ─── Blob upload helpers ────────────────────────────────────────────────────
+
+export interface BlobUploadOpts {
+  fresh?: boolean;
+}
+
+/**
+ * Retry a function with backoff when rate-limited.
+ * Reads `error.retryAfter` (seconds) from BlobServiceRateLimited errors.
+ */
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 5,
+): Promise<T> {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: unknown) {
+      const retryAfter = (error as { retryAfter?: number }).retryAfter;
+      if (retryAfter && attempt < maxRetries) {
+        const waitSec = retryAfter + 1;
+        console.log(`  Rate limited, retrying in ${waitSec}s... (attempt ${attempt + 1}/${maxRetries})`);
+        await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
+        continue;
+      }
+      throw error;
+    }
+  }
+  throw new Error("retryWithBackoff: unreachable");
+}
+
+/**
+ * List all existing blob pathnames under a prefix.
+ * Used to skip already-uploaded blobs on re-runs.
+ */
+async function buildExistingBlobSet(prefix: string): Promise<Set<string>> {
+  const existing = new Set<string>();
+  let cursor: string | undefined;
+  let pages = 0;
+
+  do {
+    const result = await retryWithBackoff(() =>
+      list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) }),
+    );
+    for (const blob of result.blobs) {
+      existing.add(blob.pathname);
+    }
+    cursor = result.hasMore ? result.cursor : undefined;
+    pages++;
+    if (pages % 100 === 0) {
+      console.log(`  Listed ${existing.size.toLocaleString()} existing blobs (${pages} pages)...`);
+    }
+  } while (cursor);
+
+  return existing;
+}
 
 // ─── Player uploads ──────────────────────────────────────────────────────────
 
@@ -266,61 +324,97 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
  * Upload game PGN text from JSONL to Vercel Blob.
  * Reads the same game-details.jsonl file and uploads each game's PGN
  * to fide/game-pgn/{slug}.txt. Runs independently of DB inserts.
+ *
+ * Optimisations:
+ * - p-limit(100) concurrency instead of fixed batch-of-50
+ * - Skip blobs that already exist (via list() prefetch)
+ * - Resume from last JSONL line offset on restart
+ * - Retry with backoff on rate limiting
  */
 export async function uploadGamePgnsFromJsonl(
   jsonlPath: string,
-  onProgress?: (count: number) => void,
-): Promise<number> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return 0;
-  if (!existsSync(jsonlPath)) return 0;
+  onProgress?: (uploaded: number, skipped: number) => void,
+  opts?: BlobUploadOpts,
+): Promise<{ uploaded: number; skipped: number }> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return { uploaded: 0, skipped: 0 };
+  if (!existsSync(jsonlPath)) return { uploaded: 0, skipped: 0 };
+
+  const stateFile = join(dirname(jsonlPath), ".blob-pgn-state.json");
+
+  // Load resume state
+  let resumeOffset = 0;
+  if (!opts?.fresh && existsSync(stateFile)) {
+    try {
+      const state = JSON.parse(readFileSync(stateFile, "utf-8"));
+      resumeOffset = state.lineOffset ?? 0;
+      if (resumeOffset > 0) {
+        console.log(`  Resuming from line ${resumeOffset.toLocaleString()}`);
+      }
+    } catch { /* corrupt state, start fresh */ }
+  }
+
+  // Prefetch existing blobs to skip re-uploads
+  let existingBlobs: Set<string> | null = null;
+  if (!opts?.fresh) {
+    console.log("  Listing existing game PGN blobs...");
+    existingBlobs = await buildExistingBlobSet("fide/game-pgn/");
+    console.log(`  Found ${existingBlobs.size.toLocaleString()} existing blobs`);
+  }
 
   const rl = createInterface({
     input: createReadStream(jsonlPath, { encoding: "utf-8" }),
     crlfDelay: Infinity,
   });
 
-  let count = 0;
-  let batch: GameDetail[] = [];
-  const BATCH = 50;
+  const limit = pLimit(100);
+  let lineNum = 0;
+  let uploaded = 0;
+  let skipped = 0;
+  let pending: Promise<void>[] = [];
+  const DRAIN_THRESHOLD = 500;
 
   for await (const line of rl) {
+    lineNum++;
+    if (lineNum <= resumeOffset) continue;
     if (!line.trim()) continue;
-    batch.push(JSON.parse(line) as GameDetail);
 
-    if (batch.length >= BATCH) {
-      await Promise.all(
-        batch
-          .filter((g) => g.pgn)
-          .map((g) =>
-            put(`fide/game-pgn/${g.slug}.txt`, g.pgn, {
-              access: "public",
-              addRandomSuffix: false,
-            }),
-          ),
-      );
-      count += batch.length;
-      batch = [];
-      onProgress?.(count);
+    const game = JSON.parse(line) as GameDetail;
+    if (!game.pgn) { skipped++; continue; }
+
+    const pathname = `fide/game-pgn/${game.slug}.txt`;
+    if (existingBlobs?.has(pathname)) { skipped++; continue; }
+
+    pending.push(
+      limit(async () => {
+        await retryWithBackoff(() =>
+          put(pathname, game.pgn, {
+            access: "public",
+            addRandomSuffix: false,
+          }),
+        );
+        uploaded++;
+      }),
+    );
+
+    // Drain periodically to prevent unbounded memory growth
+    if (pending.length >= DRAIN_THRESHOLD) {
+      await Promise.all(pending);
+      pending = [];
+      writeFileSync(stateFile, JSON.stringify({ lineOffset: lineNum }));
+      onProgress?.(uploaded, skipped);
     }
   }
 
   // Flush remaining
-  if (batch.length > 0) {
-    await Promise.all(
-      batch
-        .filter((g) => g.pgn)
-        .map((g) =>
-          put(`fide/game-pgn/${g.slug}.txt`, g.pgn, {
-            access: "public",
-            addRandomSuffix: false,
-          }),
-        ),
-    );
-    count += batch.length;
-    onProgress?.(count);
+  if (pending.length > 0) {
+    await Promise.all(pending);
+    onProgress?.(uploaded, skipped);
   }
 
-  return count;
+  // Clean up state file on success
+  try { unlinkSync(stateFile); } catch { /* ok if missing */ }
+
+  return { uploaded, skipped };
 }
 
 /**
@@ -372,37 +466,93 @@ export async function upsertGameAliases(
  * Upload per-player game files (fide/games/{slug}.json) to Vercel Blob.
  * These are arrays of raw PGN strings used by practice mode.
  * Only runs if BLOB_READ_WRITE_TOKEN is set.
+ *
+ * Optimisations:
+ * - p-limit(50) concurrency instead of fixed batch-of-10
+ * - Skip blobs that already exist (via list() prefetch)
+ * - Resume from state file on restart
+ * - Retry with backoff on rate limiting
  */
 export async function uploadPlayerGameFiles(
   gamesDir: string,
-  onProgress?: (count: number, total: number) => void,
-): Promise<number> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return 0;
-  if (!existsSync(gamesDir)) return 0;
+  onProgress?: (uploaded: number, skipped: number, total: number) => void,
+  opts?: BlobUploadOpts,
+): Promise<{ uploaded: number; skipped: number }> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return { uploaded: 0, skipped: 0 };
+  if (!existsSync(gamesDir)) return { uploaded: 0, skipped: 0 };
 
-  const files = readdirSync(gamesDir).filter((f) => f.endsWith(".json"));
-  let count = 0;
-  const BATCH = 10;
+  const stateFile = join(gamesDir, ".blob-games-state.json");
 
-  for (let i = 0; i < files.length; i += BATCH) {
-    const batch = files.slice(i, i + BATCH);
-    await Promise.all(
-      batch.map(async (fileName) => {
-        const slug = fileName.replace(/\.json$/, "");
-        const filePath = join(gamesDir, fileName);
-        const content = readFileSync(filePath, "utf-8");
-        await put(`fide/games/${slug}.json`, content, {
-          access: "public",
-          contentType: "application/json",
-          addRandomSuffix: false,
-        });
-      }),
-    );
-    count += batch.length;
-    onProgress?.(count, files.length);
+  // Load resume state (set of already-uploaded filenames)
+  let doneSet = new Set<string>();
+  if (!opts?.fresh && existsSync(stateFile)) {
+    try {
+      const state = JSON.parse(readFileSync(stateFile, "utf-8"));
+      doneSet = new Set(state.uploaded ?? []);
+      if (doneSet.size > 0) {
+        console.log(`  Resuming: ${doneSet.size.toLocaleString()} files already uploaded`);
+      }
+    } catch { /* corrupt state, start fresh */ }
   }
 
-  return count;
+  // Prefetch existing blobs to skip re-uploads
+  let existingBlobs: Set<string> | null = null;
+  if (!opts?.fresh) {
+    console.log("  Listing existing player game blobs...");
+    existingBlobs = await buildExistingBlobSet("fide/games/");
+    console.log(`  Found ${existingBlobs.size.toLocaleString()} existing blobs`);
+  }
+
+  const files = readdirSync(gamesDir).filter((f) => f.endsWith(".json"));
+  const limit = pLimit(50);
+  let uploaded = 0;
+  let skipped = 0;
+  let pending: Promise<void>[] = [];
+  const DRAIN_THRESHOLD = 200;
+
+  for (const fileName of files) {
+    if (doneSet.has(fileName)) { skipped++; continue; }
+
+    const slug = fileName.replace(/\.json$/, "");
+    const pathname = `fide/games/${slug}.json`;
+    if (existingBlobs?.has(pathname)) { skipped++; continue; }
+
+    const filePath = join(gamesDir, fileName);
+
+    pending.push(
+      limit(async () => {
+        const content = readFileSync(filePath, "utf-8");
+        await retryWithBackoff(() =>
+          put(pathname, content, {
+            access: "public",
+            contentType: "application/json",
+            addRandomSuffix: false,
+          }),
+        );
+        uploaded++;
+        doneSet.add(fileName);
+      }),
+    );
+
+    // Drain periodically
+    if (pending.length >= DRAIN_THRESHOLD) {
+      await Promise.all(pending);
+      pending = [];
+      writeFileSync(stateFile, JSON.stringify({ uploaded: [...doneSet] }));
+      onProgress?.(uploaded, skipped, files.length);
+    }
+  }
+
+  // Flush remaining
+  if (pending.length > 0) {
+    await Promise.all(pending);
+    onProgress?.(uploaded, skipped, files.length);
+  }
+
+  // Clean up state file on success
+  try { unlinkSync(stateFile); } catch { /* ok if missing */ }
+
+  return { uploaded, skipped };
 }
 
 // ─── Pipeline tracking ───────────────────────────────────────────────────────

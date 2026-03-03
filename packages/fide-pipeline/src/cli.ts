@@ -935,6 +935,7 @@ program
   .command("seed-blob")
   .description("Upload game PGNs + player game files to Vercel Blob (no DB writes)")
   .option("--skip-to <step>", `Skip to a specific step: ${SEED_BLOB_STEPS.join(", ")}`)
+  .option("--fresh", "Ignore resume state and skip-existing checks (full re-upload)")
   .action(async (opts) => {
     const skipTo: SeedBlobStep | undefined = opts.skipTo;
     if (skipTo && !SEED_BLOB_STEPS.includes(skipTo)) {
@@ -944,6 +945,9 @@ program
     const skipToIdx = skipTo ? SEED_BLOB_STEPS.indexOf(skipTo) : 0;
     const shouldRun = (step: SeedBlobStep) => SEED_BLOB_STEPS.indexOf(step) >= skipToIdx;
     if (skipTo) console.log(`Skipping to step: ${skipTo}\n`);
+
+    const fresh = !!opts.fresh;
+    if (fresh) console.log("Fresh mode: skipping resume state and existing blob checks\n");
 
     if (!process.env.BLOB_READ_WRITE_TOKEN) {
       console.error("BLOB_READ_WRITE_TOKEN environment variable is required.");
@@ -960,11 +964,16 @@ program
     if (shouldRun("game-pgns") && existsSync(GAME_DETAILS_JSONL)) {
       const totalPgns = countLines(GAME_DETAILS_JSONL);
       console.log(`Uploading ${totalPgns.toLocaleString()} game PGNs to Blob...`);
-      const pgnsUploaded = await uploadGamePgnsFromJsonl(GAME_DETAILS_JSONL, (count) => {
-        const pct = totalPgns > 0 ? Math.round((count / totalPgns) * 100) : 0;
-        progress(`  Game PGNs: ${count.toLocaleString()}/${totalPgns.toLocaleString()} (${pct}%)`);
-      });
-      progress(`  Game PGNs: ${pgnsUploaded.toLocaleString()} uploaded (100%)\n`);
+      const pgnsResult = await uploadGamePgnsFromJsonl(
+        GAME_DETAILS_JSONL,
+        (uploaded, skipped) => {
+          const done = uploaded + skipped;
+          const pct = totalPgns > 0 ? Math.round((done / totalPgns) * 100) : 0;
+          progress(`  Game PGNs: ${uploaded.toLocaleString()} uploaded, ${skipped.toLocaleString()} skipped (${pct}%)`);
+        },
+        { fresh },
+      );
+      console.log(`  Game PGNs: ${pgnsResult.uploaded.toLocaleString()} uploaded, ${pgnsResult.skipped.toLocaleString()} skipped\n`);
     } else if (!shouldRun("game-pgns")) {
       console.log("Skipping: Upload game PGNs");
     }
@@ -972,12 +981,17 @@ program
     // Upload per-player game files (for practice mode)
     if (shouldRun("player-games") && existsSync(GAMES_DIR)) {
       console.log("Uploading player game files to Blob (practice mode)...");
-      const gameFilesUploaded = await uploadPlayerGameFiles(GAMES_DIR, (count, total) => {
-        const pct = Math.round((count / total) * 100);
-        progress(`  Game files: ${count}/${total} (${pct}%)`);
-      });
-      if (gameFilesUploaded > 0) {
-        progress(`  Game files: ${gameFilesUploaded} uploaded (100%)\n`);
+      const gamesResult = await uploadPlayerGameFiles(
+        GAMES_DIR,
+        (uploaded, skipped, total) => {
+          const done = uploaded + skipped;
+          const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+          progress(`  Game files: ${uploaded.toLocaleString()} uploaded, ${skipped.toLocaleString()} skipped (${pct}%)`);
+        },
+        { fresh },
+      );
+      if (gamesResult.uploaded + gamesResult.skipped > 0) {
+        console.log(`  Game files: ${gamesResult.uploaded.toLocaleString()} uploaded, ${gamesResult.skipped.toLocaleString()} skipped\n`);
       } else {
         console.log("  No game files found\n");
       }
