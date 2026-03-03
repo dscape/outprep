@@ -17,8 +17,10 @@
 
 import { sql, sqlTransaction } from "./db";
 import { put } from "@vercel/blob";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, readdirSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
+import { join } from "node:path";
+
 import type { FIDEPlayer, GameDetail } from "./types";
 
 // ─── Player uploads ──────────────────────────────────────────────────────────
@@ -110,13 +112,24 @@ export async function upsertPlayers(
  */
 export async function upsertPlayerAliases(
   players: FIDEPlayer[],
-  onProgress?: (count: number) => void,
+  onProgress?: (count: number, batchNum: number, totalBatches: number, batchAliases: number) => void,
 ): Promise<number> {
   let count = 0;
   const BATCH = 200;
+  const totalBatches = Math.ceil(players.length / BATCH);
+  const overallStart = Date.now();
+
+  console.log(`  [aliases] ${players.length} players, ${totalBatches} batches of ${BATCH}`);
+
+  // Quick stats: how many players actually have aliases?
+  const withAliases = players.filter(p => p.aliases && p.aliases.length > 0).length;
+  const withoutAliases = players.length - withAliases;
+  console.log(`  [aliases] ${withAliases} players with aliases, ${withoutAliases} without`);
 
   for (let i = 0; i < players.length; i += BATCH) {
+    const batchNum = Math.floor(i / BATCH) + 1;
     const batch = players.slice(i, i + BATCH);
+    const batchStart = Date.now();
 
     // Collect all aliases for this batch
     const allAliases: { alias_slug: string; canonical_slug: string }[] = [];
@@ -128,23 +141,45 @@ export async function upsertPlayerAliases(
       }
     }
 
-    await sqlTransaction(async (tx) => {
-      // Bulk delete existing aliases for all players in this batch
-      await tx`DELETE FROM player_aliases WHERE canonical_slug = ANY(${slugsToDelete})`;
+    try {
+      await sqlTransaction(async (tx) => {
+        // Bulk delete existing aliases for all players in this batch
+        await tx`DELETE FROM player_aliases WHERE canonical_slug = ANY(${slugsToDelete})`;
 
-      // Bulk insert all aliases in one statement
+        // Bulk insert all aliases in one statement
+        if (allAliases.length > 0) {
+          await tx`
+            INSERT INTO player_aliases ${tx(allAliases, 'alias_slug', 'canonical_slug')}
+            ON CONFLICT (alias_slug) DO UPDATE SET canonical_slug = EXCLUDED.canonical_slug
+          `;
+        }
+      });
+    } catch (err) {
+      const elapsed = Date.now() - batchStart;
+      console.error(`  [aliases] ERROR on batch ${batchNum}/${totalBatches} after ${elapsed}ms`);
+      console.error(`  [aliases]   Players in batch: ${batch.length}, aliases: ${allAliases.length}, slugs to delete: ${slugsToDelete.length}`);
       if (allAliases.length > 0) {
-        await tx`
-          INSERT INTO player_aliases ${tx(allAliases, 'alias_slug', 'canonical_slug')}
-          ON CONFLICT (alias_slug) DO UPDATE SET canonical_slug = EXCLUDED.canonical_slug
-        `;
+        console.error(`  [aliases]   First alias: ${JSON.stringify(allAliases[0])}`);
+        console.error(`  [aliases]   Last alias:  ${JSON.stringify(allAliases[allAliases.length - 1])}`);
       }
-    });
+      console.error(`  [aliases]   Error:`, err);
+      throw err;
+    }
 
+    const elapsed = Date.now() - batchStart;
     count += allAliases.length;
-    onProgress?.(count);
+
+    // Log every batch (verbose) — include timing to spot slow queries
+    if (batchNum % 10 === 0 || batchNum === 1 || batchNum === totalBatches || elapsed > 2000) {
+      const totalElapsed = ((Date.now() - overallStart) / 1000).toFixed(1);
+      console.log(`  [aliases] Batch ${batchNum}/${totalBatches}: ${allAliases.length} aliases, ${elapsed}ms (${totalElapsed}s total, ${count} aliases so far)`);
+    }
+
+    onProgress?.(count, batchNum, totalBatches, allAliases.length);
   }
 
+  const totalElapsed = ((Date.now() - overallStart) / 1000).toFixed(1);
+  console.log(`  [aliases] Done: ${count} aliases upserted in ${totalElapsed}s`);
   return count;
 }
 
@@ -192,6 +227,8 @@ export async function upsertGamesFromJsonl(
   return count;
 }
 
+const MAX_ELO = 10_000;
+
 async function insertGameBatch(games: GameDetail[]): Promise<void> {
   // 1. Upload PGNs to Vercel Blob in parallel batches
   if (process.env.BLOB_READ_WRITE_TOKEN) {
@@ -210,7 +247,19 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
     }
   }
 
-  // 2. Insert game metadata (no pgn) into Postgres
+  // 2. Sanitise ELO values — warn and zero out anything suspicious
+  for (const g of games) {
+    if (g.whiteElo > MAX_ELO) {
+      console.warn(`  ⚠ whiteElo ${g.whiteElo} out of range, setting to 0 — ${g.slug}`);
+      g.whiteElo = 0;
+    }
+    if (g.blackElo > MAX_ELO) {
+      console.warn(`  ⚠ blackElo ${g.blackElo} out of range, setting to 0 — ${g.slug}`);
+      g.blackElo = 0;
+    }
+  }
+
+  // 3. Insert game metadata (no pgn) into Postgres
   const rows = games.map((g) => ({
     slug: g.slug,
     white_name: g.whiteName,
@@ -227,7 +276,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
     black_federation: g.blackFederation ?? null,
     event: g.event,
     site: g.site ?? null,
-    date: parseFideDate(g.date),
+    date: parseFideDate(g.date) ?? '1900-01-01',
     round: g.round ?? null,
     eco: g.eco ?? null,
     opening: g.opening ?? null,
@@ -285,6 +334,45 @@ export async function upsertGameAliases(
 
     count += batch.length;
     onProgress?.(count);
+  }
+
+  return count;
+}
+
+// ─── Player game files (practice mode) ──────────────────────────────────────
+
+/**
+ * Upload per-player game files (fide/games/{slug}.json) to Vercel Blob.
+ * These are arrays of raw PGN strings used by practice mode.
+ * Only runs if BLOB_READ_WRITE_TOKEN is set.
+ */
+export async function uploadPlayerGameFiles(
+  gamesDir: string,
+  onProgress?: (count: number, total: number) => void,
+): Promise<number> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return 0;
+  if (!existsSync(gamesDir)) return 0;
+
+  const files = readdirSync(gamesDir).filter((f) => f.endsWith(".json"));
+  let count = 0;
+  const BATCH = 10;
+
+  for (let i = 0; i < files.length; i += BATCH) {
+    const batch = files.slice(i, i + BATCH);
+    await Promise.all(
+      batch.map(async (fileName) => {
+        const slug = fileName.replace(/\.json$/, "");
+        const filePath = join(gamesDir, fileName);
+        const content = readFileSync(filePath, "utf-8");
+        await put(`fide/games/${slug}.json`, content, {
+          access: "public",
+          contentType: "application/json",
+          addRandomSuffix: false,
+        });
+      }),
+    );
+    count += batch.length;
+    onProgress?.(count, files.length);
   }
 
   return count;
@@ -448,9 +536,13 @@ export async function ensureSchema(): Promise<void> {
 
 /**
  * Parse a FIDE-style date "YYYY.MM.DD" into an ISO date string "YYYY-MM-DD"
- * that Postgres can ingest as a DATE.
+ * that Postgres can ingest as a DATE. Returns null for invalid dates
+ * (e.g. "????.??.??", partial dates, or unparseable strings).
  */
-function parseFideDate(dateStr: string): string {
+function parseFideDate(dateStr: string): string | null {
   // "2022.04.20" → "2022-04-20"
-  return dateStr.replace(/\./g, "-");
+  const iso = dateStr.replace(/\./g, "-");
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return iso;
 }

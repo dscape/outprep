@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
       status: "ok",
       lastUpdate,
       message: lastUpdate
-        ? `Last FIDE ratings update: ${lastUpdate.date}. Automated monthly update not yet implemented in this route — run manually with: npm run fide-pipeline -- process && npm run fide-pipeline -- upload-pg`
+        ? `Last FIDE ratings update: ${lastUpdate.date}. Automated monthly update not yet implemented in this route — run manually with: npm run fide-pipeline -- process && npm run fide-pipeline -- seed`
         : "No FIDE ratings updates recorded. Run the full pipeline first.",
     });
   } catch (error) {

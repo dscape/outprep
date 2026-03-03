@@ -5,6 +5,7 @@ Download, process, and upload FIDE player data from [This Week in Chess (TWIC)](
 ## Prerequisites
 
 - Node.js 20+
+- Docker (for local PostgreSQL)
 - `unzip` command available (pre-installed on macOS/Linux)
 
 ## Setup
@@ -17,16 +18,24 @@ Copy the example env file from the project root and fill in your values:
 cp .env.example .env
 ```
 
-The only variable needed is `BLOB_READ_WRITE_TOKEN` (for uploading to Vercel Blob):
-
 | Variable | Required for | How to get it |
 |----------|-------------|---------------|
-| `BLOB_READ_WRITE_TOKEN` | `upload`, `full`, `smoke` (without `--skip-upload`) | [Vercel Dashboard](https://vercel.com/dashboard) → Storage → Blob → Tokens |
+| `DATABASE_URL` | `seed`, `full`, cron jobs, the Next.js app | Local: `postgres://outprep:outprep@localhost:5432/outprep` (via Docker Compose). Production: your Neon / Supabase / Railway connection string. |
+| `BLOB_READ_WRITE_TOKEN` | Game PGN storage + practice mode files (used by `seed`, `full`, `smoke`) | [Vercel Dashboard](https://vercel.com/dashboard) → Storage → Blob → Tokens |
 
-> **Local development doesn't need a token.** The Next.js app falls back to reading
-> local files from `packages/fide-pipeline/data/processed/` when no token is set.
+### 2. Start local PostgreSQL
 
-### 2. Create a Blob store (first time only)
+```bash
+docker compose up -d
+```
+
+This starts a Postgres 16 container and auto-creates all tables from `src/lib/db/schema.sql`. The database is persisted in a Docker volume.
+
+> **Production:** Set `DATABASE_URL` to your hosted Postgres instance. Run the schema manually if tables don't exist — `seed` will create them automatically via `ensureSchema()`.
+
+### 3. Create a Blob store (first time only)
+
+Blob storage is used for game PGN text and per-player game arrays for practice mode (player/game metadata lives in Postgres).
 
 1. Go to [vercel.com/dashboard](https://vercel.com/dashboard)
 2. Select your project → **Storage** tab → **Create Database** → **Blob**
@@ -34,7 +43,7 @@ The only variable needed is `BLOB_READ_WRITE_TOKEN` (for uploading to Vercel Blo
 4. Go to the new store → **Tokens** tab → **Create Token**
 5. Copy the token (starts with `vercel_blob_...`) into your `.env` file
 
-### 3. FIDE rating list (for name + rating enrichment)
+### 4. FIDE rating list (for name + rating enrichment)
 
 The FIDE rating list is **downloaded automatically** by the pipeline when needed. You can also download it manually:
 
@@ -63,29 +72,58 @@ npm run fide-pipeline -- smoke --skip-upload
 npm run fide-pipeline -- smoke
 ```
 
-## Full Pipeline
+## Full Pipeline (seed database from scratch)
+
+The pipeline has three phases: **download** → **process** → **seed** (Postgres + Blob).
 
 ```bash
-# Step 1: Download TWIC zip files (~200 issues = ~4 years of OTB games)
-npm run fide-pipeline -- download --from 925 --to 1633
-
-# Step 2: Process PGNs + enrich with FIDE data
-npm run fide-pipeline -- process --min-games 3
-
-# Step 3: Upload to Vercel Blob
-npm run fide-pipeline -- upload
-
-# Or all three in one command:
+# All three steps in one command:
 npm run fide-pipeline -- full --from 1433 --to 1633
+
+# Or run each step separately:
+npm run fide-pipeline -- download --from 925 --to 1633
+npm run fide-pipeline -- process --min-games 3
+npm run fide-pipeline -- seed
 ```
 
-### Interrupting and resuming uploads
+### What `seed` and `full` do
 
-Uploads support **retry** and **resume**:
+Both `seed` (standalone) and the upload step of `full` perform the same operations:
 
+1. Creates all tables if they don't exist (`ensureSchema`)
+2. **Postgres:** Upserts players (batch 100), player aliases (batch 200), game metadata (batch 50), game aliases (batch 500)
+3. **Blob:** Uploads individual game PGN text (`fide/game-pgn/{slug}.txt`) and per-player game arrays (`fide/games/{slug}.json`) for practice mode
+4. Tracks each run in `pipeline_runs` for resume support
+
+### Interrupting and resuming
+
+- **Postgres upserts are idempotent** — you can re-run `seed` or `full` safely. Existing rows are updated via `ON CONFLICT`.
 - **Rate limiting**: If Vercel Blob returns `BlobServiceRateLimited`, the upload retries automatically with backoff (up to 5 retries per file).
-- **Resume**: A state file (`data/processed/upload-state.json`) tracks progress. If you interrupt with Ctrl+C, re-run the same upload command to pick up where you left off.
-- **Fresh start**: Use `--fresh` to ignore the resume state and re-upload everything.
+
+## Vercel Cron Jobs (automatic updates)
+
+Two cron jobs are configured in `vercel.json` to keep data fresh in production:
+
+| Cron job | Schedule | Route | What it does |
+|----------|----------|-------|-------------|
+| **TWIC update** | Every Monday at 6am UTC | `/api/cron/twic-update` | Checks for new TWIC issues since the last processed one and triggers an incremental pipeline |
+| **FIDE ratings** | 1st of each month at 6am UTC | `/api/cron/fide-ratings` | Downloads the latest FIDE rating list and updates player ratings in Postgres |
+
+Both routes use `maxDuration = 300` (5-minute timeout, requires Vercel Pro plan) and are authenticated via `CRON_SECRET` (set automatically by Vercel).
+
+> **Current status:** The cron routes are **stubs** — they query `pipeline_runs` to report the last processed issue/update, but don't yet run the actual pipeline. Until fully implemented, run updates manually:
+>
+> ```bash
+> # Weekly: add new TWIC issue(s)
+> npm run fide-pipeline -- download --from <next> --to <next>
+> npm run fide-pipeline -- process --min-games 3
+> npm run fide-pipeline -- seed
+>
+> # Monthly: update FIDE ratings
+> npm run fide-pipeline -- download-ratings --force
+> npm run fide-pipeline -- process --min-games 3
+> npm run fide-pipeline -- seed
+> ```
 
 ## FIDE Enrichment
 
@@ -137,9 +175,17 @@ Parse downloaded PGNs, aggregate player data, and enrich with FIDE ratings.
 |------|---------|-------------|
 | `--min-games <n>` | 3 | Minimum games for a player to be included |
 
+### `seed`
+
+Seed Postgres and Blob from processed data on disk. Creates tables if they don't exist. This is the primary way to populate the database.
+
+Requires `DATABASE_URL`. `BLOB_READ_WRITE_TOKEN` is optional but needed for game PGN and practice mode data.
+
+> Alias: `upload-pg` (for backwards compatibility)
+
 ### `upload`
 
-Upload processed data to Vercel Blob. Supports retry and resume.
+Legacy: upload all processed data to Vercel Blob only (no Postgres). Not needed for normal operation — use `seed` instead.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -148,85 +194,48 @@ Upload processed data to Vercel Blob. Supports retry and resume.
 
 ### `full`
 
-Download, process, and upload in one command.
+Download, process, and seed in one command.
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--from <n>` | required | First TWIC issue number |
 | `--to <n>` | required | Last TWIC issue number |
 | `--min-games <n>` | 3 | Minimum games per player |
-| `--prefix <p>` | fide | Blob path prefix |
 | `--delay <ms>` | 500 | Delay between downloads |
-| `--fresh` | false | Ignore upload resume state |
 
-## Data Format
+## Database Schema
 
-### PlayerIndex (`fide/index.json`)
+All player and game data lives in PostgreSQL (see `src/lib/db/schema.sql`):
 
-Master list of all players. Used by the sitemap and listing pages.
+| Table | Replaces | Purpose |
+|-------|----------|---------|
+| `players` | `fide/players/*.json` + `fide/index.json` | Player profiles, ratings, stats, openings |
+| `player_aliases` | `fide/aliases.json` | Old slug → canonical slug for 301 redirects |
+| `games` | `fide/game-details/*.json` + `fide/game-index.json` | Game metadata (PGN text stored in Vercel Blob) |
+| `game_aliases` | `fide/game-aliases.json` | Legacy game slug → canonical slug |
+| `pipeline_runs` | — | Tracks processed TWIC issues and FIDE rating updates |
 
-```typescript
-interface PlayerIndex {
-  generatedAt: string;
-  totalPlayers: number;
-  players: Array<{
-    slug: string;           // "fabiano-caruana-2020009"
-    name: string;           // "Caruana, Fabiano"
-    fideId: string;         // "2020009"
-    aliases: string[];      // Alternative slugs → 301 redirect
-    fideRating: number;
-    title: string | null;   // "GM", "IM", "FM", etc.
-    gameCount: number;
-    federation?: string;    // "USA"
-    standardRating?: number;
-    rapidRating?: number;
-    blitzRating?: number;
-  }>;
-}
+## Data Storage Architecture
+
+The app uses a **hybrid storage model**:
+
+- **Postgres** — structured data: players, games metadata, aliases (fast queries, indexing, fuzzy search)
+- **Vercel Blob** — raw text: game PGNs and per-player game arrays (keeps the database small)
+
+### What lives in Blob
+
+```
+fide/
+├── games/
+│   ├── magnus-carlsen-1503014.json     # ~100 KB (raw PGN array for practice mode)
+│   ├── hikaru-nakamura-2016192.json
+│   └── ...
+└── game-pgn/
+    ├── {game-slug}.txt                 # Individual game PGN text (for game page replay)
+    └── ...
 ```
 
-### FIDEPlayer (`fide/players/{slug}.json`)
-
-Full profile for a single player. Only players with a FIDE ID are included.
-
-```typescript
-interface FIDEPlayer {
-  name: string;             // "Caruana, Fabiano" (FIDE full name)
-  slug: string;             // "fabiano-caruana-2020009"
-  fideId: string;
-  aliases: string[];
-  fideRating: number;       // Most recent Elo from TWIC games
-  title: string | null;
-  gameCount: number;
-  recentEvents: string[];
-  lastSeen: string;         // YYYY.MM.DD
-  openings: {
-    white: OpeningStats[];
-    black: OpeningStats[];
-  };
-  winRate: number;          // 0-100
-  drawRate: number;
-  lossRate: number;
-  // Official FIDE ratings (from rating list enrichment)
-  federation?: string;      // "USA", "NOR", etc.
-  birthYear?: number;
-  standardRating?: number;  // Official FIDE Standard
-  rapidRating?: number;     // Official FIDE Rapid
-  blitzRating?: number;     // Official FIDE Blitz
-}
-```
-
-### Aliases (`fide/aliases.json`)
-
-Map from alias slug → canonical slug for 301 redirects.
-
-```json
-{
-  "f-caruana-2020009": "fabiano-caruana-2020009",
-  "caruana-fabiano-2020009": "fabiano-caruana-2020009",
-  "caruana-f": "fabiano-caruana-2020009"
-}
-```
+> In local development, the app falls back to reading from `packages/fide-pipeline/data/processed/` when Blob is not configured.
 
 ### URL Slug Design
 
@@ -239,26 +248,6 @@ Map from alias slug → canonical slug for 301 redirects.
 - `caruana-fabiano-2020009` → lastname-first order
 - `caruana-f` → short form without FIDE ID
 
-### Player Games (`fide/games/{slug}.json`)
-
-Array of raw PGN strings for practice mode. Stored as individual per-player files on disk (not a single monolithic file) to keep memory usage low.
-
-## Blob Structure
-
-```
-fide/
-├── index.json                          # ~2 MB  (all players)
-├── aliases.json                        # ~200 KB (alias → canonical map)
-├── players/
-│   ├── magnus-carlsen-1503014.json     # ~10 KB (profile)
-│   ├── hikaru-nakamura-2016192.json
-│   └── ...
-└── games/
-    ├── magnus-carlsen-1503014.json     # ~100 KB (raw PGNs)
-    ├── hikaru-nakamura-2016192.json
-    └── ...
-```
-
 ## Adding New TWIC Issues
 
 To add the latest weekly issue:
@@ -270,15 +259,19 @@ npm run fide-pipeline -- download --from 1634 --to 1634
 # Re-process all downloaded data (includes FIDE enrichment)
 npm run fide-pipeline -- process --min-games 3
 
-# Re-upload
-npm run fide-pipeline -- upload
+# Seed Postgres + Blob
+npm run fide-pipeline -- seed
 ```
 
 ## Troubleshooting
 
+### "DATABASE_URL not set" or connection errors
+
+Make sure Docker is running (`docker compose up -d`) and your `.env` has the correct `DATABASE_URL`. For production, check your Neon/Supabase connection string.
+
 ### "BLOB_READ_WRITE_TOKEN not set"
 
-Make sure you have a `.env` file in the project root with your token. See [Setup](#setup) above.
+Needed for uploading game PGNs and practice mode files to Blob. Without it, `seed` and `full` will populate Postgres but skip Blob uploads (game replay and practice mode won't work in production). See [Setup](#setup) above.
 
 ### "No .pgn file found in zip archive"
 

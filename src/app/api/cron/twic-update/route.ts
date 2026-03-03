@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
       status: "ok",
       lastProcessedIssue: lastIssue,
       message: lastIssue
-        ? `Last processed TWIC issue: ${lastIssue}. Incremental pipeline not yet implemented in this route — run manually with: npm run fide-pipeline -- upload-pg`
+        ? `Last processed TWIC issue: ${lastIssue}. Incremental pipeline not yet implemented in this route — run manually with: npm run fide-pipeline -- seed`
         : "No TWIC issues processed yet. Run the full pipeline first.",
     });
   } catch (error) {

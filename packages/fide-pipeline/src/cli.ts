@@ -20,6 +20,7 @@ import {
   upsertPlayerAliases,
   upsertGamesFromJsonl,
   upsertGameAliases,
+  uploadPlayerGameFiles,
   recordPipelineRun,
   completePipelineRun,
   failPipelineRun,
@@ -805,12 +806,25 @@ program
     console.log(`  Game pages:        ${result.gameDetailsUploaded}\n`);
   });
 
-// ─── upload-pg ───────────────────────────────────────────────────────────────
+// ─── seed ────────────────────────────────────────────────────────────────────
+
+const SEED_STEPS = ["schema", "players", "aliases", "games", "game-aliases", "blob-upload"] as const;
+type SeedStep = (typeof SEED_STEPS)[number];
 
 program
-  .command("upload-pg")
-  .description("Upload processed data to Vercel Postgres (replaces Blob upload)")
-  .action(async () => {
+  .command("seed")
+  .alias("upload-pg")
+  .description("Seed Postgres + Blob from processed data on disk")
+  .option("--skip-to <step>", `Skip to a specific step: ${SEED_STEPS.join(", ")}`)
+  .action(async (opts) => {
+    const skipTo: SeedStep | undefined = opts.skipTo;
+    if (skipTo && !SEED_STEPS.includes(skipTo)) {
+      console.error(`Invalid --skip-to step: "${skipTo}". Valid steps: ${SEED_STEPS.join(", ")}`);
+      process.exit(1);
+    }
+    const skipToIdx = skipTo ? SEED_STEPS.indexOf(skipTo) : 0;
+    const shouldRun = (step: SeedStep) => SEED_STEPS.indexOf(step) >= skipToIdx;
+    if (skipTo) console.log(`Skipping to step: ${skipTo}\n`);
     if (!process.env.DATABASE_URL) {
       console.error("DATABASE_URL environment variable is required.");
       console.error("Set it in .env or use: docker compose up -d");
@@ -825,43 +839,56 @@ program
       process.exit(1);
     }
 
-    console.log("\n═══ Upload to Postgres ═══\n");
+    console.log("\n═══ Seed: Postgres + Blob ═══\n");
     const start = Date.now();
 
-    // Ensure schema exists
-    console.log("Ensuring schema...");
-    await ensureSchema();
+    // Ensure schema exists (always run — fast no-op if already exists)
+    if (shouldRun("schema")) {
+      console.log("Ensuring schema...");
+      await ensureSchema();
+    }
 
     // Record pipeline run
-    const runId = await recordPipelineRun("upload-pg", new Date().toISOString());
+    const runId = await recordPipelineRun("seed", new Date().toISOString());
 
     try {
-      // Load players
-      console.log("Loading players...");
-      const players: FIDEPlayer[] = JSON.parse(readFileSync(playersPath, "utf-8"));
-      console.log(`  ${players.length} players loaded\n`);
+      // Load players (needed by players + aliases steps)
+      const players: FIDEPlayer[] = shouldRun("players") || shouldRun("aliases")
+        ? (() => {
+            console.log("Loading players...");
+            const p: FIDEPlayer[] = JSON.parse(readFileSync(playersPath, "utf-8"));
+            console.log(`  ${p.length} players loaded\n`);
+            return p;
+          })()
+        : [];
 
       // Upsert players
-      console.log("Upserting players...");
-      const playersResult = await upsertPlayers(players, (count, total, ins, upd) => {
-        if (count % 100 === 0 || count === total) {
-          const pct = Math.round((count / total) * 100);
-          console.log(`  Players: ${count}/${total} (${pct}%) — ${ins} new, ${upd} updated`);
-        }
-      });
-      console.log(`  ${playersResult.total} players upserted (${playersResult.inserted} new, ${playersResult.updated} updated)\n`);
+      if (shouldRun("players")) {
+        console.log("Upserting players...");
+        const playersResult = await upsertPlayers(players, (count, total, ins, upd) => {
+          if (count % 100 === 0 || count === total) {
+            const pct = Math.round((count / total) * 100);
+            console.log(`  Players: ${count}/${total} (${pct}%) — ${ins} new, ${upd} updated`);
+          }
+        });
+        console.log(`  ${playersResult.total} players upserted (${playersResult.inserted} new, ${playersResult.updated} updated)\n`);
+      } else {
+        console.log("Skipping: Upsert players");
+      }
 
       // Upsert player aliases
-      console.log("Upserting player aliases...");
-      const aliasCount = await upsertPlayerAliases(players, (count) => {
-        if (count % 100 === 0) {
-          console.log(`  Aliases: ${count}`);
-        }
-      });
-      console.log(`  ${aliasCount} aliases upserted\n`);
+      if (shouldRun("aliases")) {
+        console.log("Upserting player aliases...");
+        const aliasCount = await upsertPlayerAliases(players, (count, batchNum, totalBatches, batchAliases) => {
+          console.log(`  Batch ${batchNum}/${totalBatches}: +${batchAliases} aliases (${count} total)`);
+        });
+        console.log(`  ${aliasCount} aliases upserted\n`);
+      } else {
+        console.log("Skipping: Upsert player aliases");
+      }
 
       // Upsert games from JSONL
-      if (existsSync(GAME_DETAILS_JSONL)) {
+      if (shouldRun("games") && existsSync(GAME_DETAILS_JSONL)) {
         console.log("Upserting games from JSONL...");
         const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (count) => {
           if (count % 100 === 0) {
@@ -869,11 +896,13 @@ program
           }
         });
         console.log(`  ${gamesUpserted} games upserted\n`);
+      } else if (!shouldRun("games")) {
+        console.log("Skipping: Upsert games");
       }
 
       // Upsert game aliases
       const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
-      if (existsSync(gameAliasesPath)) {
+      if (shouldRun("game-aliases") && existsSync(gameAliasesPath)) {
         console.log("Upserting game aliases...");
         const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count) => {
           if (count % 100 === 0) {
@@ -881,12 +910,32 @@ program
           }
         });
         console.log(`  ${gameAliasCount} game aliases upserted\n`);
+      } else if (!shouldRun("game-aliases")) {
+        console.log("Skipping: Upsert game aliases");
+      }
+
+      // Upload per-player game files to Blob (for practice mode)
+      if (shouldRun("blob-upload") && existsSync(GAMES_DIR)) {
+        console.log("Uploading player game files to Blob (practice mode)...");
+        const gameFilesUploaded = await uploadPlayerGameFiles(GAMES_DIR, (count, total) => {
+          if (count % 100 === 0 || count === total) {
+            const pct = Math.round((count / total) * 100);
+            console.log(`  Game files: ${count}/${total} (${pct}%)`);
+          }
+        });
+        if (gameFilesUploaded > 0) {
+          console.log(`  ${gameFilesUploaded} player game files uploaded\n`);
+        } else {
+          console.log("  Skipped (no BLOB_READ_WRITE_TOKEN or no game files)\n");
+        }
+      } else if (!shouldRun("blob-upload")) {
+        console.log("Skipping: Upload player game files");
       }
 
       await completePipelineRun(runId);
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-      console.log(`\n═══ Postgres Upload Complete (${elapsed}s) ═══\n`);
+      console.log(`\n═══ Seed Complete (${elapsed}s) ═══\n`);
     } catch (e) {
       await failPipelineRun(runId, String(e));
       throw e;
@@ -897,14 +946,19 @@ program
 
 program
   .command("full")
-  .description("Download, process, and upload in one go")
+  .description("Download, process, and upload to Postgres in one go")
   .requiredOption("--from <n>", "First TWIC issue number")
   .requiredOption("--to <n>", "Last TWIC issue number")
   .option("--min-games <n>", "Minimum games per player", "3")
   .option("--min-elo <n>", "Minimum Elo for game page indexing", "100")
-  .option("--prefix <p>", "Blob path prefix", "fide")
   .option("--delay <ms>", "Delay between downloads in ms", "500")
   .action(async (opts) => {
+    if (!process.env.DATABASE_URL) {
+      console.error("DATABASE_URL environment variable is required.");
+      console.error("Set it in .env or use: docker compose up -d");
+      process.exit(1);
+    }
+
     const from = parseInt(opts.from);
     const to = parseInt(opts.to);
     const minGames = parseInt(opts.minGames);
@@ -915,7 +969,6 @@ program
     // Step 1: Download (PGNs are saved to disk by downloadTWIC)
     console.log("Step 1/3: Download\n");
     await downloadRange(from, to, { delayMs: parseInt(opts.delay) });
-    // Don't hold returned Map — PGNs are already cached on disk
 
     // Step 2: Process using two-pass architecture
     console.log("\nStep 2/3: Process\n");
@@ -926,45 +979,79 @@ program
       .sort();
 
     const pgnFiles = pgnFileNames.map((f) => ({ name: f, path: join(DATA_DIR, f) }));
-    const { players, index, aliasMap, gameDetailFilesWritten } =
+    const { players, gameDetailFilesWritten } =
       await processTwoPass(pgnFiles, { minGames, minElo });
 
-    // Step 3: Upload
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      console.log("\n  BLOB_READ_WRITE_TOKEN not set. Data saved locally.");
-      console.log(`  Saved to ${PROCESSED_DIR}/\n`);
-      return;
-    }
+    // Step 3: Upload to Postgres (+ game PGNs and practice files to Blob)
+    console.log("\nStep 3/3: Upload to Postgres\n");
 
-    console.log(`\nStep 3/3: Upload to Vercel Blob (prefix: ${opts.prefix}/)\n`);
+    console.log("Ensuring schema...");
+    await ensureSchema();
 
-    // Stream large files from disk instead of using in-memory objects
-    // (processTwoPass clears gameIndex.games after writing to disk, so
-    //  the in-memory object would upload an empty game index)
-    const fullGameIndexPath = join(PROCESSED_DIR, "game-index.json");
-    const fullGameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
+    const runId = await recordPipelineRun("full", `twic-${from}-${to}`);
 
-    const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
-      prefix: opts.prefix,
-      gameDetailsJsonl: GAME_DETAILS_JSONL,
-      gameDetailCount: gameDetailFilesWritten,
-      gameIndexPath: existsSync(fullGameIndexPath) ? fullGameIndexPath : undefined,
-      gameAliasesPath: existsSync(fullGameAliasesPath) ? fullGameAliasesPath : undefined,
-      onProgress: (uploaded, total) => {
-        if (uploaded % 500 === 0 || uploaded === total) {
-          const pct = Math.round((uploaded / total) * 100);
-          console.log(`  Progress: ${uploaded}/${total} (${pct}%)`);
+    try {
+      // Upsert players
+      console.log("Upserting players...");
+      const playersResult = await upsertPlayers(players, (count, total, ins, upd) => {
+        if (count % 100 === 0 || count === total) {
+          const pct = Math.round((count / total) * 100);
+          console.log(`  Players: ${count}/${total} (${pct}%) — ${ins} new, ${upd} updated`);
         }
-      },
-    });
+      });
+      console.log(`  ${playersResult.total} players upserted\n`);
 
-    console.log(`\n═══ Pipeline Complete ═══`);
-    console.log(`  Players:          ${players.length}`);
-    console.log(`  Game pages:       ${gameDetailFilesWritten}`);
-    console.log(`  Index URL:        ${result.indexUrl}`);
-    console.log(`  Players uploaded:  ${result.playersUploaded}`);
-    console.log(`  Game files:        ${result.gamesUploaded}`);
-    console.log(`  Game pages:        ${result.gameDetailsUploaded}\n`);
+      // Upsert player aliases
+      console.log("Upserting player aliases...");
+      const aliasCount = await upsertPlayerAliases(players, (count, batchNum, totalBatches, batchAliases) => {
+        console.log(`  Batch ${batchNum}/${totalBatches}: +${batchAliases} aliases (${count} total)`);
+      });
+      console.log(`  ${aliasCount} aliases upserted\n`);
+
+      // Upsert games from JSONL
+      if (existsSync(GAME_DETAILS_JSONL)) {
+        console.log("Upserting games from JSONL...");
+        const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (count) => {
+          if (count % 100 === 0) console.log(`  Games: ${count}`);
+        });
+        console.log(`  ${gamesUpserted} games upserted\n`);
+      }
+
+      // Upsert game aliases
+      const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
+      if (existsSync(gameAliasesPath)) {
+        console.log("Upserting game aliases...");
+        const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count) => {
+          if (count % 100 === 0) console.log(`  Game aliases: ${count}`);
+        });
+        console.log(`  ${gameAliasCount} game aliases upserted\n`);
+      }
+
+      // Upload per-player game files to Blob (for practice mode)
+      if (existsSync(GAMES_DIR)) {
+        console.log("Uploading player game files to Blob (practice mode)...");
+        const gameFilesUploaded = await uploadPlayerGameFiles(GAMES_DIR, (count, total) => {
+          if (count % 100 === 0 || count === total) {
+            const pct = Math.round((count / total) * 100);
+            console.log(`  Game files: ${count}/${total} (${pct}%)`);
+          }
+        });
+        if (gameFilesUploaded > 0) {
+          console.log(`  ${gameFilesUploaded} player game files uploaded\n`);
+        } else {
+          console.log("  Skipped (no BLOB_READ_WRITE_TOKEN or no game files)\n");
+        }
+      }
+
+      await completePipelineRun(runId);
+
+      console.log(`\n═══ Pipeline Complete ═══`);
+      console.log(`  Players:     ${players.length}`);
+      console.log(`  Game pages:  ${gameDetailFilesWritten}\n`);
+    } catch (e) {
+      await failPipelineRun(runId, String(e));
+      throw e;
+    }
   });
 
 program.parse();
