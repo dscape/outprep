@@ -36,11 +36,11 @@ export async function generateSitemaps() {
   );
 }
 
-export default async function sitemap({
-  id,
-}: {
-  id: number;
-}): Promise<MetadataRoute.Sitemap> {
+export default async function sitemap(
+  // Next.js 16 passes id as a Promise<string> (async dynamic params)
+  props: { id: number },
+): Promise<MetadataRoute.Sitemap> {
+  const id = Number(await (props as Record<string, unknown>).id);
   // Sitemap 0: static pages
   if (id === 0) {
     return [
