@@ -97,11 +97,22 @@ export function analyzeStyle(games: NormalizedGame[]): StyleMetrics {
 
   let earlyAttacks = 0;
   let sacrifices = 0;
-  let tacticalWins = 0;
-  let longGames = 0;
-  let longGameWins = 0;
   let totalMoves = 0;
   let gamesAnalyzed = 0;
+  let totalWins = 0;
+  let totalDraws = 0;
+
+  // Endgame: long game (>=40 moves) vs short game decisive win rate
+  let longGameWins = 0;
+  let longGameLosses = 0;
+  let longGameTotal = 0;
+  let shortGameWins = 0;
+  let shortGameLosses = 0;
+  let shortGameTotal = 0;
+
+  // Positional: early losses + long game draws
+  let earlyLosses = 0;
+  let longGameDraws = 0;
 
   for (const game of games) {
     if (!game.moves || (game.variant ?? "standard") !== "standard") continue;
@@ -113,8 +124,13 @@ export function analyzeStyle(games: NormalizedGame[]): StyleMetrics {
 
     const isWhite = game.playerColor === "white";
     const won = (isWhite && game.result === "white") || (!isWhite && game.result === "black");
+    const lost = (isWhite && game.result === "black") || (!isWhite && game.result === "white");
+    const drew = game.result === "draw";
 
-    // Aggression: short decisive games, early piece activity
+    if (won) totalWins++;
+    if (drew) totalDraws++;
+
+    // Aggression: short wins (for quickWinRatio) + sacrifices
     if (moveCount < 30 && won) earlyAttacks++;
 
     // Check for material sacrifices (rough heuristic from move patterns)
@@ -144,51 +160,68 @@ export function analyzeStyle(games: NormalizedGame[]): StyleMetrics {
       // skip malformed games
     }
 
-    // Tactical: short decisive games suggest tactical play
-    if (moveCount < 40 && game.result && game.result !== "draw") tacticalWins++;
-
-    // Endgame: long games and conversion rate (30+ moves for blitz-friendliness)
-    if (moveCount > 30) {
-      longGames++;
+    // Endgame: track decisive results in long (>=40 moves) vs short games
+    if (moveCount >= 40) {
+      longGameTotal++;
       if (won) longGameWins++;
+      else if (lost) longGameLosses++;
+      else if (drew) longGameDraws++;
+    } else {
+      shortGameTotal++;
+      if (won) shortGameWins++;
+      else if (lost) shortGameLosses++;
     }
+
+    // Positional: early losses
+    if (moveCount < 25 && lost) earlyLosses++;
   }
 
   if (gamesAnalyzed > 0) {
     const avgMoves = totalMoves / gamesAnalyzed;
-
-    // Aggression: % of games won quickly + sacrifice frequency
-    const earlyWinPct = (earlyAttacks / gamesAnalyzed) * 100;
+    // Aggression: of all wins, what % came quickly + sacrifice frequency
+    // quickWinRatio normalizes against opponent strength (compares wins to wins)
+    const quickWinRatio = totalWins > 0 ? (earlyAttacks / totalWins) * 100 : 0;
     const sacrificePct = (sacrifices / gamesAnalyzed) * 100;
-    aggression = Math.min(100, Math.round(earlyWinPct * 0.7 + sacrificePct * 0.3));
+    aggression = Math.min(100, Math.round(quickWinRatio * 0.7 + sacrificePct * 0.3));
 
-    // Tactical: % of decisive games that ended in under 40 moves
-    tactical = Math.min(100, Math.round((tacticalWins / gamesAnalyzed) * 100));
+    // Tactical: decisive game rate + sacrifice frequency
+    // Tactical players create sharp positions — games end decisively (few draws)
+    // When draws are rare (online blitz), discount the decisive rate — it reflects
+    // the format more than style. drawCredit scales linearly: full credit at ≥20% draws.
+    const decisiveRate = (gamesAnalyzed - totalDraws) / gamesAnalyzed;
+    const drawRate = totalDraws / gamesAnalyzed;
+    const drawCredit = Math.min(1, drawRate / 0.20);
+    const effectiveDecisive = 0.5 + (decisiveRate - 0.5) * drawCredit;
+    const sacrificeBonus = Math.min(15, (sacrifices / gamesAnalyzed) * 5);
+    tactical = clamp(Math.round(effectiveDecisive * 92 + sacrificeBonus), 0, 100);
 
-    // Positional: inverse of early-loss rate, bonus for longer average game length
-    const earlyLosses = games.filter((g) => {
-      const moves = g.moves?.split(" ") || [];
-      const moveCount = Math.floor(moves.length / 2);
-      const isWhite = g.playerColor === "white";
-      const lost = (isWhite && g.result === "black") || (!isWhite && g.result === "white");
-      return moveCount < 25 && lost;
-    }).length;
+    // Positional: inverse early-loss rate + game length bonus + long-game draw survival
+    // Positional players hold solid positions, play longer games, and grind
     const earlyLossPct = (earlyLosses / gamesAnalyzed) * 100;
-    const lengthBonus = Math.min(20, Math.max(0, (avgMoves - 25) * 0.8));
-    positional = clamp(Math.round(70 - earlyLossPct * 1.5 + lengthBonus), 0, 100);
+    const lengthBonus = Math.min(35, Math.max(0, (avgMoves - 25) * 1.0));
+    const longDrawRate = longGameTotal > 0 ? longGameDraws / longGameTotal : 0;
+    positional = clamp(Math.round(50 - earlyLossPct * 2 + lengthBonus + longDrawRate * 20), 0, 100);
 
-    // Endgame: conversion rate in long games (30+ moves)
-    endgame = longGames > 0
-      ? Math.min(100, Math.round((longGameWins / longGames) * 100))
-      : 50;
+    // Endgame: combines two signals:
+    // 1. How much does this player gravitate toward endgames? (frequency)
+    // 2. How well do they hold/convert in endgames? (non-loss rate)
+    // freq × holdRate captures both style preference and ability.
+    // Not a relative metric (would need opponent ratings for that),
+    // but meaningfully differentiates endgame specialists from others.
+    if (longGameTotal >= 5) {
+      const endgameFreq = longGameTotal / gamesAnalyzed;
+      const holdRate = 1 - (longGameLosses / longGameTotal);
+      endgame = clamp(Math.round(endgameFreq * holdRate * 150), 0, 100);
+    }
   }
 
   // Bayesian dampening: pull toward 50 (neutral) when sample is small
+  // Then boost scores above 50 so human-level play fills the 50-100 range
   return {
-    aggression: clamp(Math.round(dampen(aggression, gamesAnalyzed)), 0, 100),
-    tactical: clamp(Math.round(dampen(tactical, gamesAnalyzed)), 0, 100),
-    positional: clamp(Math.round(dampen(positional, gamesAnalyzed)), 0, 100),
-    endgame: clamp(Math.round(dampen(endgame, gamesAnalyzed)), 0, 100),
+    aggression: boost(clamp(Math.round(dampen(aggression, gamesAnalyzed)), 0, 100)),
+    tactical: boost(clamp(Math.round(dampen(tactical, gamesAnalyzed)), 0, 100)),
+    positional: boost(clamp(Math.round(dampen(positional, gamesAnalyzed)), 0, 100)),
+    endgame: boost(clamp(Math.round(dampen(endgame, longGameTotal)), 0, 100)),
     sampleSize: gamesAnalyzed,
   };
 }
@@ -560,6 +593,11 @@ export function generatePrepTips(
 /** Bayesian dampening: pull raw score toward 50 (neutral) when sample is small */
 function dampen(raw: number, n: number, k = 30): number {
   return raw * (n / (n + k)) + 50 * (k / (n + k));
+}
+
+/** Stretch scores above 50 to fill the human range; leave below-50 as-is. */
+function boost(raw: number, factor = 1.5): number {
+  return raw <= 50 ? raw : clamp(Math.round(50 + (raw - 50) * factor), 50, 100);
 }
 
 function clamp(val: number, min: number, max: number): number {

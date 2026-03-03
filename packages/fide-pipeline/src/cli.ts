@@ -907,10 +907,11 @@ program
       const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
       if (shouldRun("game-aliases") && existsSync(gameAliasesPath)) {
         console.log("Upserting game aliases...");
-        const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count) => {
-          progress(`  Game aliases: ${count.toLocaleString()}`);
+        const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count, total) => {
+          const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+          progress(`  Game aliases: ${count.toLocaleString()}/${total.toLocaleString()} (${pct}%)`);
         });
-        progress(`  Game aliases: ${gameAliasCount.toLocaleString()} upserted\n`);
+        progress(`  Game aliases: ${gameAliasCount.toLocaleString()} upserted (100%)\n`);
       } else if (!shouldRun("game-aliases")) {
         console.log("Skipping: Upsert game aliases");
       }
@@ -1071,10 +1072,11 @@ program
       const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
       if (existsSync(gameAliasesPath)) {
         console.log("Upserting game aliases...");
-        const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count) => {
-          progress(`  Game aliases: ${count.toLocaleString()}`);
+        const gameAliasCount = await upsertGameAliases(gameAliasesPath, (count, total) => {
+          const pct = total > 0 ? Math.round((count / total) * 100) : 0;
+          progress(`  Game aliases: ${count.toLocaleString()}/${total.toLocaleString()} (${pct}%)`);
         });
-        progress(`  Game aliases: ${gameAliasCount.toLocaleString()} upserted\n`);
+        progress(`  Game aliases: ${gameAliasCount.toLocaleString()} upserted (100%)\n`);
       }
 
       await completePipelineRun(runId);

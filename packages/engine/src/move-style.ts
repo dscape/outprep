@@ -122,12 +122,22 @@ export function analyzeStyleFromRecords(records: GameRecord[]): StyleMetrics {
 
   let earlyAttacks = 0;
   let sacrifices = 0;
-  let tacticalWins = 0;
-  let longGames = 0;
-  let longGameWins = 0;
   let totalMoves = 0;
   let earlyLosses = 0;
   let gamesAnalyzed = 0;
+  let totalWins = 0;
+  let totalDraws = 0;
+
+  // Endgame: long game (>=40 moves) vs short game decisive win rate
+  let longGameWins = 0;
+  let longGameLosses = 0;
+  let longGameTotal = 0;
+  let shortGameWins = 0;
+  let shortGameLosses = 0;
+  let shortGameTotal = 0;
+
+  // Positional: long game draws
+  let longGameDraws = 0;
 
   for (const record of records) {
     if (!record.moves) continue;
@@ -144,8 +154,12 @@ export function analyzeStyleFromRecords(records: GameRecord[]): StyleMetrics {
     const lost =
       (isWhite && record.result === "black") ||
       (!isWhite && record.result === "white");
+    const drew = record.result === "draw";
 
-    // Aggression: short decisive wins
+    if (won) totalWins++;
+    if (drew) totalDraws++;
+
+    // Aggression: short wins (for quickWinRatio) + sacrifices
     if (moveCount < 30 && won) earlyAttacks++;
 
     // Sacrifice detection via chess.js material tracking
@@ -170,15 +184,16 @@ export function analyzeStyleFromRecords(records: GameRecord[]): StyleMetrics {
       // skip malformed games
     }
 
-    // Tactical: short decisive games
-    if (moveCount < 40 && record.result !== "draw" && record.result != null) {
-      tacticalWins++;
-    }
-
-    // Endgame: long games and conversion rate
-    if (moveCount > 30) {
-      longGames++;
+    // Endgame: track decisive results in long (>=40 moves) vs short games
+    if (moveCount >= 40) {
+      longGameTotal++;
       if (won) longGameWins++;
+      else if (lost) longGameLosses++;
+      else if (drew) longGameDraws++;
+    } else {
+      shortGameTotal++;
+      if (won) shortGameWins++;
+      else if (lost) shortGameLosses++;
     }
 
     // Early losses for positional score
@@ -191,31 +206,44 @@ export function analyzeStyleFromRecords(records: GameRecord[]): StyleMetrics {
 
   const avgMoves = totalMoves / gamesAnalyzed;
 
-  // Aggression: % of games won quickly + sacrifice frequency
-  const earlyWinPct = (earlyAttacks / gamesAnalyzed) * 100;
+  // Aggression: of all wins, what % came quickly + sacrifice frequency
+  const quickWinRatio = totalWins > 0 ? (earlyAttacks / totalWins) * 100 : 0;
   const sacrificePct = (sacrifices / gamesAnalyzed) * 100;
-  const aggression = Math.min(100, Math.round(earlyWinPct * 0.7 + sacrificePct * 0.3));
+  const aggression = Math.min(100, Math.round(quickWinRatio * 0.7 + sacrificePct * 0.3));
 
-  // Tactical: % of decisive games that ended in under 40 moves
-  const tactical = Math.min(100, Math.round((tacticalWins / gamesAnalyzed) * 100));
+  // Tactical: decisive game rate + sacrifice frequency
+  // Tactical players create sharp positions — games end decisively (few draws)
+  // When draws are rare (online blitz), discount the decisive rate — it reflects
+  // the format more than style. drawCredit scales linearly: full credit at ≥20% draws.
+  const decisiveRate = (gamesAnalyzed - totalDraws) / gamesAnalyzed;
+  const drawRate = totalDraws / gamesAnalyzed;
+  const drawCredit = Math.min(1, drawRate / 0.20);
+  const effectiveDecisive = 0.5 + (decisiveRate - 0.5) * drawCredit;
+  const sacrificeBonus = Math.min(15, (sacrifices / gamesAnalyzed) * 5);
+  const tactical = clamp(Math.round(effectiveDecisive * 92 + sacrificeBonus), 0, 100);
 
-  // Positional: inverse of early-loss rate, bonus for longer average game length
+  // Positional: inverse early-loss rate + game length bonus + long-game draw survival
+  // Positional players hold solid positions, play longer games, and grind
   const earlyLossPct = (earlyLosses / gamesAnalyzed) * 100;
-  const lengthBonus = Math.min(20, Math.max(0, (avgMoves - 25) * 0.8));
-  const positional = clamp(Math.round(70 - earlyLossPct * 1.5 + lengthBonus), 0, 100);
+  const lengthBonus = Math.min(35, Math.max(0, (avgMoves - 25) * 1.0));
+  const longDrawRate = longGameTotal > 0 ? longGameDraws / longGameTotal : 0;
+  const positional = clamp(Math.round(50 - earlyLossPct * 2 + lengthBonus + longDrawRate * 20), 0, 100);
 
-  // Endgame: conversion rate in long games
-  const endgame =
-    longGames > 0
-      ? Math.min(100, Math.round((longGameWins / longGames) * 100))
-      : 50;
+  // Endgame: combines frequency of long games × non-loss rate in them
+  let endgame = 50;
+  if (longGameTotal >= 5) {
+    const endgameFreq = longGameTotal / gamesAnalyzed;
+    const holdRate = 1 - (longGameLosses / longGameTotal);
+    endgame = clamp(Math.round(endgameFreq * holdRate * 150), 0, 100);
+  }
 
   // Bayesian dampening: pull toward 50 when sample is small
+  // Then boost scores above 50 so human-level play fills the 50-100 range
   return {
-    aggression: clamp(Math.round(dampen(aggression, gamesAnalyzed)), 0, 100),
-    tactical: clamp(Math.round(dampen(tactical, gamesAnalyzed)), 0, 100),
-    positional: clamp(Math.round(dampen(positional, gamesAnalyzed)), 0, 100),
-    endgame: clamp(Math.round(dampen(endgame, gamesAnalyzed)), 0, 100),
+    aggression: boost(clamp(Math.round(dampen(aggression, gamesAnalyzed)), 0, 100)),
+    tactical: boost(clamp(Math.round(dampen(tactical, gamesAnalyzed)), 0, 100)),
+    positional: boost(clamp(Math.round(dampen(positional, gamesAnalyzed)), 0, 100)),
+    endgame: boost(clamp(Math.round(dampen(endgame, longGameTotal)), 0, 100)),
     sampleSize: gamesAnalyzed,
   };
 }
@@ -244,6 +272,11 @@ function countMaterial(chess: Chess): { white: number; black: number } {
 /** Bayesian dampening: pull raw score toward 50 (neutral) when sample is small */
 function dampen(raw: number, n: number, k = 30): number {
   return raw * (n / (n + k)) + 50 * (k / (n + k));
+}
+
+/** Stretch scores above 50 to fill the human range; leave below-50 as-is. */
+function boost(raw: number, factor = 1.5): number {
+  return raw <= 50 ? raw : clamp(Math.round(50 + (raw - 50) * factor), 50, 100);
 }
 
 function clamp(val: number, min: number, max: number): number {

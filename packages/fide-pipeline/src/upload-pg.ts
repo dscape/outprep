@@ -329,7 +329,7 @@ export async function uploadGamePgnsFromJsonl(
  */
 export async function upsertGameAliases(
   aliasesPath: string,
-  onProgress?: (count: number) => void,
+  onProgress?: (count: number, total: number) => void,
 ): Promise<number> {
   if (!existsSync(aliasesPath)) return 0;
 
@@ -341,7 +341,8 @@ export async function upsertGameAliases(
 
   let count = 0;
   const entries = Object.entries(aliases);
-  const BATCH = 500;
+  const total = entries.length;
+  const BATCH = 2000;
 
   for (let i = 0; i < entries.length; i += BATCH) {
     const batch = entries.slice(i, i + BATCH);
@@ -359,7 +360,7 @@ export async function upsertGameAliases(
     });
 
     count += batch.length;
-    onProgress?.(count);
+    onProgress?.(count, total);
   }
 
   return count;
