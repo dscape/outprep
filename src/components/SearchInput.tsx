@@ -1,7 +1,23 @@
 "use client";
 
-import { useState, FormEvent } from "react";
+import { useState, useEffect, useRef, FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { CountryFlag } from "@/components/country-flag";
+
+interface PlayerSuggestion {
+  slug: string;
+  name: string;
+  title: string | null;
+  fideRating: number;
+  federation: string | null;
+}
+
+function formatPlayerName(name: string): string {
+  if (name.includes(",") && !name.includes(", ")) {
+    return name.replace(",", ", ");
+  }
+  return name;
+}
 
 export default function SearchInput() {
   const [username, setUsername] = useState("");
@@ -9,11 +25,113 @@ export default function SearchInput() {
   const [error, setError] = useState("");
   const router = useRouter();
 
+  // Autocomplete state
+  const [suggestions, setSuggestions] = useState<PlayerSuggestion[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
+  const [showDropdown, setShowDropdown] = useState(false);
+
+  // Refs
+  const debounceRef = useRef<NodeJS.Timeout | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  // Click-outside to close dropdown
+  useEffect(() => {
+    function handleClickOutside(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
+        setShowDropdown(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      if (abortRef.current) abortRef.current.abort();
+    };
+  }, []);
+
+  function handleInputChange(value: string) {
+    setUsername(value);
+    setError("");
+    setSelectedIndex(-1);
+
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (abortRef.current) abortRef.current.abort();
+
+    if (value.trim().length < 2) {
+      setSuggestions([]);
+      setShowDropdown(false);
+      return;
+    }
+
+    debounceRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      abortRef.current = controller;
+
+      try {
+        const res = await fetch(
+          `/api/players/search?q=${encodeURIComponent(value.trim())}`,
+          { signal: controller.signal },
+        );
+        if (res.ok) {
+          const data = await res.json();
+          setSuggestions(data);
+          setShowDropdown(data.length > 0);
+        }
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+      }
+    }, 250);
+  }
+
+  function handleKeyDown(e: React.KeyboardEvent) {
+    if (!showDropdown || suggestions.length === 0) {
+      return;
+    }
+
+    switch (e.key) {
+      case "ArrowDown":
+        e.preventDefault();
+        setSelectedIndex((prev) =>
+          prev < suggestions.length - 1 ? prev + 1 : 0,
+        );
+        break;
+      case "ArrowUp":
+        e.preventDefault();
+        setSelectedIndex((prev) =>
+          prev > 0 ? prev - 1 : suggestions.length - 1,
+        );
+        break;
+      case "Enter":
+        if (selectedIndex >= 0) {
+          e.preventDefault();
+          navigateToPlayer(suggestions[selectedIndex]);
+        }
+        // If selectedIndex is -1, let form submit naturally (Lichess flow)
+        break;
+      case "Escape":
+        setShowDropdown(false);
+        setSelectedIndex(-1);
+        break;
+    }
+  }
+
+  function navigateToPlayer(player: PlayerSuggestion) {
+    setShowDropdown(false);
+    setSuggestions([]);
+    router.push(`/player/${player.slug}`);
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const trimmed = username.trim();
     if (!trimmed) return;
 
+    setShowDropdown(false);
     setLoading(true);
     setError("");
 
@@ -45,15 +163,23 @@ export default function SearchInput() {
 
   return (
     <form onSubmit={handleSubmit} className="w-full max-w-md" autoComplete="off">
-      <div className="relative">
+      <div ref={wrapperRef} className="relative">
         <input
+          role="combobox"
+          aria-expanded={showDropdown}
+          aria-autocomplete="list"
+          aria-controls="player-search-listbox"
+          aria-activedescendant={
+            selectedIndex >= 0 ? `player-option-${selectedIndex}` : undefined
+          }
           type="search"
           value={username}
-          onChange={(e) => {
-            setUsername(e.target.value);
-            setError("");
+          onChange={(e) => handleInputChange(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onFocus={() => {
+            if (suggestions.length > 0) setShowDropdown(true);
           }}
-          placeholder="Enter Lichess username..."
+          placeholder="Search FIDE player or Lichess username..."
           name="lichess-search"
           autoComplete="one-time-code"
           data-1p-ignore
@@ -80,6 +206,54 @@ export default function SearchInput() {
             "Scout"
           )}
         </button>
+
+        {/* FIDE player autocomplete dropdown */}
+        {showDropdown && suggestions.length > 0 && (
+          <ul
+            id="player-search-listbox"
+            role="listbox"
+            className="absolute left-0 right-0 top-full z-50 mt-1 max-h-80 overflow-y-auto rounded-lg border border-zinc-700 bg-zinc-800 shadow-xl"
+          >
+            {suggestions.map((player, index) => (
+              <li
+                key={player.slug}
+                id={`player-option-${index}`}
+                role="option"
+                aria-selected={index === selectedIndex}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  navigateToPlayer(player);
+                }}
+                onMouseEnter={() => setSelectedIndex(index)}
+                className={`flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors ${
+                  index === selectedIndex
+                    ? "bg-zinc-700/50"
+                    : "hover:bg-zinc-700/30"
+                }`}
+              >
+                {/* Title badge */}
+                <span className="text-xs font-bold text-amber-400 w-7 shrink-0 text-center">
+                  {player.title || ""}
+                </span>
+
+                {/* Name */}
+                <span className="flex-1 text-sm text-white truncate">
+                  {formatPlayerName(player.name)}
+                </span>
+
+                {/* Federation flag */}
+                {player.federation && (
+                  <CountryFlag federation={player.federation} className="text-sm shrink-0" />
+                )}
+
+                {/* Rating */}
+                <span className="text-sm font-mono text-green-400 tabular-nums shrink-0">
+                  {player.fideRating}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
       {error && (
         <p className="mt-2 text-sm text-red-400">{error}</p>

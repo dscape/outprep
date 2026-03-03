@@ -221,6 +221,50 @@ export async function getTopPlayers(
   }
 }
 
+// ─── Search queries ─────────────────────────────────────────────────────────
+
+/**
+ * Search FIDE players by name for autocomplete.
+ * Uses the trigram GIN index (idx_players_name_trgm) for fast ILIKE matching.
+ * Results sorted by rating so famous players surface first.
+ */
+export async function searchPlayers(
+  query: string,
+  limit: number = 8,
+): Promise<
+  Array<{
+    slug: string;
+    name: string;
+    title: string | null;
+    fideRating: number;
+    federation: string | null;
+  }>
+> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const trimmed = query.trim();
+    if (trimmed.length < 2) return [];
+
+    const ilikePattern = `%${trimmed}%`;
+    const { rows } = await sql`
+      SELECT slug, name, title, fide_rating, federation
+      FROM players
+      WHERE name ILIKE ${ilikePattern}
+      ORDER BY fide_rating DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      slug: r.slug as string,
+      name: r.name as string,
+      title: (r.title as string) ?? null,
+      fideRating: r.fide_rating as number,
+      federation: (r.federation as string) ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 /**
