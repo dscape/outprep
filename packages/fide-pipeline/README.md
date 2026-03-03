@@ -20,8 +20,8 @@ cp .env.example .env
 
 | Variable | Required for | How to get it |
 |----------|-------------|---------------|
-| `DATABASE_URL` | `seed`, `full`, cron jobs, the Next.js app | Local: `postgres://outprep:outprep@localhost:5432/outprep` (via Docker Compose). Production: your Neon / Supabase / Railway connection string. |
-| `BLOB_READ_WRITE_TOKEN` | Game PGN storage + practice mode files (used by `seed`, `full`, `smoke`) | [Vercel Dashboard](https://vercel.com/dashboard) → Storage → Blob → Tokens |
+| `DATABASE_URL` | `seed-db`, `full`, cron jobs, the Next.js app | Local: `postgres://outprep:outprep@localhost:5432/outprep` (via Docker Compose). Production: your Neon / Supabase / Railway connection string. |
+| `BLOB_READ_WRITE_TOKEN` | `seed-blob`, `smoke` — game PGN storage + practice mode files | [Vercel Dashboard](https://vercel.com/dashboard) → Storage → Blob → Tokens |
 
 ### 2. Start local PostgreSQL
 
@@ -74,30 +74,44 @@ npm run fide-pipeline -- smoke
 
 ## Full Pipeline (seed database from scratch)
 
-The pipeline has three phases: **download** → **process** → **seed** (Postgres + Blob).
+The pipeline has three phases: **download** → **process** → **seed-db** + **seed-blob**.
+
+Database and Blob uploads are separate commands so each can be run and tuned independently.
 
 ```bash
-# All three steps in one command:
+# All-in-one (downloads, processes, seeds Postgres — no Blob):
 npm run fide-pipeline -- full --from 1433 --to 1633
 
 # Or run each step separately:
 npm run fide-pipeline -- download --from 925 --to 1633
 npm run fide-pipeline -- process --min-games 3
-npm run fide-pipeline -- seed
+npm run fide-pipeline -- seed-db
+npm run fide-pipeline -- seed-blob
 ```
 
-### What `seed` and `full` do
+### What `seed-db` does
 
-Both `seed` (standalone) and the upload step of `full` perform the same operations:
+Populates Postgres from processed data on disk:
 
 1. Creates all tables if they don't exist (`ensureSchema`)
-2. **Postgres:** Upserts players (batch 100), player aliases (batch 200), game metadata (batch 50), game aliases (batch 500)
-3. **Blob:** Uploads individual game PGN text (`fide/game-pgn/{slug}.txt`) and per-player game arrays (`fide/games/{slug}.json`) for practice mode
-4. Tracks each run in `pipeline_runs` for resume support
+2. Upserts players (batch 100), player aliases (batch 200)
+3. Drops game indexes → bulk-inserts game metadata (batch 500) → recreates indexes
+4. Upserts game aliases (batch 500)
+5. Tracks each run in `pipeline_runs`
+
+The index drop/create optimization makes bulk game inserts ~10x faster by avoiding per-row index maintenance on 6 B-tree indexes during the insert.
+
+### What `seed-blob` does
+
+Uploads game data to Vercel Blob (runs independently of Postgres):
+
+1. Uploads individual game PGN text from JSONL (`fide/game-pgn/{slug}.txt`)
+2. Uploads per-player game arrays (`fide/games/{slug}.json`) for practice mode
 
 ### Interrupting and resuming
 
-- **Postgres upserts are idempotent** — you can re-run `seed` or `full` safely. Existing rows are updated via `ON CONFLICT`.
+- **Postgres upserts are idempotent** — you can re-run `seed-db` safely. Existing rows are handled via `ON CONFLICT`.
+- **Blob uploads are idempotent** — you can re-run `seed-blob` safely. Existing files are overwritten.
 - **Rate limiting**: If Vercel Blob returns `BlobServiceRateLimited`, the upload retries automatically with backoff (up to 5 retries per file).
 
 ## Vercel Cron Jobs (automatic updates)
@@ -117,12 +131,14 @@ Both routes use `maxDuration = 300` (5-minute timeout, requires Vercel Pro plan)
 > # Weekly: add new TWIC issue(s)
 > npm run fide-pipeline -- download --from <next> --to <next>
 > npm run fide-pipeline -- process --min-games 3
-> npm run fide-pipeline -- seed
+> npm run fide-pipeline -- seed-db
+> npm run fide-pipeline -- seed-blob
 >
 > # Monthly: update FIDE ratings
 > npm run fide-pipeline -- download-ratings --force
 > npm run fide-pipeline -- process --min-games 3
-> npm run fide-pipeline -- seed
+> npm run fide-pipeline -- seed-db
+> npm run fide-pipeline -- seed-blob
 > ```
 
 ## FIDE Enrichment
@@ -175,13 +191,27 @@ Parse downloaded PGNs, aggregate player data, and enrich with FIDE ratings.
 |------|---------|-------------|
 | `--min-games <n>` | 3 | Minimum games for a player to be included |
 
-### `seed`
+### `seed-db`
 
-Seed Postgres and Blob from processed data on disk. Creates tables if they don't exist. This is the primary way to populate the database.
+Seed Postgres from processed data on disk. Creates tables if they don't exist. Drops and recreates game indexes around the bulk insert for speed.
 
-Requires `DATABASE_URL`. `BLOB_READ_WRITE_TOKEN` is optional but needed for game PGN and practice mode data.
+Requires `DATABASE_URL`.
 
-> Alias: `upload-pg` (for backwards compatibility)
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--skip-to <step>` | — | Skip to: `schema`, `players`, `aliases`, `games`, `game-aliases` |
+
+> Aliases: `seed`, `upload-pg` (for backwards compatibility)
+
+### `seed-blob`
+
+Upload game PGNs and per-player game files to Vercel Blob. Runs independently of Postgres — you can run this before, after, or in parallel with `seed-db`.
+
+Requires `BLOB_READ_WRITE_TOKEN`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--skip-to <step>` | — | Skip to: `game-pgns`, `player-games` |
 
 ### `upload`
 
@@ -259,8 +289,11 @@ npm run fide-pipeline -- download --from 1634 --to 1634
 # Re-process all downloaded data (includes FIDE enrichment)
 npm run fide-pipeline -- process --min-games 3
 
-# Seed Postgres + Blob
-npm run fide-pipeline -- seed
+# Seed Postgres (fast — no network Blob uploads)
+npm run fide-pipeline -- seed-db
+
+# Upload PGNs + practice files to Blob (can run in parallel or after)
+npm run fide-pipeline -- seed-blob
 ```
 
 ## Troubleshooting

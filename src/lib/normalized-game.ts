@@ -5,6 +5,7 @@
  * then the entire analysis pipeline works on NormalizedGame[].
  */
 
+import { Chess } from "chess.js";
 import type {
   LichessGame,
   LichessEvalAnnotation,
@@ -166,10 +167,15 @@ export function fromOTBGame(
   const isWhite = whiteNorm.includes(lower) || (whiteNorm.length >= 4 && lower.includes(whiteNorm));
 
   // Prefer ECO_NAMES lookup (e.g., "Sicilian Defense") over raw PGN header (e.g., "Sicilian")
+  let rawEco = game.eco || "";
   let rawOpening = resolveOpeningName(game.eco || null, game.opening || null);
-  if (rawOpening === "Unknown") {
-    const classified = classifyOpening(game.moves);
-    rawOpening = classified?.name || "Unknown";
+  // Classify from moves when ECO or opening name is missing/incomplete
+  const classified = game.moves ? classifyOpening(game.moves) : null;
+  if (rawOpening === "Unknown" && classified) {
+    rawOpening = classified.name;
+  }
+  if (!rawEco && classified) {
+    rawEco = classified.eco;
   }
 
   // Construct a minimal PGN from the moves field if pgn is empty (e.g., stripped compact games)
@@ -202,7 +208,7 @@ export function fromOTBGame(
           : game.result === "1/2-1/2" ? "draw"
             : undefined,
     opening: {
-      eco: game.eco || "",
+      eco: rawEco,
       name: rawOpening,
       family: openingFamily(rawOpening),
     },
@@ -251,11 +257,32 @@ export function fromFidePGN(
   const event = extractPgnHeader(pgn, "Event");
   const date = extractPgnHeader(pgn, "Date");
   const round = extractPgnHeader(pgn, "Round");
-  const eco = extractPgnHeader(pgn, "ECO");
+  let eco = extractPgnHeader(pgn, "ECO");
   const opening = extractPgnHeader(pgn, "Opening");
-  const resolvedOpening = resolveOpeningName(eco, opening);
   const whiteFideId = extractPgnHeader(pgn, "WhiteFideId") || "";
   const blackFideId = extractPgnHeader(pgn, "BlackFideId") || "";
+
+  // Extract moves via chess.js so we can classify the opening when ECO is missing
+  let moves = "";
+  try {
+    const chess = new Chess();
+    chess.loadPgn(pgn);
+    moves = chess.history().join(" ");
+  } catch {
+    // malformed PGN — moves stays empty
+  }
+
+  // Use classifyOpening from moves when ECO/opening headers are missing or incomplete
+  const classified = moves ? classifyOpening(moves) : null;
+  if (!eco && classified) {
+    eco = classified.eco;
+  }
+
+  let resolvedOpening = resolveOpeningName(eco, opening);
+  // If resolveOpeningName only returned a bare ECO code or "Unknown", prefer the classifier's name
+  if (classified && (resolvedOpening === "Unknown" || resolvedOpening === eco)) {
+    resolvedOpening = classified.name;
+  }
 
   // Prefer FIDE ID matching over name matching for reliable color detection
   let isWhite: boolean;
@@ -275,7 +302,7 @@ export function fromFidePGN(
   return {
     id: slug,
     pgn,
-    moves: "", // FIDE PGN move extraction not needed for drilldown display
+    moves,
     white: { name: white, id: whiteFideId || white.toLowerCase().replace(/[^a-z0-9]/g, "") },
     black: { name: black, id: blackFideId || black.toLowerCase().replace(/[^a-z0-9]/g, "") },
     result:

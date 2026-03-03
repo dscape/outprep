@@ -117,14 +117,6 @@ export async function upsertPlayerAliases(
   let count = 0;
   const BATCH = 200;
   const totalBatches = Math.ceil(players.length / BATCH);
-  const overallStart = Date.now();
-
-  console.log(`  [aliases] ${players.length} players, ${totalBatches} batches of ${BATCH}`);
-
-  // Quick stats: how many players actually have aliases?
-  const withAliases = players.filter(p => p.aliases && p.aliases.length > 0).length;
-  const withoutAliases = players.length - withAliases;
-  console.log(`  [aliases] ${withAliases} players with aliases, ${withoutAliases} without`);
 
   for (let i = 0; i < players.length; i += BATCH) {
     const batchNum = Math.floor(i / BATCH) + 1;
@@ -166,20 +158,10 @@ export async function upsertPlayerAliases(
       throw err;
     }
 
-    const elapsed = Date.now() - batchStart;
     count += allAliases.length;
-
-    // Log every batch (verbose) — include timing to spot slow queries
-    if (batchNum % 10 === 0 || batchNum === 1 || batchNum === totalBatches || elapsed > 2000) {
-      const totalElapsed = ((Date.now() - overallStart) / 1000).toFixed(1);
-      console.log(`  [aliases] Batch ${batchNum}/${totalBatches}: ${allAliases.length} aliases, ${elapsed}ms (${totalElapsed}s total, ${count} aliases so far)`);
-    }
-
     onProgress?.(count, batchNum, totalBatches, allAliases.length);
   }
 
-  const totalElapsed = ((Date.now() - overallStart) / 1000).toFixed(1);
-  console.log(`  [aliases] Done: ${count} aliases upserted in ${totalElapsed}s`);
   return count;
 }
 
@@ -203,7 +185,7 @@ export async function upsertGamesFromJsonl(
 
   let count = 0;
   let batch: GameDetail[] = [];
-  const BATCH = 50;
+  const BATCH = 500;
 
   for await (const line of rl) {
     if (!line.trim()) continue;
@@ -230,24 +212,7 @@ export async function upsertGamesFromJsonl(
 const MAX_ELO = 10_000;
 
 async function insertGameBatch(games: GameDetail[]): Promise<void> {
-  // 1. Upload PGNs to Vercel Blob in parallel batches
-  if (process.env.BLOB_READ_WRITE_TOKEN) {
-    const BLOB_BATCH = 50;
-    for (let i = 0; i < games.length; i += BLOB_BATCH) {
-      await Promise.all(
-        games.slice(i, i + BLOB_BATCH)
-          .filter((g) => g.pgn)
-          .map((g) =>
-            put(`fide/game-pgn/${g.slug}.txt`, g.pgn, {
-              access: "public",
-              addRandomSuffix: false,
-            }),
-          ),
-      );
-    }
-  }
-
-  // 2. Sanitise ELO values — warn and zero out anything suspicious
+  // Sanitise ELO values — warn and zero out anything suspicious
   for (const g of games) {
     if (g.whiteElo > MAX_ELO) {
       console.warn(`  ⚠ whiteElo ${g.whiteElo} out of range, setting to 0 — ${g.slug}`);
@@ -259,7 +224,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
     }
   }
 
-  // 3. Insert game metadata (no pgn) into Postgres
+  // Insert game metadata (no pgn) into Postgres
   const rows = games.map((g) => ({
     slug: g.slug,
     white_name: g.whiteName,
@@ -295,6 +260,67 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
       ON CONFLICT (slug) DO NOTHING
     `;
   });
+}
+
+/**
+ * Upload game PGN text from JSONL to Vercel Blob.
+ * Reads the same game-details.jsonl file and uploads each game's PGN
+ * to fide/game-pgn/{slug}.txt. Runs independently of DB inserts.
+ */
+export async function uploadGamePgnsFromJsonl(
+  jsonlPath: string,
+  onProgress?: (count: number) => void,
+): Promise<number> {
+  if (!process.env.BLOB_READ_WRITE_TOKEN) return 0;
+  if (!existsSync(jsonlPath)) return 0;
+
+  const rl = createInterface({
+    input: createReadStream(jsonlPath, { encoding: "utf-8" }),
+    crlfDelay: Infinity,
+  });
+
+  let count = 0;
+  let batch: GameDetail[] = [];
+  const BATCH = 50;
+
+  for await (const line of rl) {
+    if (!line.trim()) continue;
+    batch.push(JSON.parse(line) as GameDetail);
+
+    if (batch.length >= BATCH) {
+      await Promise.all(
+        batch
+          .filter((g) => g.pgn)
+          .map((g) =>
+            put(`fide/game-pgn/${g.slug}.txt`, g.pgn, {
+              access: "public",
+              addRandomSuffix: false,
+            }),
+          ),
+      );
+      count += batch.length;
+      batch = [];
+      onProgress?.(count);
+    }
+  }
+
+  // Flush remaining
+  if (batch.length > 0) {
+    await Promise.all(
+      batch
+        .filter((g) => g.pgn)
+        .map((g) =>
+          put(`fide/game-pgn/${g.slug}.txt`, g.pgn, {
+            access: "public",
+            addRandomSuffix: false,
+          }),
+        ),
+    );
+    count += batch.length;
+    onProgress?.(count);
+  }
+
+  return count;
 }
 
 /**
@@ -530,6 +556,37 @@ export async function ensureSchema(): Promise<void> {
 
     console.log("  Schema created.");
   }
+}
+
+// ─── Index management ────────────────────────────────────────────────────────
+
+/**
+ * Drop non-unique indexes on the games table before bulk insert.
+ * Keeps the UNIQUE constraint on slug (needed for ON CONFLICT).
+ */
+export async function dropGameIndexes(): Promise<void> {
+  console.log("  Dropping game indexes for bulk insert...");
+  await sql`DROP INDEX IF EXISTS idx_games_white_slug`;
+  await sql`DROP INDEX IF EXISTS idx_games_black_slug`;
+  await sql`DROP INDEX IF EXISTS idx_games_date`;
+  await sql`DROP INDEX IF EXISTS idx_games_avg_elo`;
+  await sql`DROP INDEX IF EXISTS idx_games_white_fide_id`;
+  await sql`DROP INDEX IF EXISTS idx_games_black_fide_id`;
+  console.log("  Indexes dropped.");
+}
+
+/**
+ * Recreate non-unique indexes on the games table after bulk insert.
+ */
+export async function createGameIndexes(): Promise<void> {
+  console.log("  Recreating game indexes...");
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_white_slug ON games (white_slug)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_black_slug ON games (black_slug)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_date ON games (date DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_avg_elo ON games (avg_elo DESC)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_white_fide_id ON games (white_fide_id)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_black_fide_id ON games (black_fide_id)`;
+  console.log("  Indexes created.");
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

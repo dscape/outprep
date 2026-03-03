@@ -1,0 +1,13 @@
+{
+  "lsp": {
+    "css-language-server": {
+      "settings": {
+        "css": {
+          "lint": {
+            "unknownAtRules": "ignore"
+          }
+        }
+      }
+    }
+  }
+}
