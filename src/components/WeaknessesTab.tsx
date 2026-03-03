@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { Weakness } from "@/lib/types";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
+import { getLichessTrainingUrl } from "@/lib/lichess-training";
 
 interface WeaknessesTabProps {
   weaknesses: Weakness[];
@@ -84,6 +85,19 @@ export default function WeaknessesTab({ weaknesses, username, speeds }: Weakness
                 Practice this line
               </button>
             )}
+            {w.openingName && (() => {
+              const url = getLichessTrainingUrl(w.openingName);
+              return url ? (
+                <a
+                  href={url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-md border border-zinc-600/40 bg-zinc-700/10 px-2.5 py-1 text-xs font-medium text-zinc-400 transition-colors hover:bg-zinc-600/20 hover:text-zinc-200"
+                >
+                  Puzzles on lichess.org ↗
+                </a>
+              ) : null;
+            })()}
           </div>
         </div>
       ))}

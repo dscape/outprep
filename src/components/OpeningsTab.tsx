@@ -3,6 +3,7 @@
 import { useState, useMemo } from "react";
 import { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
+import { getLichessTrainingUrl } from "@/lib/lichess-training";
 
 interface OpeningCoverage {
   analyzed: number;
@@ -255,7 +256,27 @@ function OpeningRow({
           </td>
         )}
         <td className="py-2 pr-4 font-mono text-green-400">{op.eco}</td>
-        <td className="py-2 pr-4 max-w-[200px] truncate">{op.name}</td>
+        <td className="py-2 pr-4 max-w-[200px] truncate">
+          {op.name}
+          {(() => {
+            const url = getLichessTrainingUrl(op.family ?? op.name);
+            return url ? (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="ml-1.5 inline-flex items-center text-zinc-500 hover:text-green-400 transition-colors"
+                title="Practice puzzles on lichess.org"
+              >
+                <svg className="inline h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                  <path d="M3.5 3.5h5v5" />
+                  <path d="M8.5 3.5L3 9" />
+                </svg>
+              </a>
+            ) : null;
+          })()}
+        </td>
         <td className="py-2 pr-4 text-right font-mono">{op.games}</td>
         <td className="py-2 pr-4 text-right font-mono">{op.pct}%</td>
         <td className="py-2 pr-4">

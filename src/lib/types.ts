@@ -46,6 +46,7 @@ export interface OpeningStats {
 export interface PrepTip {
   title: string;
   description: string;
+  openingName?: string;
 }
 
 export interface FIDEEstimate {

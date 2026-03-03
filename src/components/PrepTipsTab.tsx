@@ -1,6 +1,7 @@
 "use client";
 
 import { PrepTip } from "@/lib/types";
+import { getLichessTrainingUrl } from "@/lib/lichess-training";
 
 interface PrepTipsTabProps {
   tips: PrepTip[];
@@ -31,6 +32,23 @@ export default function PrepTipsTab({ tips }: PrepTipsTabProps) {
               <p className="mt-1 text-sm text-zinc-400 leading-relaxed">
                 {tip.description}
               </p>
+              {tip.openingName && (() => {
+                const url = getLichessTrainingUrl(tip.openingName!);
+                return url ? (
+                  <a
+                    href={url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-2 inline-flex items-center gap-1 text-xs text-zinc-500 hover:text-green-400 transition-colors"
+                  >
+                    Practice puzzles on lichess.org
+                    <svg className="h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
+                      <path d="M3.5 3.5h5v5" />
+                      <path d="M8.5 3.5L3 9" />
+                    </svg>
+                  </a>
+                ) : null;
+              })()}
             </div>
           </div>
         </div>

@@ -508,6 +508,7 @@ export function generatePrepTips(
     tips.push({
       title: `Prepare against ${topWhite.name}`,
       description: `They play ${topWhite.name} (${topWhite.eco}) in ${topWhite.pct}% of their White games. Study the main lines and have a solid response ready.`,
+      openingName: topWhite.family ?? topWhite.name,
     });
   }
 
@@ -515,6 +516,7 @@ export function generatePrepTips(
     tips.push({
       title: `Expect ${topBlack.name} as Black`,
       description: `Their go-to defense is ${topBlack.name} (${topBlack.eco}), used in ${topBlack.pct}% of Black games. Prepare your attacking repertoire against this.`,
+      openingName: topBlack.family ?? topBlack.name,
     });
   }
 
@@ -547,6 +549,7 @@ export function generatePrepTips(
       tips.push({
         title: `Exploit ${weakness.area.replace("Weak in ", "")} weakness`,
         description: weakness.description,
+        openingName: weakness.openingName,
       });
     }
   }
