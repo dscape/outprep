@@ -13,7 +13,8 @@
 
 import postgres from "postgres";
 
-const connectionString = process.env.DATABASE_URL;
+const connectionString =
+  process.env.DATABASE_URL || process.env.OUTPREP_SQL_DATABASE_URL;
 
 /**
  * Raw postgres client instance.

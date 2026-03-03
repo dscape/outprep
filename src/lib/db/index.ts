@@ -36,7 +36,9 @@ const IS_DEV = process.env.NODE_ENV === "development";
  * Whether Postgres is configured. When false (e.g. local dev without Docker,
  * or during build without DATABASE_URL), all queries return empty/null gracefully.
  */
-const HAS_POSTGRES = !!process.env.DATABASE_URL;
+const HAS_POSTGRES = !!(
+  process.env.DATABASE_URL || process.env.OUTPREP_SQL_DATABASE_URL
+);
 
 // ─── Player queries ──────────────────────────────────────────────────────────
 
