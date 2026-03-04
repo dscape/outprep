@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server";
-import { getPlayerGames } from "@/lib/practice-blob";
+import { getPlayerGamePgns } from "@/lib/db";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
-  const games = await getPlayerGames(slug);
+  const games = await getPlayerGamePgns(slug);
 
   if (!games) {
     return Response.json({ error: "Player not found" }, { status: 404 });

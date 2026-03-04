@@ -1,8 +1,7 @@
 import { NextRequest } from "next/server";
-import { getPlayerGames } from "@/lib/practice-blob";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
-import { getPlayerByFideId, formatPlayerName } from "@/lib/db";
+import { getPlayerByFideId, getPlayerGamePgns, formatPlayerName } from "@/lib/db";
 import type { PlayerRatings } from "@/lib/types";
 
 /**
@@ -39,7 +38,7 @@ export async function GET(
   // Fallback: use ?name= param or derive from slug
   const nameParam = req.nextUrl.searchParams.get("name");
   const playerName = displayName || nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
-  const rawPgns = await getPlayerGames(slug);
+  const rawPgns = await getPlayerGamePgns(slug);
 
   if (!rawPgns || rawPgns.length === 0) {
     return Response.json({ error: "No games found for this player" }, { status: 404 });

@@ -4,7 +4,6 @@ import { notFound, permanentRedirect } from "next/navigation";
 import {
   getGame,
   getGameAliasTarget,
-  getGamePgn,
   formatPlayerName,
 } from "@/lib/db";
 import { TitleBadge } from "@/components/title-badge";
@@ -119,8 +118,7 @@ export default async function GamePage({
     notFound();
   }
 
-  // Fetch PGN from Blob (stored separately to keep DB small)
-  const pgn = await getGamePgn(slug);
+  const pgn = game.pgn || null;
 
   const white = formatPlayerName(game.whiteName);
   const black = formatPlayerName(game.blackName);

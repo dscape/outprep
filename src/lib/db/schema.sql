@@ -47,7 +47,7 @@ CREATE INDEX idx_player_aliases_canonical ON player_aliases (canonical_slug);
 
 -- ─── Games ───────────────────────────────────────────────────────────────────
 -- Replaces fide/game-details/{slug}.json (3M files) + fide/game-index.json (1.4GB)
--- PGN text stored in Vercel Blob at fide/game-pgn/{slug}.txt (not in DB)
+-- PGN text stored directly in this table (TOAST-compressed by Postgres)
 
 CREATE TABLE games (
   id               SERIAL PRIMARY KEY,
@@ -72,6 +72,7 @@ CREATE TABLE games (
   opening          TEXT,
   variation        TEXT,
   result           TEXT NOT NULL,
+  pgn              TEXT,
   avg_elo          SMALLINT GENERATED ALWAYS AS ((white_elo + black_elo) / 2) STORED
 );
 

@@ -13,11 +13,6 @@
  */
 
 import { sql } from "./connection";
-import { list } from "@vercel/blob";
-
-// In-memory cache for blob URLs to reduce list() API calls (quota-sensitive)
-const blobUrlCache = new Map<string, { url: string | null; ts: number }>();
-const BLOB_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
 // Re-export types needed by consumers
 export type {
@@ -29,8 +24,6 @@ import type {
   FIDEPlayer,
   GameDetail,
 } from "../../../packages/fide-pipeline/src/types";
-
-const IS_DEV = process.env.NODE_ENV === "development";
 
 /**
  * Whether Postgres is configured. When false (e.g. local dev without Docker,
@@ -349,64 +342,40 @@ function mapRowToGameDetail(row: Record<string, unknown>): GameDetail {
     opening: (row.opening as string) ?? null,
     variation: (row.variation as string) ?? null,
     result: row.result as string,
-    pgn: "", // PGN stored in Blob, not in DB — use getGamePgn()
+    pgn: (row.pgn as string) ?? "",
   };
 }
 
-// ─── Game PGN (Blob) ────────────────────────────────────────────────────────
+// ─── Game PGN ────────────────────────────────────────────────────────────────
 
 /**
- * Fetch a game's PGN text from Vercel Blob.
- * PGN is stored at fide/game-pgn/{slug}.txt to keep the DB small.
- * In dev, falls back to reading from local game-details JSONL.
+ * Fetch a game's PGN text from the games table.
  */
 export async function getGamePgn(slug: string): Promise<string | null> {
-  // Dev fallback: read PGN from local game-details file
-  if (IS_DEV) {
-    const localPgn = await loadLocalGamePgn(slug);
-    if (localPgn) return localPgn;
-  }
-
+  if (!HAS_POSTGRES) return null;
   try {
-    const blobPath = `fide/game-pgn/${slug}.txt`;
-    // Check cache first to avoid burning list() quota
-    let url: string | null = null;
-    const cached = blobUrlCache.get(blobPath);
-    if (cached && Date.now() - cached.ts < BLOB_CACHE_TTL_MS) {
-      url = cached.url;
-    } else {
-      const result = await list({ prefix: blobPath, limit: 1 });
-      url = result.blobs.length > 0 ? result.blobs[0].url : null;
-      blobUrlCache.set(blobPath, { url, ts: Date.now() });
-    }
-    if (!url) return null;
-    const res = await fetch(url, { next: { revalidate: 604800 } });
-    return res.ok ? await res.text() : null;
+    const { rows } = await sql`SELECT pgn FROM games WHERE slug = ${slug}`;
+    if (rows.length === 0) return null;
+    return (rows[0].pgn as string) ?? null;
   } catch {
     return null;
   }
 }
 
 /**
- * Dev fallback: load PGN from the local game-details JSONL or per-game JSON files.
+ * Get all PGN strings for a player's games (for practice mode).
+ * Uses UNION ALL for optimal index usage on white_slug / black_slug.
  */
-async function loadLocalGamePgn(slug: string): Promise<string | null> {
+export async function getPlayerGamePgns(slug: string): Promise<string[] | null> {
+  if (!HAS_POSTGRES) return null;
   try {
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-
-    // Try per-game JSON file first
-    const gameFile = path.join(
-      process.cwd(),
-      "packages/fide-pipeline/data/processed/game-details",
-      `${slug}.json`,
-    );
-    if (fs.existsSync(gameFile)) {
-      const detail = JSON.parse(fs.readFileSync(gameFile, "utf-8"));
-      return detail.pgn ?? null;
-    }
-
-    return null;
+    const { rows } = await sql`
+      SELECT pgn FROM games WHERE white_slug = ${slug} AND pgn IS NOT NULL
+      UNION ALL
+      SELECT pgn FROM games WHERE black_slug = ${slug} AND pgn IS NOT NULL
+    `;
+    if (rows.length === 0) return null;
+    return rows.map((r) => r.pgn as string);
   } catch {
     return null;
   }

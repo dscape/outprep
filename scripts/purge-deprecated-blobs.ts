@@ -2,13 +2,8 @@
 /**
  * Purge deprecated Blob files that have been migrated to Postgres.
  *
- * Deletes:
- *   fide/index.json, fide/aliases.json, fide/game-index.json, fide/game-aliases.json
- *   fide/players/*    (80K files)
- *   fide/game-details/* (3M files)
- *
- * Keeps:
- *   fide/games/*      (practice PGNs — still served from Blob)
+ * All FIDE data (including PGNs) is now stored in Postgres.
+ * This script deletes all remaining Blob files.
  */
 
 import { list, del } from "@vercel/blob";
@@ -20,6 +15,8 @@ const DEPRECATED_PREFIXES = [
   "fide/game-aliases.json",
   "fide/players/",
   "fide/game-details/",
+  "fide/game-pgn/",   // Individual game PGNs (migrated to Postgres)
+  "fide/games/",      // Per-player PGN arrays (migrated to Postgres)
 ];
 
 // Also handle the smoke test prefix
@@ -119,7 +116,7 @@ async function main() {
   }
 
   console.log(`\n=== Total: ${totalDeleted} files ${DRY_RUN ? "would be " : ""}deleted ===`);
-  console.log("\nKept: fide/games/* (practice PGNs)\n");
+  console.log("\nAll FIDE blob data has been migrated to Postgres.\n");
 }
 
 main().catch((e) => {

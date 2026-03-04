@@ -1,6 +1,6 @@
 # @outprep/fide-pipeline
 
-Download, process, and upload FIDE player data from [This Week in Chess (TWIC)](https://theweekinchess.com/) PGN archives. Enriches players with official FIDE names, ratings, and federation data.
+Download, process, and seed FIDE player and game data from [This Week in Chess (TWIC)](https://theweekinchess.com/) PGN archives into PostgreSQL. Enriches players with official FIDE names, ratings, and federation data.
 
 ## Prerequisites
 
@@ -20,8 +20,7 @@ cp .env.example .env
 
 | Variable | Required for | How to get it |
 |----------|-------------|---------------|
-| `DATABASE_URL` | `seed-db`, `full`, cron jobs, the Next.js app | Local: `postgres://outprep:outprep@localhost:5432/outprep` (via Docker Compose). Production: your Neon / Supabase / Railway connection string. |
-| `BLOB_READ_WRITE_TOKEN` | `seed-blob`, `smoke` — game PGN storage + practice mode files | [Vercel Dashboard](https://vercel.com/dashboard) → Storage → Blob → Tokens |
+| `DATABASE_URL` | `seed-db`, `full`, `smoke`, cron jobs, the Next.js app | Local: `postgres://outprep:outprep@localhost:5432/outprep` (via Docker Compose). Production: your Neon / Supabase / Railway connection string. |
 
 ### 2. Start local PostgreSQL
 
@@ -31,19 +30,9 @@ docker compose up -d
 
 This starts a Postgres 16 container and auto-creates all tables from `src/lib/db/schema.sql`. The database is persisted in a Docker volume.
 
-> **Production:** Set `DATABASE_URL` to your hosted Postgres instance. Run the schema manually if tables don't exist — `seed` will create them automatically via `ensureSchema()`.
+> **Production:** Set `DATABASE_URL` to your hosted Postgres instance. Run the schema manually if tables don't exist — `seed-db` will create them automatically via `ensureSchema()`.
 
-### 3. Create a Blob store (first time only)
-
-Blob storage is used for game PGN text and per-player game arrays for practice mode (player/game metadata lives in Postgres).
-
-1. Go to [vercel.com/dashboard](https://vercel.com/dashboard)
-2. Select your project → **Storage** tab → **Create Database** → **Blob**
-3. Name it (e.g. `outprep-blob`) and click **Create**
-4. Go to the new store → **Tokens** tab → **Create Token**
-5. Copy the token (starts with `vercel_blob_...`) into your `.env` file
-
-### 4. FIDE rating list (for name + rating enrichment)
+### 3. FIDE rating list (for name + rating enrichment)
 
 The FIDE rating list is **downloaded automatically** by the pipeline when needed. You can also download it manually:
 
@@ -65,54 +54,45 @@ The zip contains one file (`players_list_foa.txt`) in fixed-width format with al
 ## Quick Start
 
 ```bash
-# Smoke test — download 1 TWIC issue, enrich with FIDE data (no upload)
+# Smoke test — download 1 TWIC issue, enrich with FIDE data (local only)
 npm run fide-pipeline -- smoke --skip-upload
 
-# Smoke test with Blob upload (uses fide-smoke/ prefix)
+# Smoke test with Postgres seed
 npm run fide-pipeline -- smoke
 ```
 
 ## Full Pipeline (seed database from scratch)
 
-The pipeline has three phases: **download** → **process** → **seed-db** + **seed-blob**.
+The pipeline has three phases: **download** → **process** → **seed-db**.
 
-Database and Blob uploads are separate commands so each can be run and tuned independently.
+All data — including game PGN text — is stored in Postgres.
 
 ```bash
-# All-in-one (downloads, processes, seeds Postgres — no Blob):
+# All-in-one (downloads, processes, seeds Postgres):
 npm run fide-pipeline -- full --from 1433 --to 1633
 
 # Or run each step separately:
 npm run fide-pipeline -- download --from 925 --to 1633
 npm run fide-pipeline -- process --min-games 3
 npm run fide-pipeline -- seed-db
-npm run fide-pipeline -- seed-blob
 ```
 
 ### What `seed-db` does
 
-Populates Postgres from processed data on disk:
+Populates Postgres from processed data on disk (including PGN text for every game):
 
-1. Creates all tables if they don't exist (`ensureSchema`)
+1. Creates all tables if they don't exist (`ensureSchema`) — includes idempotent migration to add `pgn` column
 2. Upserts players (batch 100), player aliases (batch 200)
-3. Drops game indexes → bulk-inserts game metadata (batch 500) → recreates indexes
+3. Drops game indexes → bulk-inserts games with PGN text (batch 500) → recreates indexes
 4. Upserts game aliases (batch 500)
 5. Tracks each run in `pipeline_runs`
 
 The index drop/create optimization makes bulk game inserts ~10x faster by avoiding per-row index maintenance on 6 B-tree indexes during the insert.
 
-### What `seed-blob` does
-
-Uploads game data to Vercel Blob (runs independently of Postgres):
-
-1. Uploads individual game PGN text from JSONL (`fide/game-pgn/{slug}.txt`)
-2. Uploads per-player game arrays (`fide/games/{slug}.json`) for practice mode
-
 ### Interrupting and resuming
 
 - **Postgres upserts are idempotent** — you can re-run `seed-db` safely. Existing rows are handled via `ON CONFLICT`.
-- **Blob uploads are idempotent** — you can re-run `seed-blob` safely. Existing files are overwritten.
-- **Rate limiting**: If Vercel Blob returns `BlobServiceRateLimited`, the upload retries automatically with backoff (up to 5 retries per file).
+- The `ON CONFLICT` clause also backfills PGN text for games that were inserted before the migration (i.e., rows where `pgn IS NULL`).
 
 ## Vercel Cron Jobs (automatic updates)
 
@@ -132,13 +112,11 @@ Both routes use `maxDuration = 300` (5-minute timeout, requires Vercel Pro plan)
 > npm run fide-pipeline -- download --from <next> --to <next>
 > npm run fide-pipeline -- process --min-games 3
 > npm run fide-pipeline -- seed-db
-> npm run fide-pipeline -- seed-blob
 >
 > # Monthly: update FIDE ratings
 > npm run fide-pipeline -- download-ratings --force
 > npm run fide-pipeline -- process --min-games 3
 > npm run fide-pipeline -- seed-db
-> npm run fide-pipeline -- seed-blob
 > ```
 
 ## FIDE Enrichment
@@ -163,7 +141,7 @@ End-to-end test with a single TWIC issue.
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--issue <n>` | 1633 | TWIC issue to test with |
-| `--skip-upload` | false | Skip Vercel Blob upload |
+| `--skip-upload` | false | Skip Postgres seed (local-only test) |
 
 ### `download`
 
@@ -193,7 +171,7 @@ Parse downloaded PGNs, aggregate player data, and enrich with FIDE ratings.
 
 ### `seed-db`
 
-Seed Postgres from processed data on disk. Creates tables if they don't exist. Drops and recreates game indexes around the bulk insert for speed.
+Seed Postgres from processed data on disk (including PGN text). Creates tables if they don't exist. Drops and recreates game indexes around the bulk insert for speed.
 
 Requires `DATABASE_URL`.
 
@@ -203,28 +181,17 @@ Requires `DATABASE_URL`.
 
 > Aliases: `seed`, `upload-pg` (for backwards compatibility)
 
-### `seed-blob`
+### `seed-blob` *(deprecated)*
 
-Upload game PGNs and per-player game files to Vercel Blob. Runs independently of Postgres — you can run this before, after, or in parallel with `seed-db`.
+Previously uploaded game PGNs and per-player game files to Vercel Blob. PGN data is now stored directly in Postgres via `seed-db`. This command prints a deprecation notice and exits.
 
-Requires `BLOB_READ_WRITE_TOKEN`.
+### `upload` *(deprecated)*
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--skip-to <step>` | — | Skip to: `game-pgns`, `player-games` |
-
-### `upload`
-
-Legacy: upload all processed data to Vercel Blob only (no Postgres). Not needed for normal operation — use `seed` instead.
-
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--prefix <p>` | fide | Blob path prefix |
-| `--fresh` | false | Ignore resume state, re-upload everything |
+Previously uploaded all processed data to Vercel Blob. All data is now stored in Postgres via `seed-db`. This command prints a deprecation notice and exits.
 
 ### `full`
 
-Download, process, and seed in one command.
+Download, process, and seed Postgres in one command. This is the recommended way to run the pipeline end-to-end — all data including PGNs ends up in Postgres.
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -235,37 +202,29 @@ Download, process, and seed in one command.
 
 ## Database Schema
 
-All player and game data lives in PostgreSQL (see `src/lib/db/schema.sql`):
+All player, game, and PGN data lives in PostgreSQL (see `src/lib/db/schema.sql`):
 
 | Table | Replaces | Purpose |
 |-------|----------|---------|
 | `players` | `fide/players/*.json` + `fide/index.json` | Player profiles, ratings, stats, openings |
 | `player_aliases` | `fide/aliases.json` | Old slug → canonical slug for 301 redirects |
-| `games` | `fide/game-details/*.json` + `fide/game-index.json` | Game metadata (PGN text stored in Vercel Blob) |
+| `games` | `fide/game-details/*.json` + `fide/game-index.json` + `fide/game-pgn/*.txt` | Game metadata + PGN text (TOAST-compressed) |
 | `game_aliases` | `fide/game-aliases.json` | Legacy game slug → canonical slug |
 | `pipeline_runs` | — | Tracks processed TWIC issues and FIDE rating updates |
 
 ## Data Storage Architecture
 
-The app uses a **hybrid storage model**:
+All data lives in **Postgres** — players, games, PGN text, aliases, and pipeline run metadata.
 
-- **Postgres** — structured data: players, games metadata, aliases (fast queries, indexing, fuzzy search)
-- **Vercel Blob** — raw text: game PGNs and per-player game arrays (keeps the database small)
+Game PGN text is stored in a `TEXT` column on the `games` table. Postgres automatically TOAST-compresses large text values, so ~3M games × 2-5KB PGN ≈ 3-9GB on disk (vs 6-15GB uncompressed).
 
-### What lives in Blob
+This eliminates the need for Vercel Blob and enables:
+- **SQL-based game search** (e.g., by opening, ECO code, player matchup)
+- **Faster response times** (single DB query vs HTTP round-trip to Blob)
+- **Simpler pipeline** (no separate `seed-blob` step)
+- **Self-sufficient `full` command** (download → process → seed-db, done)
 
-```
-fide/
-├── games/
-│   ├── magnus-carlsen-1503014.json     # ~100 KB (raw PGN array for practice mode)
-│   ├── hikaru-nakamura-2016192.json
-│   └── ...
-└── game-pgn/
-    ├── {game-slug}.txt                 # Individual game PGN text (for game page replay)
-    └── ...
-```
-
-> In local development, the app falls back to reading from `packages/fide-pipeline/data/processed/` when Blob is not configured.
+> **Migration note:** Vercel Blob was previously used for game PGN text (`fide/game-pgn/`) and per-player game arrays (`fide/games/`). These prefixes are now listed in `scripts/purge-deprecated-blobs.ts` for cleanup.
 
 ### URL Slug Design
 
@@ -289,11 +248,8 @@ npm run fide-pipeline -- download --from 1634 --to 1634
 # Re-process all downloaded data (includes FIDE enrichment)
 npm run fide-pipeline -- process --min-games 3
 
-# Seed Postgres (fast — no network Blob uploads)
+# Seed Postgres (players, games, PGNs — all in one step)
 npm run fide-pipeline -- seed-db
-
-# Upload PGNs + practice files to Blob (can run in parallel or after)
-npm run fide-pipeline -- seed-blob
 ```
 
 ## Troubleshooting
@@ -302,17 +258,9 @@ npm run fide-pipeline -- seed-blob
 
 Make sure Docker is running (`docker compose up -d`) and your `.env` has the correct `DATABASE_URL`. For production, check your Neon/Supabase connection string.
 
-### "BLOB_READ_WRITE_TOKEN not set"
-
-Needed for uploading game PGNs and practice mode files to Blob. Without it, `seed` and `full` will populate Postgres but skip Blob uploads (game replay and practice mode won't work in production). See [Setup](#setup) above.
-
 ### "No .pgn file found in zip archive"
 
 Some TWIC issues may have non-standard zip structure. The download script skips failed issues and continues.
-
-### Rate limiting during upload
-
-The upload automatically retries with backoff when Vercel Blob returns `BlobServiceRateLimited`. If it persists, the upload state is saved — just re-run the same command to resume.
 
 ### "Zip not found" for FIDE enrichment
 
@@ -320,4 +268,8 @@ If you see `[fide-enrichment] Zip not found`, run `npm run fide-pipeline -- down
 
 ### Large data directory
 
-Downloaded PGN files are cached in `packages/fide-pipeline/data/`. Delete the `data/` directory to free disk space after uploading.
+Downloaded PGN files are cached in `packages/fide-pipeline/data/`. Delete the `data/` directory to free disk space after seeding.
+
+### Backfilling PGN for existing games
+
+If your database was seeded before the PGN migration, re-run `seed-db` with the same `game-details.jsonl` on disk. The `ON CONFLICT` clause uses `SET pgn = EXCLUDED.pgn WHERE games.pgn IS NULL` to backfill PGN for existing rows without touching other columns.

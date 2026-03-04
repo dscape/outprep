@@ -471,11 +471,27 @@ function insertRecentGame(
   }
 }
 
+/**
+ * Fast FNV-1a 32-bit hash. Returns an unsigned 32-bit integer.
+ * Used to replace string keys in large Sets/Maps — saves ~1.4 GB at 3M games.
+ * At 3M entries the birthday-paradox collision rate is ~0.03%, which is
+ * acceptable: a seenKeys collision lets one duplicate game through,
+ * a slugCounts collision adds an unnecessary suffix to a slug.
+ */
+function fnv1a32(s: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
 /** Mutable state carried across PGN file chunks during incremental game processing. */
 export interface GameProcessingState {
-  seenKeys: Set<string>;
-  slugCounts: Map<string, number>;
-  legacySlugCounts: Map<string, number>;
+  seenKeys: Set<number>;
+  slugCounts: Map<number, number>;
+  legacySlugCounts: Map<number, number>;
   /** FD for index entries JSONL temp file (streamed to disk instead of in-memory array). */
   indexEntriesFd: number;
   totalGamesIndexed: number;
@@ -541,9 +557,9 @@ export function processGameDetailsChunk(
     const headers = extractHeaders(game.rawPgn);
     const round = headers["Round"] && headers["Round"] !== "?" ? headers["Round"] : null;
 
-    const dedupKey = `${game.whiteFideId}:${game.blackFideId}:${game.event}:${game.date}:${round ?? ""}`;
-    if (state.seenKeys.has(dedupKey)) continue;
-    state.seenKeys.add(dedupKey);
+    const dedupHash = fnv1a32(`${game.whiteFideId}:${game.blackFideId}:${game.event}:${game.date}:${round ?? ""}`);
+    if (state.seenKeys.has(dedupHash)) continue;
+    state.seenKeys.add(dedupHash);
 
     const whitePlayer = state.playerByFideId.get(game.whiteFideId);
     const blackPlayer = state.playerByFideId.get(game.blackFideId);
@@ -555,14 +571,16 @@ export function processGameDetailsChunk(
     const blackFederation = blackPlayer?.federation ?? null;
 
     let slug = generateGameSlug(whiteName, blackName, game.event, game.date, round, game.whiteFideId, game.blackFideId);
-    const count = (state.slugCounts.get(slug) ?? 0) + 1;
-    state.slugCounts.set(slug, count);
+    const slugHash = fnv1a32(slug);
+    const count = (state.slugCounts.get(slugHash) ?? 0) + 1;
+    state.slugCounts.set(slugHash, count);
     if (count > 1) slug = `${slug}-${count}`;
 
     // Compute legacy slug for alias mapping (old URL → new URL redirect)
     let legacySlug = generateLegacyGameSlug(whiteName, blackName, game.event, game.date, round);
-    const legacyCount = (state.legacySlugCounts.get(legacySlug) ?? 0) + 1;
-    state.legacySlugCounts.set(legacySlug, legacyCount);
+    const legacyHash = fnv1a32(legacySlug);
+    const legacyCount = (state.legacySlugCounts.get(legacyHash) ?? 0) + 1;
+    state.legacySlugCounts.set(legacyHash, legacyCount);
     if (legacyCount > 1) legacySlug = `${legacySlug}-${legacyCount}`;
     // Stream alias to disk instead of accumulating in memory
     writeSync(state.gameAliasesFd, legacySlug + "\t" + slug + "\n");

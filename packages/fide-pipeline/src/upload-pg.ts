@@ -1,85 +1,21 @@
 /**
  * Upload processed player/game data to Postgres.
  *
- * Replaces the Blob-based upload (millions of HTTP PUTs, ~24 hours) with
- * batched SQL inserts (~30-60 minutes for 80K players + 3M games).
- *
- * Game PGN text is stored in Vercel Blob (not Postgres) to keep the
- * database under ~1.7 GB. Each game's PGN is uploaded to:
- *   fide/game-pgn/{slug}.txt
+ * Batched SQL inserts (~30-60 minutes for 80K players + 3M games).
+ * Game PGN text is stored directly in the games table (TOAST-compressed).
  *
  * Supports:
  * - Batch UPSERT for players and aliases
- * - Streaming JSONL → Postgres for game details (3M rows)
- * - PGN upload to Vercel Blob in parallel batches
+ * - Streaming JSONL → Postgres for game details + PGN (3M rows)
  * - Resume via pipeline_runs table
  */
 
 import { sql, sqlTransaction } from "./db";
-import { put, list } from "@vercel/blob";
-import { createReadStream, existsSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
-import { join, dirname } from "node:path";
-import pLimit from "p-limit";
+import { join } from "node:path";
 
 import type { FIDEPlayer, GameDetail } from "./types";
-
-// ─── Blob upload helpers ────────────────────────────────────────────────────
-
-export interface BlobUploadOpts {
-  fresh?: boolean;
-}
-
-/**
- * Retry a function with backoff when rate-limited.
- * Reads `error.retryAfter` (seconds) from BlobServiceRateLimited errors.
- */
-async function retryWithBackoff<T>(
-  fn: () => Promise<T>,
-  maxRetries: number = 5,
-): Promise<T> {
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error: unknown) {
-      const retryAfter = (error as { retryAfter?: number }).retryAfter;
-      if (retryAfter && attempt < maxRetries) {
-        const waitSec = retryAfter + 1;
-        console.log(`  Rate limited, retrying in ${waitSec}s... (attempt ${attempt + 1}/${maxRetries})`);
-        await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
-        continue;
-      }
-      throw error;
-    }
-  }
-  throw new Error("retryWithBackoff: unreachable");
-}
-
-/**
- * List all existing blob pathnames under a prefix.
- * Used to skip already-uploaded blobs on re-runs.
- */
-async function buildExistingBlobSet(prefix: string): Promise<Set<string>> {
-  const existing = new Set<string>();
-  let cursor: string | undefined;
-  let pages = 0;
-
-  do {
-    const result = await retryWithBackoff(() =>
-      list({ prefix, limit: 1000, ...(cursor ? { cursor } : {}) }),
-    );
-    for (const blob of result.blobs) {
-      existing.add(blob.pathname);
-    }
-    cursor = result.hasMore ? result.cursor : undefined;
-    pages++;
-    if (pages % 100 === 0) {
-      console.log(`  Listed ${existing.size.toLocaleString()} existing blobs (${pages} pages)...`);
-    }
-  } while (cursor);
-
-  return existing;
-}
 
 // ─── Player uploads ──────────────────────────────────────────────────────────
 
@@ -282,7 +218,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
     }
   }
 
-  // Insert game metadata (no pgn) into Postgres
+  // Insert game metadata + PGN into Postgres
   const rows = games.map((g) => ({
     slug: g.slug,
     white_name: g.whiteName,
@@ -305,6 +241,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
     opening: g.opening ?? null,
     variation: g.variation ?? null,
     result: g.result,
+    pgn: g.pgn || null,
   }));
 
   await sqlTransaction(async (tx) => {
@@ -314,107 +251,68 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
         'white_fide_id', 'black_fide_id', 'white_elo', 'black_elo',
         'white_title', 'black_title', 'white_federation', 'black_federation',
         'event', 'site', 'date', 'round', 'eco', 'opening', 'variation', 'result',
+        'pgn',
       )}
-      ON CONFLICT (slug) DO NOTHING
+      ON CONFLICT (slug) DO UPDATE SET pgn = EXCLUDED.pgn WHERE games.pgn IS NULL
     `;
   });
 }
 
 /**
- * Upload game PGN text from JSONL to Vercel Blob.
- * Reads the same game-details.jsonl file and uploads each game's PGN
- * to fide/game-pgn/{slug}.txt. Runs independently of DB inserts.
- *
- * Optimisations:
- * - p-limit(100) concurrency instead of fixed batch-of-50
- * - Skip blobs that already exist (via list() prefetch)
- * - Resume from last JSONL line offset on restart
- * - Retry with backoff on rate limiting
+ * Backfill ONLY the pgn column for games that already exist in Postgres.
+ * Much faster than a full upsert: sends only slug + pgn, skips rows that
+ * already have PGN, and doesn't touch indexes or other columns.
  */
-export async function uploadGamePgnsFromJsonl(
+export async function backfillPgnsFromJsonl(
   jsonlPath: string,
-  onProgress?: (uploaded: number, skipped: number) => void,
-  opts?: BlobUploadOpts,
-): Promise<{ uploaded: number; skipped: number }> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return { uploaded: 0, skipped: 0 };
-  if (!existsSync(jsonlPath)) return { uploaded: 0, skipped: 0 };
-
-  const stateFile = join(dirname(jsonlPath), ".blob-pgn-state.json");
-
-  // Load resume state
-  let resumeOffset = 0;
-  if (!opts?.fresh && existsSync(stateFile)) {
-    try {
-      const state = JSON.parse(readFileSync(stateFile, "utf-8"));
-      resumeOffset = state.lineOffset ?? 0;
-      if (resumeOffset > 0) {
-        console.log(`  Resuming from line ${resumeOffset.toLocaleString()}`);
-      }
-    } catch { /* corrupt state, start fresh */ }
-  }
-
-  // Prefetch existing blobs to skip re-uploads
-  let existingBlobs: Set<string> | null = null;
-  if (!opts?.fresh) {
-    console.log("  Listing existing game PGN blobs...");
-    existingBlobs = await buildExistingBlobSet("fide/game-pgn/");
-    console.log(`  Found ${existingBlobs.size.toLocaleString()} existing blobs`);
-  }
+  onProgress?: (count: number, updated: number) => void,
+): Promise<{ scanned: number; updated: number }> {
+  if (!existsSync(jsonlPath)) return { scanned: 0, updated: 0 };
 
   const rl = createInterface({
     input: createReadStream(jsonlPath, { encoding: "utf-8" }),
     crlfDelay: Infinity,
   });
 
-  const limit = pLimit(100);
-  let lineNum = 0;
-  let uploaded = 0;
-  let skipped = 0;
-  let pending: Promise<void>[] = [];
-  const DRAIN_THRESHOLD = 500;
+  let scanned = 0;
+  let updated = 0;
+  let batch: { slug: string; pgn: string }[] = [];
+  const BATCH = 500;
 
   for await (const line of rl) {
-    lineNum++;
-    if (lineNum <= resumeOffset) continue;
     if (!line.trim()) continue;
-
     const game = JSON.parse(line) as GameDetail;
-    if (!game.pgn) { skipped++; continue; }
+    if (game.pgn) {
+      batch.push({ slug: game.slug, pgn: game.pgn });
+    }
+    scanned++;
 
-    const pathname = `fide/game-pgn/${game.slug}.txt`;
-    if (existingBlobs?.has(pathname)) { skipped++; continue; }
-
-    pending.push(
-      limit(async () => {
-        await retryWithBackoff(() =>
-          put(pathname, game.pgn, {
-            access: "public",
-            addRandomSuffix: false,
-          }),
-        );
-        uploaded++;
-      }),
-    );
-
-    // Drain periodically to prevent unbounded memory growth
-    if (pending.length >= DRAIN_THRESHOLD) {
-      await Promise.all(pending);
-      pending = [];
-      writeFileSync(stateFile, JSON.stringify({ lineOffset: lineNum }));
-      onProgress?.(uploaded, skipped);
+    if (batch.length >= BATCH) {
+      updated += await backfillPgnBatch(batch);
+      batch = [];
+      onProgress?.(scanned, updated);
     }
   }
 
-  // Flush remaining
-  if (pending.length > 0) {
-    await Promise.all(pending);
-    onProgress?.(uploaded, skipped);
+  if (batch.length > 0) {
+    updated += await backfillPgnBatch(batch);
+    onProgress?.(scanned, updated);
   }
 
-  // Clean up state file on success
-  try { unlinkSync(stateFile); } catch { /* ok if missing */ }
+  return { scanned, updated };
+}
 
-  return { uploaded, skipped };
+async function backfillPgnBatch(rows: { slug: string; pgn: string }[]): Promise<number> {
+  // Use UPDATE ... FROM VALUES to batch-update only rows where pgn IS NULL
+  const result = await sqlTransaction(async (tx) => {
+    return tx`
+      UPDATE games g
+      SET pgn = v.pgn
+      FROM (VALUES ${tx(rows.map(r => [r.slug, r.pgn]))}) AS v(slug, pgn)
+      WHERE g.slug = v.slug AND g.pgn IS NULL
+    `;
+  });
+  return result?.count ?? 0;
 }
 
 /**
@@ -460,101 +358,6 @@ export async function upsertGameAliases(
   return count;
 }
 
-// ─── Player game files (practice mode) ──────────────────────────────────────
-
-/**
- * Upload per-player game files (fide/games/{slug}.json) to Vercel Blob.
- * These are arrays of raw PGN strings used by practice mode.
- * Only runs if BLOB_READ_WRITE_TOKEN is set.
- *
- * Optimisations:
- * - p-limit(50) concurrency instead of fixed batch-of-10
- * - Skip blobs that already exist (via list() prefetch)
- * - Resume from state file on restart
- * - Retry with backoff on rate limiting
- */
-export async function uploadPlayerGameFiles(
-  gamesDir: string,
-  onProgress?: (uploaded: number, skipped: number, total: number) => void,
-  opts?: BlobUploadOpts,
-): Promise<{ uploaded: number; skipped: number }> {
-  if (!process.env.BLOB_READ_WRITE_TOKEN) return { uploaded: 0, skipped: 0 };
-  if (!existsSync(gamesDir)) return { uploaded: 0, skipped: 0 };
-
-  const stateFile = join(gamesDir, ".blob-games-state.json");
-
-  // Load resume state (set of already-uploaded filenames)
-  let doneSet = new Set<string>();
-  if (!opts?.fresh && existsSync(stateFile)) {
-    try {
-      const state = JSON.parse(readFileSync(stateFile, "utf-8"));
-      doneSet = new Set(state.uploaded ?? []);
-      if (doneSet.size > 0) {
-        console.log(`  Resuming: ${doneSet.size.toLocaleString()} files already uploaded`);
-      }
-    } catch { /* corrupt state, start fresh */ }
-  }
-
-  // Prefetch existing blobs to skip re-uploads
-  let existingBlobs: Set<string> | null = null;
-  if (!opts?.fresh) {
-    console.log("  Listing existing player game blobs...");
-    existingBlobs = await buildExistingBlobSet("fide/games/");
-    console.log(`  Found ${existingBlobs.size.toLocaleString()} existing blobs`);
-  }
-
-  const files = readdirSync(gamesDir).filter((f) => f.endsWith(".json"));
-  const limit = pLimit(50);
-  let uploaded = 0;
-  let skipped = 0;
-  let pending: Promise<void>[] = [];
-  const DRAIN_THRESHOLD = 200;
-
-  for (const fileName of files) {
-    if (doneSet.has(fileName)) { skipped++; continue; }
-
-    const slug = fileName.replace(/\.json$/, "");
-    const pathname = `fide/games/${slug}.json`;
-    if (existingBlobs?.has(pathname)) { skipped++; continue; }
-
-    const filePath = join(gamesDir, fileName);
-
-    pending.push(
-      limit(async () => {
-        const content = readFileSync(filePath, "utf-8");
-        await retryWithBackoff(() =>
-          put(pathname, content, {
-            access: "public",
-            contentType: "application/json",
-            addRandomSuffix: false,
-          }),
-        );
-        uploaded++;
-        doneSet.add(fileName);
-      }),
-    );
-
-    // Drain periodically
-    if (pending.length >= DRAIN_THRESHOLD) {
-      await Promise.all(pending);
-      pending = [];
-      writeFileSync(stateFile, JSON.stringify({ uploaded: [...doneSet] }));
-      onProgress?.(uploaded, skipped, files.length);
-    }
-  }
-
-  // Flush remaining
-  if (pending.length > 0) {
-    await Promise.all(pending);
-    onProgress?.(uploaded, skipped, files.length);
-  }
-
-  // Clean up state file on success
-  try { unlinkSync(stateFile); } catch { /* ok if missing */ }
-
-  return { uploaded, skipped };
-}
-
 // ─── Pipeline tracking ───────────────────────────────────────────────────────
 
 export async function recordPipelineRun(
@@ -595,9 +398,7 @@ export async function failPipelineRun(id: number, error: string): Promise<void> 
 /**
  * Run the schema SQL to create tables if they don't exist.
  * Safe to run multiple times (uses IF NOT EXISTS / ON CONFLICT).
- *
- * Note: pgn column is NOT in the games table — PGN text is stored in
- * Vercel Blob at fide/game-pgn/{slug}.txt to keep the DB small (~1.7 GB).
+ * Also runs idempotent migrations for existing databases.
  */
 export async function ensureSchema(): Promise<void> {
   // Check if tables exist
@@ -669,6 +470,7 @@ export async function ensureSchema(): Promise<void> {
         opening          TEXT,
         variation        TEXT,
         result           TEXT NOT NULL,
+        pgn              TEXT,
         avg_elo          SMALLINT GENERATED ALWAYS AS ((white_elo + black_elo) / 2) STORED
       )
     `;
@@ -706,6 +508,17 @@ export async function ensureSchema(): Promise<void> {
     await sql`CREATE INDEX IF NOT EXISTS idx_players_name_trgm ON players USING GIN (name gin_trgm_ops)`;
 
     console.log("  Schema created.");
+  }
+
+  // Idempotent migration: add pgn column to existing games table
+  const { rows: pgnCol } = await sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'games' AND column_name = 'pgn'
+  `;
+  if (pgnCol.length === 0) {
+    console.log("  Adding pgn column to games table...");
+    await sql`ALTER TABLE games ADD COLUMN pgn TEXT`;
+    console.log("  pgn column added.");
   }
 }
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * FIDE pipeline CLI — download TWIC data, process players, upload to Vercel Blob.
+ * FIDE pipeline CLI — download TWIC data, process players, seed Postgres.
  */
 
 import { Command } from "commander";
@@ -13,15 +13,14 @@ import {
   buildPlayerIndex,
   normalizePlayerName,
 } from "./aggregate";
-import { uploadAllFromDisk } from "./upload";
+// import { uploadAllFromDisk } from "./upload"; // DEPRECATED: Blob uploads removed
 import {
   ensureSchema,
   upsertPlayers,
   upsertPlayerAliases,
   upsertGamesFromJsonl,
   upsertGameAliases,
-  uploadPlayerGameFiles,
-  uploadGamePgnsFromJsonl,
+  backfillPgnsFromJsonl,
   dropGameIndexes,
   createGameIndexes,
   recordPipelineRun,
@@ -363,7 +362,8 @@ async function processTwoPass(
     process.stdout.write(`\r  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: processing ${games.length} games...\n`);
 
     // Batch JSONL appends for this file's games (one PGN file at a time in memory)
-    const batchAppends = new Map<string, string>();
+    // Use string[] instead of string concatenation to avoid O(n²) intermediate strings
+    const batchAppends = new Map<string, string[]>();
 
     for (const game of games) {
       const whiteSlug =
@@ -376,18 +376,22 @@ async function processTwoPass(
       const jsonLine = JSON.stringify(game.rawPgn) + "\n";
 
       if (whiteSlug) {
-        batchAppends.set(whiteSlug, (batchAppends.get(whiteSlug) ?? "") + jsonLine);
+        let arr = batchAppends.get(whiteSlug);
+        if (!arr) { arr = []; batchAppends.set(whiteSlug, arr); }
+        arr.push(jsonLine);
         slugsWithGames.add(whiteSlug);
       }
       if (blackSlug) {
-        batchAppends.set(blackSlug, (batchAppends.get(blackSlug) ?? "") + jsonLine);
+        let arr = batchAppends.get(blackSlug);
+        if (!arr) { arr = []; batchAppends.set(blackSlug, arr); }
+        arr.push(jsonLine);
         slugsWithGames.add(blackSlug);
       }
     }
 
     // Flush batch to JSONL files on disk
     for (const [slug, lines] of batchAppends) {
-      appendFileSync(join(GAMES_TEMP_DIR, `${slug}.jsonl`), lines);
+      appendFileSync(join(GAMES_TEMP_DIR, `${slug}.jsonl`), lines.join(""));
     }
 
     // Write game details to JSONL immediately (no accumulation)
@@ -600,36 +604,18 @@ program
 
     console.log(`\n  Saved data to ${PROCESSED_DIR}/ (${players.length} players, ${gameFilesWritten} game files, ${gameDetailFilesWritten} game pages, ${Object.keys(aliasMap).length} aliases, ${Object.keys(gameAliasMap).length} game aliases)`);
 
-    // 6. Upload (optional)
+    // 6. Upload to Postgres (optional)
     if (!opts.skipUpload) {
-      console.log("\nStep 4: Upload to Vercel Blob (fide-smoke/ prefix)");
-
-      if (!process.env.BLOB_READ_WRITE_TOKEN) {
-        console.error(
-          "  BLOB_READ_WRITE_TOKEN not set. Set it or use --skip-upload."
-        );
-        console.error(
-          "  Get a token from: Vercel Dashboard → Storage → Blob → Tokens"
-        );
-        process.exit(1);
+      if (!process.env.DATABASE_URL) {
+        console.log("\nStep 4: Upload skipped (DATABASE_URL not set)");
+      } else {
+        console.log("\nStep 4: Seed Postgres");
+        await ensureSchema();
+        await upsertPlayers(players);
+        await upsertPlayerAliases(players);
+        await upsertGamesFromJsonl(GAME_DETAILS_JSONL);
+        console.log("  Postgres seeded.");
       }
-
-      const result = await uploadAllFromDisk(players, index, aliasMap, GAMES_DIR, {
-        prefix: "fide-smoke",
-        gameDetailsJsonl: GAME_DETAILS_JSONL,
-        gameDetailCount: gameDetailFilesWritten,
-        gameIndex,
-        onProgress: (uploaded, total) => {
-          if (uploaded % 100 === 0 || uploaded === total) {
-            console.log(`  Uploaded ${uploaded}/${total}`);
-          }
-        },
-      });
-
-      console.log(`\n  Index URL: ${result.indexUrl}`);
-      console.log(`  Players uploaded: ${result.playersUploaded}`);
-      console.log(`  Game files uploaded: ${result.gamesUploaded}`);
-      console.log(`  Game pages uploaded: ${result.gameDetailsUploaded}`);
     } else {
       console.log("\nStep 4: Upload skipped (--skip-upload)");
     }
@@ -640,9 +626,6 @@ program
     console.log(`  Games parsed:    ${games.length}`);
     console.log(`  Unique players:  ${players.length}`);
     console.log(`  Parse time:      ${elapsed}s`);
-    if (!opts.skipUpload && process.env.BLOB_READ_WRITE_TOKEN) {
-      console.log(`  Blob prefix:     fide-smoke/`);
-    }
     console.log("");
   });
 
@@ -722,88 +705,15 @@ program
     await processTwoPass(pgnFiles, { minGames, minElo });
   });
 
-// ─── upload ───────────────────────────────────────────────────────────────────
+// ─── upload (deprecated) ─────────────────────────────────────────────────────
 
 program
   .command("upload")
-  .description("Upload processed data to Vercel Blob")
-  .option("--prefix <p>", "Blob path prefix", "fide")
-  .action(async (opts) => {
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      console.error("BLOB_READ_WRITE_TOKEN environment variable is required.");
-      console.error("Get a token from: Vercel Dashboard → Storage → Blob → Tokens");
-      process.exit(1);
-    }
-
-    ensureDirs();
-
-    const indexPath = join(PROCESSED_DIR, "index.json");
-    const playersPath = join(PROCESSED_DIR, "players.json");
-
-    if (!existsSync(indexPath) || !existsSync(playersPath)) {
-      console.error("Processed data not found. Run 'process' first.");
-      process.exit(1);
-    }
-
-    if (!existsSync(GAMES_DIR)) {
-      console.error("Game files not found at games/. Run 'process' first.");
-      process.exit(1);
-    }
-
-    const index = JSON.parse(readFileSync(indexPath, "utf-8"));
-    const players: FIDEPlayer[] = JSON.parse(readFileSync(playersPath, "utf-8"));
-
-    // Load aliases
-    const aliasesPath = join(PROCESSED_DIR, "aliases.json");
-    const aliases: Record<string, string> = existsSync(aliasesPath)
-      ? JSON.parse(readFileSync(aliasesPath, "utf-8"))
-      : buildAliasMap(players);
-
-    const gameFileCount = readdirSync(GAMES_DIR).filter(f => f.endsWith(".json")).length;
-
-    // Game index: stream from disk (1GB+) instead of reading into memory
-    const gameIndexPath = join(PROCESSED_DIR, "game-index.json");
-    const hasGameIndex = existsSync(gameIndexPath);
-
-    // Count game details from JSONL file by streaming (avoid reading entire file)
-    let gameDetailCount = 0;
-    if (existsSync(GAME_DETAILS_JSONL)) {
-      const rl = createInterface({
-        input: createReadStream(GAME_DETAILS_JSONL, { encoding: "utf-8" }),
-        crlfDelay: Infinity,
-      });
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      for await (const _line of rl) gameDetailCount++;
-    }
-
-    // Game aliases: stream from disk (355MB+) instead of reading into memory
-    const gameAliasesPath = join(PROCESSED_DIR, "game-aliases.json");
-    const hasGameAliases = existsSync(gameAliasesPath);
-
-    console.log(`\nUploading to Vercel Blob (prefix: ${opts.prefix}/)`);
-    console.log(`  ${index.totalPlayers} players, ${gameFileCount} game files, ${gameDetailCount} game pages, ${Object.keys(aliases).length} aliases\n`);
-
-    const start = Date.now();
-    const result = await uploadAllFromDisk(players, index, aliases, GAMES_DIR, {
-      prefix: opts.prefix,
-      gameDetailsJsonl: existsSync(GAME_DETAILS_JSONL) ? GAME_DETAILS_JSONL : undefined,
-      gameDetailCount,
-      gameIndexPath: hasGameIndex ? gameIndexPath : undefined,
-      gameAliasesPath: hasGameAliases ? gameAliasesPath : undefined,
-      onProgress: (uploaded, total) => {
-        if (uploaded % 200 === 0 || uploaded === total) {
-          const pct = Math.round((uploaded / total) * 100);
-          console.log(`  Progress: ${uploaded}/${total} (${pct}%)`);
-        }
-      },
-    });
-
-    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    console.log(`\nUpload complete in ${elapsed}s`);
-    console.log(`  Index URL:        ${result.indexUrl}`);
-    console.log(`  Players uploaded:  ${result.playersUploaded}`);
-    console.log(`  Game files:        ${result.gamesUploaded}`);
-    console.log(`  Game pages:        ${result.gameDetailsUploaded}\n`);
+  .description("[DEPRECATED] Use seed-db instead. All data is now stored in Postgres.")
+  .action(async () => {
+    console.log("\nupload is deprecated. Use seed-db instead.");
+    console.log("All data (including PGNs) is now stored directly in Postgres.\n");
+    process.exit(0);
   });
 
 // ─── seed-db ─────────────────────────────────────────────────────────────────
@@ -815,9 +725,45 @@ program
   .command("seed-db")
   .alias("seed")
   .alias("upload-pg")
-  .description("Seed Postgres from processed data on disk (no Blob uploads)")
+  .description("Seed Postgres from processed data on disk (includes PGNs)")
   .option("--skip-to <step>", `Skip to a specific step: ${SEED_DB_STEPS.join(", ")}`)
+  .option("--only-pgn", "Only backfill the pgn column for existing games (skip players, aliases, indexes)")
   .action(async (opts) => {
+    if (!process.env.DATABASE_URL) {
+      console.error("DATABASE_URL environment variable is required.");
+      console.error("Set it in .env or use: docker compose up -d");
+      process.exit(1);
+    }
+
+    ensureDirs();
+
+    // ── Fast path: --only-pgn backfills just the pgn column ──
+    if (opts.onlyPgn) {
+      if (!existsSync(GAME_DETAILS_JSONL)) {
+        console.error("game-details.jsonl not found. Run 'process' first.");
+        process.exit(1);
+      }
+
+      console.log("\n═══ Backfill: PGN only ═══\n");
+      const start = Date.now();
+
+      console.log("Ensuring schema (pgn column)...");
+      await ensureSchema();
+
+      const totalGames = countLines(GAME_DETAILS_JSONL);
+      console.log(`Scanning ${totalGames.toLocaleString()} games for PGN backfill...`);
+      const { scanned, updated } = await backfillPgnsFromJsonl(GAME_DETAILS_JSONL, (s, u) => {
+        const pct = totalGames > 0 ? Math.round((s / totalGames) * 100) : 0;
+        progress(`  Scanned: ${s.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%) — ${u.toLocaleString()} rows updated`);
+      });
+      progress(`  Scanned: ${scanned.toLocaleString()} — ${updated.toLocaleString()} rows updated\n`);
+
+      const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+      console.log(`\n═══ PGN Backfill Complete (${elapsed}s) ═══\n`);
+      return;
+    }
+
+    // ── Full seed path ──
     const skipTo: SeedDbStep | undefined = opts.skipTo;
     if (skipTo && !SEED_DB_STEPS.includes(skipTo)) {
       console.error(`Invalid --skip-to step: "${skipTo}". Valid steps: ${SEED_DB_STEPS.join(", ")}`);
@@ -826,13 +772,6 @@ program
     const skipToIdx = skipTo ? SEED_DB_STEPS.indexOf(skipTo) : 0;
     const shouldRun = (step: SeedDbStep) => SEED_DB_STEPS.indexOf(step) >= skipToIdx;
     if (skipTo) console.log(`Skipping to step: ${skipTo}\n`);
-    if (!process.env.DATABASE_URL) {
-      console.error("DATABASE_URL environment variable is required.");
-      console.error("Set it in .env or use: docker compose up -d");
-      process.exit(1);
-    }
-
-    ensureDirs();
 
     const playersPath = join(PROCESSED_DIR, "players.json");
     if (!existsSync(playersPath)) {
@@ -928,79 +867,13 @@ program
 
 // ─── seed-blob ───────────────────────────────────────────────────────────────
 
-const SEED_BLOB_STEPS = ["game-pgns", "player-games"] as const;
-type SeedBlobStep = (typeof SEED_BLOB_STEPS)[number];
-
 program
   .command("seed-blob")
-  .description("Upload game PGNs + player game files to Vercel Blob (no DB writes)")
-  .option("--skip-to <step>", `Skip to a specific step: ${SEED_BLOB_STEPS.join(", ")}`)
-  .option("--fresh", "Ignore resume state and skip-existing checks (full re-upload)")
-  .action(async (opts) => {
-    const skipTo: SeedBlobStep | undefined = opts.skipTo;
-    if (skipTo && !SEED_BLOB_STEPS.includes(skipTo)) {
-      console.error(`Invalid --skip-to step: "${skipTo}". Valid steps: ${SEED_BLOB_STEPS.join(", ")}`);
-      process.exit(1);
-    }
-    const skipToIdx = skipTo ? SEED_BLOB_STEPS.indexOf(skipTo) : 0;
-    const shouldRun = (step: SeedBlobStep) => SEED_BLOB_STEPS.indexOf(step) >= skipToIdx;
-    if (skipTo) console.log(`Skipping to step: ${skipTo}\n`);
-
-    const fresh = !!opts.fresh;
-    if (fresh) console.log("Fresh mode: skipping resume state and existing blob checks\n");
-
-    if (!process.env.BLOB_READ_WRITE_TOKEN) {
-      console.error("BLOB_READ_WRITE_TOKEN environment variable is required.");
-      console.error("Get a token from: Vercel Dashboard → Storage → Blob → Tokens");
-      process.exit(1);
-    }
-
-    ensureDirs();
-
-    console.log("\n═══ Seed: Vercel Blob ═══\n");
-    const start = Date.now();
-
-    // Upload individual game PGNs from JSONL
-    if (shouldRun("game-pgns") && existsSync(GAME_DETAILS_JSONL)) {
-      const totalPgns = countLines(GAME_DETAILS_JSONL);
-      console.log(`Uploading ${totalPgns.toLocaleString()} game PGNs to Blob...`);
-      const pgnsResult = await uploadGamePgnsFromJsonl(
-        GAME_DETAILS_JSONL,
-        (uploaded, skipped) => {
-          const done = uploaded + skipped;
-          const pct = totalPgns > 0 ? Math.round((done / totalPgns) * 100) : 0;
-          progress(`  Game PGNs: ${uploaded.toLocaleString()} uploaded, ${skipped.toLocaleString()} skipped (${pct}%)`);
-        },
-        { fresh },
-      );
-      console.log(`  Game PGNs: ${pgnsResult.uploaded.toLocaleString()} uploaded, ${pgnsResult.skipped.toLocaleString()} skipped\n`);
-    } else if (!shouldRun("game-pgns")) {
-      console.log("Skipping: Upload game PGNs");
-    }
-
-    // Upload per-player game files (for practice mode)
-    if (shouldRun("player-games") && existsSync(GAMES_DIR)) {
-      console.log("Uploading player game files to Blob (practice mode)...");
-      const gamesResult = await uploadPlayerGameFiles(
-        GAMES_DIR,
-        (uploaded, skipped, total) => {
-          const done = uploaded + skipped;
-          const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-          progress(`  Game files: ${uploaded.toLocaleString()} uploaded, ${skipped.toLocaleString()} skipped (${pct}%)`);
-        },
-        { fresh },
-      );
-      if (gamesResult.uploaded + gamesResult.skipped > 0) {
-        console.log(`  Game files: ${gamesResult.uploaded.toLocaleString()} uploaded, ${gamesResult.skipped.toLocaleString()} skipped\n`);
-      } else {
-        console.log("  No game files found\n");
-      }
-    } else if (!shouldRun("player-games")) {
-      console.log("Skipping: Upload player game files");
-    }
-
-    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
-    console.log(`\n═══ Seed Blob Complete (${elapsed}s) ═══\n`);
+  .description("[DEPRECATED] PGN data is now stored in Postgres. Use seed-db instead.")
+  .action(async () => {
+    console.log("\nseed-blob is deprecated. PGN data is now stored directly in Postgres.");
+    console.log("PGNs are written during seed-db / full commands automatically.\n");
+    process.exit(0);
   });
 
 // ─── full ─────────────────────────────────────────────────────────────────────
@@ -1098,7 +971,7 @@ program
       console.log(`\n═══ Pipeline Complete ═══`);
       console.log(`  Players:     ${players.length}`);
       console.log(`  Game pages:  ${gameDetailFilesWritten}`);
-      console.log(`\n  Run 'seed-blob' separately to upload PGNs + practice files to Vercel Blob.\n`);
+      console.log(`\n  All data (including PGNs) stored in Postgres.\n`);
     } catch (e) {
       await failPipelineRun(runId, String(e));
       throw e;
