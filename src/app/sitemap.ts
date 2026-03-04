@@ -6,6 +6,10 @@ import {
   getGameSlugsForSitemap,
 } from "@/lib/db";
 
+// Generate sitemaps on-demand instead of at build time to avoid timeouts
+export const dynamic = "force-dynamic";
+export const revalidate = 86400; // Cache for 24 hours
+
 const BASE_URL = "https://outprep.xyz";
 const ENTRIES_PER_SITEMAP = 45000; // Stay under 50K limit
 
