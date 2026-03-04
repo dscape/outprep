@@ -754,9 +754,10 @@ program
 
       const totalGames = countLines(GAME_DETAILS_JSONL);
       console.log(`Scanning ${totalGames.toLocaleString()} games for PGN backfill...`);
-      const { scanned, updated } = await backfillPgnsFromJsonl(GAME_DETAILS_JSONL, (s, u) => {
+      const { scanned, updated } = await backfillPgnsFromJsonl(GAME_DETAILS_JSONL, (s, u, bd, bt) => {
         const pct = totalGames > 0 ? Math.round((s / totalGames) * 100) : 0;
-        progress(`  Scanned: ${s.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%) — ${u.toLocaleString()} rows updated`);
+        const batchInfo = bt ? ` | batches: ${bd}/${bt}` : '';
+        progress(`  Scanned: ${s.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%) — ${u.toLocaleString()} rows updated${batchInfo}`);
       });
       progress(`  Scanned: ${scanned.toLocaleString()} — ${updated.toLocaleString()} rows updated\n`);
 

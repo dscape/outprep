@@ -304,7 +304,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
  */
 export async function backfillPgnsFromJsonl(
   jsonlPath: string,
-  onProgress?: (scanned: number, updated: number) => void,
+  onProgress?: (scanned: number, updated: number, batchesDone?: number, batchesTotal?: number) => void,
 ): Promise<{ scanned: number; updated: number }> {
   if (!existsSync(jsonlPath)) return { scanned: 0, updated: 0 };
 
@@ -315,13 +315,15 @@ export async function backfillPgnsFromJsonl(
 
   let scanned = 0;
   let updated = 0;
+  let batchesDone = 0;
+  let batchesTotal = 0;
   let batch: { slug: string; pgn: string }[] = [];
   // Smaller batch for PGN backfill — each row carries ~3KB of PGN text
   const BATCH = 500;
   const limit = pLimit(DB_CONCURRENCY);
   const pending: Promise<void>[] = [];
 
-  const report = () => onProgress?.(scanned, updated);
+  const report = () => onProgress?.(scanned, updated, batchesDone, batchesTotal);
 
   for await (const line of rl) {
     if (!line.trim()) continue;
@@ -337,9 +339,11 @@ export async function backfillPgnsFromJsonl(
     if (batch.length >= BATCH) {
       const b = batch;
       batch = [];
+      batchesTotal++;
       pending.push(limit(async () => {
         const n = await backfillPgnBatch(b);
         updated += n;
+        batchesDone++;
         report();
       }));
     }
@@ -347,9 +351,11 @@ export async function backfillPgnsFromJsonl(
 
   if (batch.length > 0) {
     const b = batch;
+    batchesTotal++;
     pending.push(limit(async () => {
       const n = await backfillPgnBatch(b);
       updated += n;
+      batchesDone++;
       report();
     }));
   }
