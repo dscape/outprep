@@ -14,8 +14,29 @@ import { sql, sqlTransaction } from "./db";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
+import pLimit from "p-limit";
 
 import type { FIDEPlayer, GameDetail } from "./types";
+
+/** Concurrency limit for batch DB operations (must stay within Neon pooler limits). */
+const DB_CONCURRENCY = 5;
+
+/** Retry a database operation with exponential backoff for transient Neon errors. */
+async function retryDb<T>(fn: () => Promise<T>, retries = 3): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err: unknown) {
+      const code = (err as { code?: string }).code ?? "";
+      const isTransient = code === "CONNECTION_CLOSED" || code === "CONNECTION_ENDED"
+        || code === "CONNECT_TIMEOUT" || code === "57P01" /* admin shutdown */;
+      if (!isTransient || attempt >= retries) throw err;
+      const delay = Math.min(1000 * 2 ** attempt, 10_000);
+      console.warn(`  ⚠ ${code} — retrying in ${delay}ms (attempt ${attempt + 1}/${retries})`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+  }
+}
 
 // ─── Player uploads ──────────────────────────────────────────────────────────
 
@@ -27,7 +48,7 @@ export async function upsertPlayers(
   players: FIDEPlayer[],
   onProgress?: (count: number, total: number, inserted: number, updated: number) => void,
 ): Promise<{ total: number; inserted: number; updated: number }> {
-  const BATCH = 100;
+  const BATCH = 500;
   let count = 0;
   let inserted = 0;
   let updated = 0;
@@ -109,7 +130,7 @@ export async function upsertPlayerAliases(
   onProgress?: (count: number, batchNum: number, totalBatches: number, batchAliases: number) => void,
 ): Promise<number> {
   let count = 0;
-  const BATCH = 200;
+  const BATCH = 500;
   const totalBatches = Math.ceil(players.length / BATCH);
 
   for (let i = 0; i < players.length; i += BATCH) {
@@ -168,7 +189,7 @@ export async function upsertPlayerAliases(
  */
 export async function upsertGamesFromJsonl(
   jsonlPath: string,
-  onProgress?: (count: number) => void,
+  onProgress?: (queued: number, done: number) => void,
 ): Promise<number> {
   if (!existsSync(jsonlPath)) return 0;
 
@@ -177,30 +198,48 @@ export async function upsertGamesFromJsonl(
     crlfDelay: Infinity,
   });
 
-  let count = 0;
+  let queued = 0;
+  let done = 0;
   let batch: GameDetail[] = [];
-  const BATCH = 500;
+  const BATCH = 2000;
+  const limit = pLimit(DB_CONCURRENCY);
+  const pending: Promise<void>[] = [];
+
+  const report = () => onProgress?.(queued, done);
 
   for await (const line of rl) {
     if (!line.trim()) continue;
     batch.push(JSON.parse(line) as GameDetail);
 
     if (batch.length >= BATCH) {
-      await insertGameBatch(batch);
-      count += batch.length;
+      const b = batch;
       batch = [];
-      onProgress?.(count);
+      queued += b.length;
+      report();
+      pending.push(limit(async () => {
+        await insertGameBatch(b);
+        done += b.length;
+        report();
+      }));
     }
   }
 
   // Flush remaining
   if (batch.length > 0) {
-    await insertGameBatch(batch);
-    count += batch.length;
-    onProgress?.(count);
+    const b = batch;
+    queued += b.length;
+    report();
+    pending.push(limit(async () => {
+      await insertGameBatch(b);
+      done += b.length;
+      report();
+    }));
   }
 
-  return count;
+  // Wait for all in-flight batches to finish
+  await Promise.all(pending);
+
+  return done;
 }
 
 const MAX_ELO = 10_000;
@@ -244,7 +283,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
     pgn: g.pgn || null,
   }));
 
-  await sqlTransaction(async (tx) => {
+  await retryDb(() => sqlTransaction(async (tx) => {
     await tx`
       INSERT INTO games ${tx(rows,
         'slug', 'white_name', 'black_name', 'white_slug', 'black_slug',
@@ -255,7 +294,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
       )}
       ON CONFLICT (slug) DO UPDATE SET pgn = EXCLUDED.pgn WHERE games.pgn IS NULL
     `;
-  });
+  }));
 }
 
 /**
@@ -265,7 +304,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
  */
 export async function backfillPgnsFromJsonl(
   jsonlPath: string,
-  onProgress?: (count: number, updated: number) => void,
+  onProgress?: (scanned: number, updated: number) => void,
 ): Promise<{ scanned: number; updated: number }> {
   if (!existsSync(jsonlPath)) return { scanned: 0, updated: 0 };
 
@@ -277,7 +316,12 @@ export async function backfillPgnsFromJsonl(
   let scanned = 0;
   let updated = 0;
   let batch: { slug: string; pgn: string }[] = [];
+  // Smaller batch for PGN backfill — each row carries ~3KB of PGN text
   const BATCH = 500;
+  const limit = pLimit(DB_CONCURRENCY);
+  const pending: Promise<void>[] = [];
+
+  const report = () => onProgress?.(scanned, updated);
 
   for await (const line of rl) {
     if (!line.trim()) continue;
@@ -287,23 +331,37 @@ export async function backfillPgnsFromJsonl(
     }
     scanned++;
 
+    // Report scan progress frequently so the user sees movement immediately
+    if (scanned % 500 === 0) report();
+
     if (batch.length >= BATCH) {
-      updated += await backfillPgnBatch(batch);
+      const b = batch;
       batch = [];
-      onProgress?.(scanned, updated);
+      pending.push(limit(async () => {
+        const n = await backfillPgnBatch(b);
+        updated += n;
+        report();
+      }));
     }
   }
 
   if (batch.length > 0) {
-    updated += await backfillPgnBatch(batch);
-    onProgress?.(scanned, updated);
+    const b = batch;
+    pending.push(limit(async () => {
+      const n = await backfillPgnBatch(b);
+      updated += n;
+      report();
+    }));
   }
+
+  // Wait for remaining batches
+  await Promise.all(pending);
+  report();
 
   return { scanned, updated };
 }
 
 async function backfillPgnBatch(rows: { slug: string; pgn: string }[]): Promise<number> {
-  // Use UPDATE ... FROM VALUES to batch-update only rows where pgn IS NULL
   const result = await sqlTransaction(async (tx) => {
     return tx`
       UPDATE games g
@@ -336,6 +394,9 @@ export async function upsertGameAliases(
   const total = entries.length;
   const BATCH = 2000;
 
+  const limit = pLimit(DB_CONCURRENCY);
+  const pending: Promise<void>[] = [];
+
   for (let i = 0; i < entries.length; i += BATCH) {
     const batch = entries.slice(i, i + BATCH);
 
@@ -344,16 +405,19 @@ export async function upsertGameAliases(
       canonical_slug: canonical,
     }));
 
-    await sqlTransaction(async (tx) => {
-      await tx`
-        INSERT INTO game_aliases ${tx(rows, 'legacy_slug', 'canonical_slug')}
-        ON CONFLICT (legacy_slug) DO UPDATE SET canonical_slug = EXCLUDED.canonical_slug
-      `;
-    });
-
     count += batch.length;
+    pending.push(limit(async () => {
+      await sqlTransaction(async (tx) => {
+        await tx`
+          INSERT INTO game_aliases ${tx(rows, 'legacy_slug', 'canonical_slug')}
+          ON CONFLICT (legacy_slug) DO UPDATE SET canonical_slug = EXCLUDED.canonical_slug
+        `;
+      });
+    }));
     onProgress?.(count, total);
   }
+
+  await Promise.all(pending);
 
   return count;
 }

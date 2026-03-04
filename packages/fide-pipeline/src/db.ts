@@ -16,10 +16,13 @@ function getRawSql(): postgres.Sql {
     if (!connectionString) {
       throw new Error("DATABASE_URL is not configured");
     }
+    // Neon's pooler typically allows 5-10 concurrent connections.
+    // Keep pool small to avoid CONNECTION_CLOSED errors.
     rawSql = postgres(connectionString, {
-      max: 20,
+      max: 5,
       idle_timeout: 20,
-      connect_timeout: 10,
+      connect_timeout: 30,
+      max_lifetime: 60 * 5,
     });
   }
   return rawSql;
@@ -58,7 +61,7 @@ export async function sqlTransaction<T>(
  */
 export async function closeSql(): Promise<void> {
   if (rawSql) {
-    await rawSql.end();
+    await rawSql.end({ timeout: 5 });
     rawSql = null;
   }
 }

@@ -27,6 +27,7 @@ import {
   completePipelineRun,
   failPipelineRun,
 } from "./upload-pg";
+import { closeSql } from "./db";
 import { loadFideData, enrichPlayers } from "./fide-enrichment";
 import {
   buildGameDetails,
@@ -615,6 +616,7 @@ program
         await upsertPlayerAliases(players);
         await upsertGamesFromJsonl(GAME_DETAILS_JSONL);
         console.log("  Postgres seeded.");
+        await closeSql();
       }
     } else {
       console.log("\nStep 4: Upload skipped (--skip-upload)");
@@ -832,9 +834,9 @@ program
         await dropGameIndexes();
         const totalGames = countLines(GAME_DETAILS_JSONL);
         console.log(`Upserting ${totalGames.toLocaleString()} games from JSONL...`);
-        const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (count) => {
-          const pct = totalGames > 0 ? Math.round((count / totalGames) * 100) : 0;
-          progress(`  Games: ${count.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%)`);
+        const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (queued, done) => {
+          const pct = totalGames > 0 ? Math.round((done / totalGames) * 100) : 0;
+          progress(`  Games: ${done.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%) [${queued.toLocaleString()} queued]`);
         });
         progress(`  Games: ${gamesUpserted.toLocaleString()} upserted (100%)\n`);
         await createGameIndexes();
@@ -862,6 +864,8 @@ program
     } catch (e) {
       await failPipelineRun(runId, String(e));
       throw e;
+    } finally {
+      await closeSql();
     }
   });
 
@@ -947,9 +951,9 @@ program
         await dropGameIndexes();
         const totalGames = countLines(GAME_DETAILS_JSONL);
         console.log(`Upserting ${totalGames.toLocaleString()} games from JSONL...`);
-        const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (count) => {
-          const pct = totalGames > 0 ? Math.round((count / totalGames) * 100) : 0;
-          progress(`  Games: ${count.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%)`);
+        const gamesUpserted = await upsertGamesFromJsonl(GAME_DETAILS_JSONL, (queued, done) => {
+          const pct = totalGames > 0 ? Math.round((done / totalGames) * 100) : 0;
+          progress(`  Games: ${done.toLocaleString()}/${totalGames.toLocaleString()} (${pct}%) [${queued.toLocaleString()} queued]`);
         });
         progress(`  Games: ${gamesUpserted.toLocaleString()} upserted (100%)\n`);
         await createGameIndexes();
@@ -975,7 +979,12 @@ program
     } catch (e) {
       await failPipelineRun(runId, String(e));
       throw e;
+    } finally {
+      await closeSql();
     }
   });
 
-program.parse();
+program.parseAsync().then(
+  () => process.exit(0),
+  (e) => { console.error(e); process.exit(1); },
+);
