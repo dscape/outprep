@@ -1,4 +1,6 @@
 import { Metadata } from "next";
+import { redirect } from "next/navigation";
+import { getPlayerByFideId } from "@/lib/db";
 
 export async function generateMetadata({
   params,
@@ -28,10 +30,24 @@ export async function generateMetadata({
   };
 }
 
-export default function ScoutLayout({
+export default async function ScoutLayout({
   children,
+  params,
 }: {
   children: React.ReactNode;
+  params: Promise<{ username: string }>;
 }) {
+  const { username } = await params;
+  const decoded = decodeURIComponent(username);
+
+  // Support fide:{id} shorthand — redirect to the full FIDE scout URL
+  const fideMatch = decoded.match(/^fide:(\d+)$/);
+  if (fideMatch) {
+    const player = await getPlayerByFideId(fideMatch[1]);
+    if (player) {
+      redirect(`/scout/${player.slug}?source=fide`);
+    }
+  }
+
   return children;
 }

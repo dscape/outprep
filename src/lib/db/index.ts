@@ -247,14 +247,21 @@ export async function searchPlayers(
     const trimmed = query.trim();
     if (trimmed.length < 2) return [];
 
-    const ilikePattern = `%${trimmed}%`;
-    const { rows } = await sql`
-      SELECT slug, name, title, fide_rating, federation
-      FROM players
-      WHERE name ILIKE ${ilikePattern}
-      ORDER BY fide_rating DESC
-      LIMIT ${limit}
-    `;
+    const isNumeric = /^\d+$/.test(trimmed);
+    const { rows } = isNumeric
+      ? await sql`
+          SELECT slug, name, title, fide_rating, federation
+          FROM players
+          WHERE fide_id = ${trimmed}
+          LIMIT ${limit}
+        `
+      : await sql`
+          SELECT slug, name, title, fide_rating, federation
+          FROM players
+          WHERE name ILIKE ${`%${trimmed}%`}
+          ORDER BY fide_rating DESC
+          LIMIT ${limit}
+        `;
     return rows.map((r) => ({
       slug: r.slug as string,
       name: r.name as string,

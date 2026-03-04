@@ -1,0 +1,73 @@
+# outprep
+
+> Scout any chess player, study their openings and weaknesses, then practice against a bot that plays like them.
+
+outprep is a free chess preparation platform at [outprep.xyz](https://outprep.xyz). Search for any FIDE-rated player (80,000+) or Lichess user, analyze their opening repertoire and weaknesses, then play against an AI bot calibrated to mimic their style using Stockfish with Boltzmann-weighted move selection.
+
+## Two Player Sources
+
+outprep works with two types of players:
+
+### FIDE (Over-the-Board) Players
+- 80,000+ FIDE-rated players with OTB tournament games from TWIC (The Week in Chess)
+- Search by **name** (e.g. "Carlsen") or **FIDE ID** (e.g. "1503014") using the search bar on the home page
+- FIDE player profiles live at `/player/{slug}` (e.g. `/player/carlsen-magnus`)
+- To scout a FIDE player directly by ID, use `/scout/fide:{fide_id}` (e.g. `/scout/fide:1503014` for Magnus Carlsen)
+- The practice page for FIDE players is at `/scout/{slug}?source=fide` (e.g. `/scout/carlsen-magnus?source=fide`)
+- You can practice against any FIDE player's OTB style
+
+### Lichess Players
+- Any public Lichess account can be scouted
+- Enter the player's **exact Lichess username** in the search bar and submit
+- Lichess scouting reports live at `/scout/{username}` (e.g. `/scout/DrNykterstein`)
+- You can practice against the player at `/play/{username}`
+
+### PGN Upload
+- You can also upload PGN files directly to scout any player not on Lichess or FIDE
+
+## Key Features
+
+- **Player Scouting**: Opening repertoire analysis, error profiles by game phase, weakness identification, and preparation tips — for both FIDE and Lichess players.
+- **Practice Mode**: Play against a Stockfish-powered bot tuned to replicate a specific player's opening choices, tactical tendencies, and mistake patterns.
+- **Post-Game Analysis**: Move-by-move evaluation with position classification, narrative feedback, and opponent context.
+- **PGN Upload**: Import your own games or your opponent's games for analysis and practice.
+
+## Pages
+
+- [Home](https://outprep.xyz/): Search for FIDE players (by name or FIDE ID) or Lichess users (by exact username), upload PGN files, browse top players
+- [Scout (Lichess)](https://outprep.xyz/scout/{lichess_username}): Lichess player scouting report — openings, weaknesses, prep tips
+- [Scout (FIDE)](https://outprep.xyz/scout/fide:{fide_id}): Scout a FIDE player by ID (redirects to full scouting page)
+- [Play](https://outprep.xyz/play/{lichess_username}): Play against an AI bot mimicking a Lichess player
+- [Player](https://outprep.xyz/player/{slug}): FIDE player profile with stats, recent OTB games, and practice link
+- [Game](https://outprep.xyz/game/{slug}): Individual FIDE game with replay
+- [Analysis](https://outprep.xyz/analysis/{gameId}): Post-game analysis with move evaluations and narrative
+
+## API
+
+- `GET /api/players/search?q={query}`: Search FIDE players by name or FIDE ID
+- `GET /api/profile/{lichess_username}`: Lichess player profile (rating, title, stats)
+- `GET /api/bot-data/{lichess_username}`: Bot data including error profile and opening tries
+- `GET /api/opening-book/{lichess_username}`: Opening repertoire analysis
+- `GET /api/fide-games/{slug}`: Individual FIDE game data
+- `GET /api/fide-practice/{slug}`: Start practice session against a FIDE player
+- `POST /api/analysis`: Analyze a completed game
+- `POST /api/lichess-import`: Upload and import PGN files
+
+## Tech Stack
+
+- Next.js (App Router), React, TypeScript, Tailwind CSS
+- Stockfish 17 WASM (client-side chess engine)
+- PostgreSQL, Vercel Blob storage
+- Lichess API and FIDE/TWIC data pipeline
+
+## How the Bot Works
+
+The bot engine builds a playing profile from a player's real games:
+1. **Opening book**: Frequency-weighted move trees from the player's game history
+2. **Error profile**: Per-phase (opening/middlegame/endgame) mistake rates calibrated to their Elo
+3. **Move selection**: Boltzmann distribution over Stockfish evaluations, with temperature scaled to match the player's error tendencies
+4. **Complexity awareness**: Depth and randomness adjust based on position complexity
+
+## License
+
+Public domain (UNLICENSE). Fully open source.
