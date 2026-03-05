@@ -488,6 +488,10 @@ export async function populateEvents(
     await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
   }
 
+  // Ensure indexes exist for the heavy join/group-by on games.event
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_event ON games (event)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
+
   // Aggregate events from games
   const { rows: eventAggs } = await sql`
     SELECT
@@ -535,22 +539,27 @@ export async function populateEvents(
       `;
     }));
 
+    // Link games to events for this batch (avoids one massive bulk UPDATE)
+    const batchSlugs = rows.map((r) => r.slug);
+    await retryDb(() => sql`
+      UPDATE games g
+      SET event_slug = e.slug
+      FROM events e
+      WHERE g.event = e.name
+        AND e.slug = ANY(${batchSlugs})
+        AND (g.event_slug IS NULL OR g.event_slug != e.slug)
+    `);
+
     eventsCreated += batch.length;
     onProgress?.(eventsCreated, eventAggs.length);
   }
 
-  // Link games to events via event_slug
-  const gamesLinked = await sql`
-    WITH event_slugs AS (
-      SELECT slug, name FROM events
-    )
-    UPDATE games g
-    SET event_slug = es.slug
-    FROM event_slugs es
-    WHERE g.event = es.name AND (g.event_slug IS NULL OR g.event_slug != es.slug)
+  const { rows: countRows } = await sql`
+    SELECT COUNT(*)::int AS n FROM games WHERE event_slug IS NOT NULL
   `;
+  const gamesLinked = (countRows[0]?.n as number) ?? 0;
 
-  return { eventsCreated, gamesLinked: gamesLinked.rows?.length ?? 0 };
+  return { eventsCreated, gamesLinked };
 }
 
 // ─── Pipeline tracking ───────────────────────────────────────────────────────
