@@ -398,6 +398,65 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
     issuesProcessed++;
   }
 
+  // Update events for newly inserted games
+  if (totalGamesUpserted > 0) {
+    try {
+      // Ensure events table exists
+      await sql`
+        CREATE TABLE IF NOT EXISTS events (
+          id SERIAL PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
+          site TEXT, date_start DATE, date_end DATE,
+          game_count INTEGER NOT NULL DEFAULT 0, avg_elo SMALLINT,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `;
+
+      // Check if event_slug column exists
+      const { rows: colCheck } = await sql`
+        SELECT 1 FROM information_schema.columns
+        WHERE table_name = 'games' AND column_name = 'event_slug'
+      `;
+      if (colCheck.length === 0) {
+        await sql`ALTER TABLE games ADD COLUMN event_slug TEXT`;
+        await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
+      }
+
+      // Upsert events from games that have no event_slug
+      await sql`
+        INSERT INTO events (slug, name, site, date_start, date_end, game_count, avg_elo)
+        SELECT
+          LEFT(LOWER(REGEXP_REPLACE(REGEXP_REPLACE(
+            TRANSLATE(event, '.,;:!?''\"()[]{}', ''), '[^a-zA-Z0-9 -]', '', 'g'),
+            '\\s+', '-', 'g')), 120) AS slug,
+          event AS name,
+          MIN(site) AS site,
+          MIN(date) AS date_start,
+          MAX(date) AS date_end,
+          COUNT(*)::int AS game_count,
+          (AVG(avg_elo))::smallint AS avg_elo
+        FROM games
+        WHERE event IS NOT NULL AND event != '' AND event_slug IS NULL
+        GROUP BY event
+        ON CONFLICT (slug) DO UPDATE SET
+          date_start = LEAST(events.date_start, EXCLUDED.date_start),
+          date_end = GREATEST(events.date_end, EXCLUDED.date_end),
+          game_count = (SELECT COUNT(*) FROM games WHERE event = events.name),
+          avg_elo = (SELECT (AVG(avg_elo))::smallint FROM games WHERE event = events.name),
+          updated_at = NOW()
+      `;
+
+      // Link unlinked games to their events
+      await sql`
+        UPDATE games g
+        SET event_slug = e.slug
+        FROM events e
+        WHERE g.event = e.name AND g.event_slug IS NULL
+      `;
+    } catch {
+      // Events table or column may not exist in older schemas — skip
+    }
+  }
+
   return {
     issuesProcessed,
     gamesUpserted: totalGamesUpserted,

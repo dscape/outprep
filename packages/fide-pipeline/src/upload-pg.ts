@@ -436,6 +436,123 @@ export async function upsertGameAliases(
   return count;
 }
 
+// ─── Event population ───────────────────────────────────────────────────────
+
+/**
+ * Slugify a string for URL use.
+ */
+function slugifyStr(str: string): string {
+  return str
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 120);
+}
+
+/**
+ * Populate the events table from existing games data.
+ * Aggregates unique event names, computes stats, and sets event_slug on games.
+ * Idempotent — safe to run multiple times.
+ */
+export async function populateEvents(
+  onProgress?: (done: number, total: number) => void,
+): Promise<{ eventsCreated: number; gamesLinked: number }> {
+  // Ensure the events table and event_slug column exist
+  await sql`
+    CREATE TABLE IF NOT EXISTS events (
+      id         SERIAL PRIMARY KEY,
+      slug       TEXT NOT NULL UNIQUE,
+      name       TEXT NOT NULL,
+      site       TEXT,
+      date_start DATE,
+      date_end   DATE,
+      game_count INTEGER NOT NULL DEFAULT 0,
+      avg_elo    SMALLINT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_events_date ON events (date_end DESC NULLS LAST)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_events_name_trgm ON events USING GIN (name gin_trgm_ops)`;
+
+  // Check if event_slug column exists on games
+  const { rows: colCheck } = await sql`
+    SELECT 1 FROM information_schema.columns
+    WHERE table_name = 'games' AND column_name = 'event_slug'
+  `;
+  if (colCheck.length === 0) {
+    await sql`ALTER TABLE games ADD COLUMN event_slug TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
+  }
+
+  // Aggregate events from games
+  const { rows: eventAggs } = await sql`
+    SELECT
+      event AS name,
+      MIN(site) AS site,
+      MIN(date) AS date_start,
+      MAX(date) AS date_end,
+      COUNT(*)::int AS game_count,
+      (AVG(avg_elo))::smallint AS avg_elo
+    FROM games
+    WHERE event IS NOT NULL AND event != ''
+    GROUP BY event
+    ORDER BY MAX(date) DESC
+  `;
+
+  let eventsCreated = 0;
+  const BATCH = 200;
+
+  for (let i = 0; i < eventAggs.length; i += BATCH) {
+    const batch = eventAggs.slice(i, i + BATCH);
+    const rows = batch.map((e) => ({
+      slug: slugifyStr(e.name as string),
+      name: e.name as string,
+      site: (e.site as string) ?? null,
+      date_start: e.date_start,
+      date_end: e.date_end,
+      game_count: e.game_count as number,
+      avg_elo: (e.avg_elo as number) ?? null,
+      updated_at: new Date(),
+    }));
+
+    await retryDb(() => sqlTransaction(async (tx) => {
+      await tx`
+        INSERT INTO events ${tx(rows,
+          'slug', 'name', 'site', 'date_start', 'date_end', 'game_count', 'avg_elo', 'updated_at',
+        )}
+        ON CONFLICT (slug) DO UPDATE SET
+          name = EXCLUDED.name,
+          site = COALESCE(EXCLUDED.site, events.site),
+          date_start = LEAST(events.date_start, EXCLUDED.date_start),
+          date_end = GREATEST(events.date_end, EXCLUDED.date_end),
+          game_count = EXCLUDED.game_count,
+          avg_elo = EXCLUDED.avg_elo,
+          updated_at = EXCLUDED.updated_at
+      `;
+    }));
+
+    eventsCreated += batch.length;
+    onProgress?.(eventsCreated, eventAggs.length);
+  }
+
+  // Link games to events via event_slug
+  const gamesLinked = await sql`
+    WITH event_slugs AS (
+      SELECT slug, name FROM events
+    )
+    UPDATE games g
+    SET event_slug = es.slug
+    FROM event_slugs es
+    WHERE g.event = es.name AND (g.event_slug IS NULL OR g.event_slug != es.slug)
+  `;
+
+  return { eventsCreated, gamesLinked: gamesLinked.rows?.length ?? 0 };
+}
+
 // ─── Pipeline tracking ───────────────────────────────────────────────────────
 
 export async function recordPipelineRun(
@@ -597,6 +714,35 @@ export async function ensureSchema(): Promise<void> {
     console.log("  Adding pgn column to games table...");
     await sql`ALTER TABLE games ADD COLUMN pgn TEXT`;
     console.log("  pgn column added.");
+  }
+
+  // Idempotent migration: events table
+  await sql`
+    CREATE TABLE IF NOT EXISTS events (
+      id         SERIAL PRIMARY KEY,
+      slug       TEXT NOT NULL UNIQUE,
+      name       TEXT NOT NULL,
+      site       TEXT,
+      date_start DATE,
+      date_end   DATE,
+      game_count INTEGER NOT NULL DEFAULT 0,
+      avg_elo    SMALLINT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`CREATE INDEX IF NOT EXISTS idx_events_date ON events (date_end DESC NULLS LAST)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_events_name_trgm ON events USING GIN (name gin_trgm_ops)`;
+
+  // Idempotent migration: add event_slug column to games table
+  const { rows: eventSlugCol } = await sql`
+    SELECT column_name FROM information_schema.columns
+    WHERE table_name = 'games' AND column_name = 'event_slug'
+  `;
+  if (eventSlugCol.length === 0) {
+    console.log("  Adding event_slug column to games table...");
+    await sql`ALTER TABLE games ADD COLUMN event_slug TEXT`;
+    await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
+    console.log("  event_slug column added.");
   }
 }
 

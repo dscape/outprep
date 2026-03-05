@@ -91,6 +91,24 @@ CREATE TABLE game_aliases (
   canonical_slug TEXT NOT NULL
 );
 
+-- ─── Events ─────────────────────────────────────────────────────────────────
+-- Aggregated from games.event — one row per unique event name
+
+CREATE TABLE events (
+  id         SERIAL PRIMARY KEY,
+  slug       TEXT NOT NULL UNIQUE,
+  name       TEXT NOT NULL,
+  site       TEXT,
+  date_start DATE,
+  date_end   DATE,
+  game_count INTEGER NOT NULL DEFAULT 0,
+  avg_elo    SMALLINT,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_events_date ON events (date_end DESC NULLS LAST);
+CREATE INDEX idx_events_name_trgm ON events USING GIN (name gin_trgm_ops);
+
 -- ─── Pipeline metadata ───────────────────────────────────────────────────────
 -- Tracks processed TWIC issues and FIDE rating updates for incremental processing
 

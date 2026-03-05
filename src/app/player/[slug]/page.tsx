@@ -5,6 +5,7 @@ import {
   getPlayer,
   getAliasTarget,
   formatPlayerName,
+  generateEventSlug,
 } from "@/lib/db";
 import type { FIDEPlayer } from "@/lib/db";
 import { TitleBadge } from "@/components/title-badge";
@@ -331,12 +332,13 @@ export default async function PlayerPage({
                 </h3>
                 <div className="flex flex-wrap gap-2">
                   {player.recentEvents.map((event) => (
-                    <span
+                    <Link
                       key={event}
-                      className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs text-zinc-400"
+                      href={`/event/${generateEventSlug(event)}`}
+                      className="rounded-md bg-zinc-900 px-2.5 py-1 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
                     >
                       {event}
-                    </span>
+                    </Link>
                   ))}
                 </div>
               </div>

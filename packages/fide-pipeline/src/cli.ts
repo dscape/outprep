@@ -22,6 +22,7 @@ import {
   backfillPgnsFromJsonl,
   dropGameIndexes,
   createGameIndexes,
+  populateEvents,
   recordPipelineRun,
   completePipelineRun,
   failPipelineRun,
@@ -857,6 +858,14 @@ program
         console.log("Skipping: Upsert game aliases");
       }
 
+      // Populate events from games
+      console.log("Populating events...");
+      const eventsResult = await populateEvents((done, total) => {
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        progress(`  Events: ${done}/${total} (${pct}%)`);
+      });
+      progress(`  Events: ${eventsResult.eventsCreated} created/updated, ${eventsResult.gamesLinked} games linked\n`);
+
       await completePipelineRun(runId);
 
       const elapsed = ((Date.now() - start) / 1000).toFixed(1);
@@ -867,6 +876,33 @@ program
     } finally {
       await closeSql();
     }
+  });
+
+// ─── populate-events ─────────────────────────────────────────────────────────
+
+program
+  .command("populate-events")
+  .description("Populate events table from existing games data")
+  .action(async () => {
+    if (!process.env.DATABASE_URL) {
+      console.error("DATABASE_URL environment variable is required.");
+      process.exit(1);
+    }
+
+    console.log("\n═══ Populate Events ═══\n");
+    const start = Date.now();
+
+    const result = await populateEvents((done, total) => {
+      const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+      progress(`  Events: ${done}/${total} (${pct}%)`);
+    });
+
+    progress(`  Events: ${result.eventsCreated} created/updated\n`);
+    console.log(`  Games linked: ${result.gamesLinked}`);
+
+    const elapsed = ((Date.now() - start) / 1000).toFixed(1);
+    console.log(`\n═══ Populate Events Complete (${elapsed}s) ═══\n`);
+    await closeSql();
   });
 
 // ─── seed-blob ───────────────────────────────────────────────────────────────
@@ -970,11 +1006,20 @@ program
         progress(`  Game aliases: ${gameAliasCount.toLocaleString()} upserted (100%)\n`);
       }
 
+      // Populate events from games
+      console.log("Populating events...");
+      const eventsResult = await populateEvents((done, total) => {
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        progress(`  Events: ${done}/${total} (${pct}%)`);
+      });
+      progress(`  Events: ${eventsResult.eventsCreated} created/updated, ${eventsResult.gamesLinked} games linked\n`);
+
       await completePipelineRun(runId);
 
       console.log(`\n═══ Pipeline Complete ═══`);
       console.log(`  Players:     ${players.length}`);
       console.log(`  Game pages:  ${gameDetailFilesWritten}`);
+      console.log(`  Events:      ${eventsResult.eventsCreated}`);
       console.log(`\n  All data (including PGNs) stored in Postgres.\n`);
     } catch (e) {
       await failPipelineRun(runId, String(e));
