@@ -308,6 +308,14 @@ export async function backfillPgnsFromJsonl(
 ): Promise<{ scanned: number; updated: number }> {
   if (!existsSync(jsonlPath)) return { scanned: 0, updated: 0 };
 
+  // Quick check: skip the entire scan if no rows need backfilling
+  const { rows } = await sql`SELECT COUNT(*) AS n FROM games WHERE pgn IS NULL`;
+  const nullCount = Number(rows[0]?.n ?? 0);
+  if (nullCount === 0) {
+    return { scanned: 0, updated: 0 };
+  }
+  console.log(`  ${nullCount.toLocaleString()} games with NULL pgn — backfilling...`);
+
   const rl = createInterface({
     input: createReadStream(jsonlPath, { encoding: "utf-8" }),
     crlfDelay: Infinity,
