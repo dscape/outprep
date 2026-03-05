@@ -343,6 +343,14 @@ export default async function PlayerPage({
             )}
           </div>
 
+          {/* Primary Practice CTA */}
+          <div className="mt-6">
+            <PracticeLoader
+              slug={slug}
+              playerName={name}
+            />
+          </div>
+
           {/* Opening Repertoire */}
           <div className="mt-8">
             <h2 className="text-lg font-semibold text-white mb-4">
