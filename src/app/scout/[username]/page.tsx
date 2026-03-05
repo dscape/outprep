@@ -19,6 +19,7 @@ import {
   EvalMode,
   batchEvaluateGames,
 } from "@/lib/engine/batch-eval";
+import { getStoredEvals, storeEvals } from "@/lib/engine/eval-cache";
 import PlayerCard from "@/components/PlayerCard";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
@@ -691,6 +692,21 @@ export default function ScoutPage() {
     return map;
   }, [rawDrilldownGames]);
 
+  // Helper: update weaknesses + prep tips from an error profile
+  const updateWeaknessesAndTips = useCallback((merged: ErrorProfile) => {
+    const currentFilteredData = filteredDataRef.current;
+    if (currentFilteredData) {
+      const updatedWeaknesses = detectWeaknessesFromErrorProfile(
+        merged,
+        currentFilteredData.weaknesses
+      );
+      setEnhancedWeaknesses(updatedWeaknesses);
+      setEnhancedPrepTips(
+        generatePrepTips(updatedWeaknesses, currentFilteredData.openings, currentFilteredData.style)
+      );
+    }
+  }, []);
+
   // Handle upgrade request
   const handleUpgrade = useCallback(
     async (mode: EvalMode) => {
@@ -724,6 +740,7 @@ export default function ScoutPage() {
 
         const botData = await res.json();
         const allGameMoves: Array<{
+          id: string;
           moves: string;
           playerColor: "white" | "black";
           hasEvals: boolean;
@@ -731,11 +748,42 @@ export default function ScoutPage() {
 
         setTotalGameCount(allGameMoves.length);
 
-        // Filter to games WITHOUT evals — don't re-evaluate what Lichess already has
-        const unevaluated = allGameMoves.filter((g) => !g.hasEvals);
+        // Filter to games WITHOUT Lichess evals
+        const noLichessEvals = allGameMoves.filter((g) => !g.hasEvals);
 
-        if (unevaluated.length === 0) {
-          // All games already have evals — show brief completion
+        // Check IndexedDB for previously computed evals
+        const cachedEvalMap = await getStoredEvals(
+          platform,
+          username,
+          noLichessEvals.map((g) => g.id),
+        );
+
+        // Separate: games with cached evals vs games needing Stockfish
+        const cachedEvals: GameEvalData[] = [];
+        const needsStockfish: typeof noLichessEvals = [];
+        for (const g of noLichessEvals) {
+          const cached = cachedEvalMap.get(g.id);
+          if (cached) {
+            cachedEvals.push(cached);
+          } else {
+            needsStockfish.push(g);
+          }
+        }
+
+        // If we have cached evals, show an initial error profile immediately
+        const baseProfile = filteredData?.errorProfile;
+        if (cachedEvals.length > 0) {
+          const cachedProfile = buildErrorProfileFromEvals(cachedEvals);
+          const initialMerged = baseProfile && baseProfile.gamesAnalyzed > 0
+            ? mergeErrorProfiles([baseProfile, cachedProfile])
+            : cachedProfile;
+          setEnhancedErrorProfile(initialMerged);
+          computedEvalsRef.current = cachedEvals;
+          updateWeaknessesAndTips(initialMerged);
+        }
+
+        if (needsStockfish.length === 0) {
+          // All games covered by Lichess evals + IndexedDB cache
           setUpgradeProgress({
             gamesComplete: allGameMoves.length,
             totalGames: allGameMoves.length,
@@ -749,7 +797,7 @@ export default function ScoutPage() {
         // Set initial progress immediately so the UI shows feedback
         setUpgradeProgress({
           gamesComplete: 0,
-          totalGames: unevaluated.length,
+          totalGames: needsStockfish.length,
           pct: 0,
         });
 
@@ -769,12 +817,9 @@ export default function ScoutPage() {
 
         if (abort.signal.aborted) return;
 
-        // Track the base error profile (from Lichess evals) for merging
-        const baseProfile = filteredData?.errorProfile;
-
         const evalData = await batchEvaluateGames(
           evalEngineRef.current,
-          unevaluated,
+          needsStockfish,
           mode,
           (progress) => {
             if (abort.signal.aborted) return;
@@ -790,16 +835,39 @@ export default function ScoutPage() {
                   : 0,
             });
           },
-          abort.signal
+          abort.signal,
+          // onBatchComplete: incremental profile updates + IndexedDB persistence
+          (batchResults, allResults) => {
+            if (abort.signal.aborted) return;
+
+            // Build incremental error profile from all computed evals so far
+            const allEvals = [...cachedEvals, ...allResults];
+            const incrementalProfile = buildErrorProfileFromEvals(allEvals);
+            const merged = baseProfile && baseProfile.gamesAnalyzed > 0
+              ? mergeErrorProfiles([baseProfile, incrementalProfile])
+              : incrementalProfile;
+            setEnhancedErrorProfile(merged);
+            computedEvalsRef.current = allEvals;
+            updateWeaknessesAndTips(merged);
+
+            // Persist new batch to IndexedDB (fire-and-forget)
+            const startIdx = allResults.length - batchResults.length;
+            const batchEntries = batchResults.map((data, i) => ({
+              gameId: needsStockfish[startIdx + i].id,
+              data,
+              evalMode: mode,
+            }));
+            storeEvals(platform, username, batchEntries).catch(() => {});
+          },
         );
 
         if (abort.signal.aborted) return;
 
-        // Build error profile from computed evals
-        const computedProfile = buildErrorProfileFromEvals(evalData);
-        computedEvalsRef.current = evalData;
+        // Final merged profile
+        const allEvals = [...cachedEvals, ...evalData];
+        const computedProfile = buildErrorProfileFromEvals(allEvals);
+        computedEvalsRef.current = allEvals;
 
-        // Merge with existing Lichess-based profile
         const merged =
           baseProfile && baseProfile.gamesAnalyzed > 0
             ? mergeErrorProfiles([baseProfile, computedProfile])
@@ -807,26 +875,9 @@ export default function ScoutPage() {
 
         setEnhancedErrorProfile(merged);
         setUpgradeComplete(true);
+        updateWeaknessesAndTips(merged);
 
-        // Recalculate weaknesses and prep tips with enhanced error data
-        // Use ref to get fresh filteredData (avoids stale closure)
-        const currentFilteredData = filteredDataRef.current;
-        if (currentFilteredData) {
-          const updatedWeaknesses = detectWeaknessesFromErrorProfile(
-            merged,
-            currentFilteredData.weaknesses
-          );
-          setEnhancedWeaknesses(updatedWeaknesses);
-
-          const updatedTips = generatePrepTips(
-            updatedWeaknesses,
-            currentFilteredData.openings,
-            currentFilteredData.style
-          );
-          setEnhancedPrepTips(updatedTips);
-        }
-
-        // Cache in sessionStorage
+        // Cache in sessionStorage (L1 cache for same-tab instant loads)
         try {
           sessionStorage.setItem(
             `enhanced-profile:${username}`,
@@ -851,7 +902,7 @@ export default function ScoutPage() {
     },
     // filteredData accessed via filteredDataRef to avoid stale closures
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [username, selectedSpeeds, timeRange]
+    [username, platform, selectedSpeeds, timeRange, updateWeaknessesAndTips]
   );
 
   // Cancel an in-progress upgrade
@@ -1127,6 +1178,7 @@ export default function ScoutPage() {
                 upgradeProgress={upgradeProgress}
                 isUpgrading={isUpgrading}
                 upgradeComplete={upgradeComplete}
+                platform={platform}
               />
             </div>
           )}

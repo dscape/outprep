@@ -4,6 +4,7 @@ import { fetchChesscomUser, fetchChesscomStats, fetchChesscomGames } from "@/lib
 import { buildProfile } from "@/lib/profile-builder";
 import { fromLichessGame, fromChesscomGame } from "@/lib/normalized-game";
 import type { LichessUser, LichessGame, ChesscomGame } from "@/lib/types";
+import { getOnlineProfile, upsertOnlineProfile } from "@/lib/db";
 
 // Simple in-memory cache
 const cache = new Map<string, { data: unknown; expires: number }>();
@@ -62,6 +63,16 @@ async function handleLichess(
   const userCacheKey = `user:lichess:${username.toLowerCase()}`;
   const gamesCacheKey = `games:lichess:${username.toLowerCase()}`;
 
+  // For all-time requests, try DB cache first
+  if (!since) {
+    const dbProfile = await getOnlineProfile("lichess", username);
+    if (dbProfile && dbProfile.profileJson) {
+      const profile = dbProfile.profileJson;
+      setCache(profileCacheKey, profile);
+      return NextResponse.json(profile);
+    }
+  }
+
   let user = getCached(userCacheKey) as LichessUser | null;
   let games = getCached(gamesCacheKey) as LichessGame[] | null;
 
@@ -82,6 +93,14 @@ async function handleLichess(
   const profile = buildProfile(user!, normalized);
   setCache(profileCacheKey, profile);
 
+  // Persist all-time profile to DB for fast repeat visits
+  if (!since) {
+    const newestTs = games.length > 0
+      ? Math.max(...games.map((g) => g.createdAt ?? 0))
+      : null;
+    upsertOnlineProfile("lichess", username, profile, games.length, newestTs).catch(() => {});
+  }
+
   return NextResponse.json(profile);
 }
 
@@ -92,6 +111,16 @@ async function handleChesscom(
 ) {
   const userCacheKey = `user:chesscom:${username.toLowerCase()}`;
   const gamesCacheKey = `games:chesscom:${username.toLowerCase()}:${since || "all"}`;
+
+  // For all-time requests, try DB cache first
+  if (!since) {
+    const dbProfile = await getOnlineProfile("chesscom", username);
+    if (dbProfile && dbProfile.profileJson) {
+      const profile = dbProfile.profileJson;
+      setCache(profileCacheKey, profile);
+      return NextResponse.json(profile);
+    }
+  }
 
   let userLike = getCached(userCacheKey) as LichessUser | null;
   let games = getCached(gamesCacheKey) as ChesscomGame[] | null;
@@ -128,6 +157,14 @@ async function handleChesscom(
   const normalized = filtered.map((g) => fromChesscomGame(g, userLike!.username));
   const profile = buildProfile(userLike!, normalized);
   setCache(profileCacheKey, profile);
+
+  // Persist all-time profile to DB for fast repeat visits
+  if (!since) {
+    const newestTs = games.length > 0
+      ? Math.max(...games.map((g) => g.end_time * 1000))
+      : null;
+    upsertOnlineProfile("chesscom", username, profile, games.length, newestTs).catch(() => {});
+  }
 
   return NextResponse.json(profile);
 }

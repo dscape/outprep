@@ -15,6 +15,7 @@ interface ErrorProfileCardProps {
   } | null;
   isUpgrading?: boolean;
   upgradeComplete?: boolean;
+  platform?: string;
 }
 
 /**
@@ -139,17 +140,21 @@ export default function ErrorProfileCard({
   upgradeProgress,
   isUpgrading = false,
   upgradeComplete = false,
+  platform,
 }: ErrorProfileCardProps) {
   // No analyzed games yet — auto-scan will trigger shortly
   if (errorProfile.gamesAnalyzed === 0 && !isUpgrading) {
     if (!totalGames || totalGames === 0) return null;
+    const isChesscom = platform === "chesscom";
     return (
       <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
         <h3 className="text-sm font-medium text-zinc-300 uppercase tracking-wide mb-3">
           Error Profile
         </h3>
         <p className="text-xs text-zinc-500">
-          Preparing analysis of {totalGames} games...
+          {isChesscom
+            ? `Chess.com games require browser analysis \u2014 starting now...`
+            : `Preparing analysis of ${totalGames} games...`}
         </p>
       </div>
     );
