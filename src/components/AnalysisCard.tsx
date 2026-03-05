@@ -641,9 +641,22 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
             {viewTab === "moments" && (
               <div className="max-h-[420px] overflow-y-auto pr-1 space-y-2 scrollbar-thin">
                 {analysis.keyMoments.length === 0 ? (
-                  <p className="text-sm text-zinc-500 py-4 text-center">
-                    No key moments found — the game was relatively even.
-                  </p>
+                  <div className="py-6 text-center">
+                    {analysis.moves.some(m => m.classification === "blunder" || m.classification === "mistake") ? (
+                      <>
+                        <p className="text-sm text-zinc-400 mb-2">
+                          Key moments require opponent analysis to identify.
+                        </p>
+                        <p className="text-xs text-zinc-600">
+                          Scout this player first to unlock detailed key moments with opponent context.
+                        </p>
+                      </>
+                    ) : (
+                      <p className="text-sm text-zinc-500">
+                        No key moments found — the game was relatively even.
+                      </p>
+                    )}
+                  </div>
                 ) : (
                   analysis.keyMoments.map((moment, i) => {
                     const isSelected = selectedPly === moment.ply;

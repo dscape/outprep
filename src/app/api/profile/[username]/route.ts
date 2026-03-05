@@ -108,10 +108,10 @@ async function handleChesscom(
       id: ccUser.username.toLowerCase(),
       username: ccUser.username,
       perfs: {
-        bullet: ccStats.chess_bullet ? { rating: ccStats.chess_bullet.last.rating, games: 0, rd: 0, prog: 0 } : undefined,
-        blitz: ccStats.chess_blitz ? { rating: ccStats.chess_blitz.last.rating, games: 0, rd: 0, prog: 0 } : undefined,
-        rapid: ccStats.chess_rapid ? { rating: ccStats.chess_rapid.last.rating, games: 0, rd: 0, prog: 0 } : undefined,
-        classical: ccStats.chess_daily ? { rating: ccStats.chess_daily.last.rating, games: 0, rd: 0, prog: 0 } : undefined,
+        bullet: ccStats.chess_bullet ? { rating: ccStats.chess_bullet.last.rating, games: (ccStats.chess_bullet.record?.win ?? 0) + (ccStats.chess_bullet.record?.loss ?? 0) + (ccStats.chess_bullet.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
+        blitz: ccStats.chess_blitz ? { rating: ccStats.chess_blitz.last.rating, games: (ccStats.chess_blitz.record?.win ?? 0) + (ccStats.chess_blitz.record?.loss ?? 0) + (ccStats.chess_blitz.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
+        rapid: ccStats.chess_rapid ? { rating: ccStats.chess_rapid.last.rating, games: (ccStats.chess_rapid.record?.win ?? 0) + (ccStats.chess_rapid.record?.loss ?? 0) + (ccStats.chess_rapid.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
+        classical: ccStats.chess_daily ? { rating: ccStats.chess_daily.last.rating, games: (ccStats.chess_daily.record?.win ?? 0) + (ccStats.chess_daily.record?.loss ?? 0) + (ccStats.chess_daily.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
       },
       count: { all: ccGames.length, rated: ccGames.length },
     };

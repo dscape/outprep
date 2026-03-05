@@ -35,6 +35,13 @@ export async function GET(
         fetchChesscomUser(username),
         fetchChesscomStats(username),
       ]);
+      // Sum win+loss+draw across all time controls for total game count
+      const totalGames = [stats.chess_bullet, stats.chess_blitz, stats.chess_rapid, stats.chess_daily]
+        .reduce((sum, tc) => {
+          if (!tc?.record) return sum;
+          return sum + tc.record.win + tc.record.loss + tc.record.draw;
+        }, 0);
+
       basicProfile = {
         username: user.username,
         ratings: {
@@ -43,7 +50,7 @@ export async function GET(
           rapid: stats.chess_rapid?.last?.rating,
           classical: stats.chess_daily?.last?.rating,
         },
-        totalGames: 0, // Chess.com doesn't expose total count cheaply
+        totalGames,
       };
     } else {
       const user = await fetchLichessUser(username);

@@ -168,11 +168,16 @@ export interface ChesscomUser {
   country?: string;
 }
 
+interface ChesscomStatEntry {
+  last: { rating: number };
+  record: { win: number; loss: number; draw: number };
+}
+
 export interface ChesscomStats {
-  chess_bullet?: { last: { rating: number } };
-  chess_blitz?: { last: { rating: number } };
-  chess_rapid?: { last: { rating: number } };
-  chess_daily?: { last: { rating: number } };
+  chess_bullet?: ChesscomStatEntry;
+  chess_blitz?: ChesscomStatEntry;
+  chess_rapid?: ChesscomStatEntry;
+  chess_daily?: ChesscomStatEntry;
 }
 
 export interface ChesscomGame {

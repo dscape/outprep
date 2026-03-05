@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { Chess } from "chess.js";
-import { GameAnalysis, PlayerProfile, MoveEval, AnalysisSummary } from "@/lib/types";
+import { GameAnalysis, PlayerProfile, MoveEval, AnalysisSummary, KeyMoment, MomentTag } from "@/lib/types";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { evaluateGame } from "@/lib/analysis/stockfish-eval";
 import { classifyPositions } from "@/lib/analysis/position-classifier";
@@ -106,9 +106,14 @@ export default function AnalysisPage() {
 
         // Step 4: Opponent context overlay
         setStage("Cross-referencing opponent patterns...");
-        const keyMoments = profile
+        let keyMoments = profile
           ? tagMoments(moves, contexts, profile, gd.playerColor, gd.scoutedUsername)
           : [];
+
+        // Fallback: generate basic key moments from eval swings if no profile available
+        if (keyMoments.length === 0) {
+          keyMoments = generateBasicKeyMoments(moves, gd.playerColor, gd.scoutedUsername);
+        }
 
         // Step 5: Generate narrative
         setStage("Generating coaching analysis...");
@@ -328,4 +333,72 @@ async function fetchProfile(username: string): Promise<PlayerProfile | null> {
   }
 
   return null;
+}
+
+/**
+ * Generate basic key moments from eval swings when no opponent profile is available.
+ * Identifies blunders, mistakes, and strong moves without opponent context.
+ */
+function generateBasicKeyMoments(
+  moves: MoveEval[],
+  playerColor: "white" | "black",
+  playerName?: string
+): KeyMoment[] {
+  const moments: KeyMoment[] = [];
+  const pPossessive = playerName ? `${playerName}'s` : "Your";
+
+  for (const move of moves) {
+    if (Math.abs(move.evalDelta) < 50) continue;
+
+    const moveNum = Math.ceil(move.ply / 2);
+    const isPlayerMove =
+      (playerColor === "white" && move.ply % 2 === 1) ||
+      (playerColor === "black" && move.ply % 2 === 0);
+
+    let tag: MomentTag;
+    let description: string;
+
+    if (isPlayerMove) {
+      if (move.classification === "blunder") {
+        tag = "BLUNDER";
+        description = `${pPossessive} blunder on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+      } else if (move.classification === "mistake") {
+        tag = "MISTAKE";
+        description = `${pPossessive} mistake on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+      } else if (move.evalDelta <= -30) {
+        tag = "WELL PLAYED";
+        description = `Strong move ${move.san} on move ${moveNum} gained a significant advantage.`;
+      } else {
+        tag = "INACCURACY";
+        description = `Inaccuracy on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+      }
+    } else {
+      if (move.classification === "blunder" || move.classification === "mistake") {
+        tag = "EXPECTED";
+        description = `Opponent's ${move.classification} on move ${moveNum}: ${move.san}. Best was ${move.bestMoveSan || move.bestMove}.`;
+      } else {
+        continue; // Skip minor opponent moves without profile context
+      }
+    }
+
+    moments.push({
+      moveNum,
+      ply: move.ply,
+      san: move.san,
+      bestMoveSan:
+        tag === "BLUNDER" || tag === "MISTAKE" || tag === "INACCURACY" ||
+        move.classification === "blunder" || move.classification === "mistake"
+          ? (move.bestMoveSan || move.bestMove)
+          : undefined,
+      description,
+      tag,
+      eval: move.eval,
+      evalDelta: move.evalDelta,
+    });
+  }
+
+  return moments
+    .sort((a, b) => Math.abs(b.evalDelta) - Math.abs(a.evalDelta))
+    .slice(0, 10)
+    .sort((a, b) => a.moveNum - b.moveNum);
 }

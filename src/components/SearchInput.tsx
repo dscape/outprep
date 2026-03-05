@@ -173,7 +173,7 @@ export default function SearchInput() {
       const user = lichessSuggestions[index];
       if (user) {
         setLichessSuggestions([]);
-        router.push(`/scout/${user.id}`);
+        router.push(`/scout/lichess:${user.id}`);
       }
     }
   }
@@ -220,7 +220,7 @@ export default function SearchInput() {
           setLoading(false);
           return;
         }
-        router.push(`/scout/${trimmed}`);
+        router.push(`/scout/lichess:${trimmed}`);
       } else {
         // FIDE: shouldn't normally submit without selecting from dropdown,
         // but handle gracefully by searching and navigating to first result

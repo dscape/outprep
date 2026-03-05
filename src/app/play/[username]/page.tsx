@@ -8,7 +8,7 @@ import type { ErrorProfile, OpeningTrie, GameRecord } from "@outprep/engine";
 import { buildOpeningTrie } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
-import { parsePlatformUsername } from "@/lib/platform-utils";
+import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
 
 interface BotData {
   errorProfile: ErrorProfile;
@@ -277,8 +277,7 @@ export default function PlayPage() {
         <div className="mb-6 flex items-center justify-between">
           <button
             onClick={() => {
-              const prefix = platform === "chesscom" ? "chesscom:" : "";
-              router.push(`/scout/${prefix}${encodeURIComponent(username)}`);
+              router.push(buildScoutUrl(platform, username));
             }}
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >

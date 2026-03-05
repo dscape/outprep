@@ -27,14 +27,12 @@ export function parsePlatformUsername(rawParam: string): {
 
 /**
  * Build a scout URL for a given platform and username.
- * Lichess users get bare URLs for cleaner links.
+ * All platforms use explicit prefixes for consistency.
  */
 export function buildScoutUrl(
   platform: Platform | string,
   username: string,
 ): string {
-  if (platform === "lichess" || !platform) {
-    return `/scout/${encodeURIComponent(username)}`;
-  }
-  return `/scout/${platform}:${encodeURIComponent(username)}`;
+  const p = platform || "lichess";
+  return `/scout/${p}:${encodeURIComponent(username)}`;
 }

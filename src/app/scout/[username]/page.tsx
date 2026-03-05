@@ -26,6 +26,7 @@ import PrepTipsTab from "@/components/PrepTipsTab";
 import OTBUploader from "@/components/OTBUploader";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
 import ErrorProfileCard from "@/components/ErrorProfileCard";
+import Toast from "@/components/Toast";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import {
   openingFamily,
@@ -232,7 +233,7 @@ export default function ScoutPage() {
   const [otbProfile, setOtbProfile] = useState<OTBProfile | null>(null);
 
   // Upgrade state
-  const [showPlayConfirm, setShowPlayConfirm] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [upgradeProgress, setUpgradeProgress] = useState<{
     gamesComplete: number;
@@ -877,6 +878,14 @@ export default function ScoutPage() {
     }
   }, [filteredData, enhancedErrorProfile, isUpgrading, upgradeComplete, isPGNMode, handleUpgrade]);
 
+  // Eagerly fetch raw games in background once profile loads (for instant drill-down)
+  useEffect(() => {
+    if (filteredData && !isPGNMode && !rawDrilldownGames && !loadingDrilldownGames) {
+      fetchRawGames();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredData, isPGNMode]);
+
   // Determine displayed error profile: enhanced if available, otherwise base
   const displayedErrorProfile =
     enhancedErrorProfile || filteredData?.errorProfile;
@@ -890,10 +899,8 @@ export default function ScoutPage() {
       router.push(`/play/pgn:${encodeURIComponent(username)}`);
       return;
     }
-    if (isUpgrading) {
-      setShowPlayConfirm(true);
-      return;
-    }
+
+    // Save enhanced profile if available
     if (enhancedErrorProfile) {
       try {
         sessionStorage.setItem(
@@ -904,93 +911,26 @@ export default function ScoutPage() {
         // Storage full — non-fatal
       }
     }
+
+    // Show toast warning if analysis is still running or hasn't started
+    if (isUpgrading && upgradeProgress) {
+      setToastMessage(
+        `Analysis ${upgradeProgress.pct}% complete \u2014 bot may not reflect full game history`
+      );
+    } else if (!upgradeComplete && !enhancedErrorProfile) {
+      setToastMessage(
+        "Analysis hasn\u2019t started yet \u2014 the bot will use limited data"
+      );
+    }
+
+    // Navigate immediately (don't block on confirmation)
     const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
     const since = sinceMs ? Date.now() - sinceMs : undefined;
     const platformPrefix = isChesscomMode ? "chesscom:" : "";
     let playUrl = `/play/${platformPrefix}${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
     if (since) playUrl += `&since=${since}`;
     router.push(playUrl);
-  }, [isPGNMode, isChesscomMode, isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
-
-  if (fullLoading) {
-    return (
-      <div className="min-h-screen px-4 py-8">
-        <div className="mx-auto max-w-3xl">
-          <button
-            onClick={() => router.push("/")}
-            className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            &larr; Back to search
-          </button>
-
-          {basicData ? (
-            <>
-              {/* Partial PlayerCard: username + ratings */}
-              <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
-                <div>
-                  <h2 className="text-2xl font-bold text-white">{basicData.username}</h2>
-                  <p className="text-sm text-zinc-500 mt-1">
-                    Analyzing {basicData.totalGames.toLocaleString()} games...
-                  </p>
-                </div>
-                {Object.entries(basicData.ratings).filter(([, v]) => v !== undefined).length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    {Object.entries(basicData.ratings)
-                      .filter(([, v]) => v !== undefined)
-                      .map(([label, value]) => (
-                        <div key={label} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm">
-                          <span className="text-zinc-500 capitalize">{label}</span>{" "}
-                          <span className="font-mono text-white">{value}</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-                {/* Skeleton style bars */}
-                <div className="mt-6 space-y-3">
-                  <div className="h-4 w-24 rounded bg-zinc-700/50 animate-pulse" />
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <div className="w-24 h-3 rounded bg-zinc-700/30 animate-pulse" />
-                      <div className="flex-1 h-2 rounded-full bg-zinc-700/30 animate-pulse" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Skeleton for error profile */}
-              <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-5 rounded-md bg-zinc-700/30 animate-pulse" />
-                  ))}
-                </div>
-              </div>
-
-              {/* Skeleton for tabs */}
-              <div className="mt-8">
-                <div className="flex gap-1 border-b border-zinc-800">
-                  {["Openings", "Weaknesses", "Prep Tips"].map((label) => (
-                    <div key={label} className="px-4 py-2.5 text-sm text-zinc-600">
-                      {label}
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-6 space-y-4">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-12 rounded-lg bg-zinc-800/30 animate-pulse" />
-                  ))}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex min-h-[60vh] items-center justify-center">
-              <div className="h-12 w-12 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  }, [isPGNMode, isChesscomMode, isUpgrading, upgradeProgress, upgradeComplete, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
 
   if (error) {
     return (
@@ -1009,12 +949,10 @@ export default function ScoutPage() {
     );
   }
 
-  if (!profile || !filteredData) return null;
-
   // In FIDE mode, username is a slug — use the profile's resolved name
-  const displayName = isPGNMode && profile.username ? profile.username : profile.username;
+  const displayName = profile?.username || basicData?.username || username;
 
-  const availableSpeeds = Object.keys(profile.bySpeed || {}).sort(
+  const availableSpeeds = Object.keys(profile?.bySpeed || {}).sort(
     (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
   );
 
@@ -1024,6 +962,25 @@ export default function ScoutPage() {
     ["prep", "Prep Tips"],
     ...(!isPGNMode && otbProfile ? [["otb", "OTB Games"] as [Tab, string]] : []),
   ];
+
+  // Show spinner only when no data at all (neither basicData nor profile)
+  if (!basicData && !profile && fullLoading) {
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="mx-auto max-w-3xl">
+          <button
+            onClick={() => router.push("/")}
+            className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            &larr; Back to search
+          </button>
+          <div className="flex min-h-[60vh] items-center justify-center">
+            <div className="h-12 w-12 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen px-4 py-8">
@@ -1044,81 +1001,117 @@ export default function ScoutPage() {
           >
             &larr; Back to search
           </button>
-          <button
-            onClick={handlePracticeClick}
-            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
-            style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
-          >
-            Practice &#9654;
-          </button>
+          {filteredData && (
+            <button
+              onClick={handlePracticeClick}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+              style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
+            >
+              Practice &#9654;
+            </button>
+          )}
         </div>
 
-        {/* Filters */}
-        <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-          {/* Speed Filter */}
-          {availableSpeeds.length >= 1 && (
+        {/* Filters — show only when profile is loaded */}
+        {profile && (
+          <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+            {/* Speed Filter */}
+            {availableSpeeds.length >= 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
+                  Speed
+                </span>
+                {availableSpeeds.map((speed) => {
+                  const data = profile.bySpeed?.[speed];
+                  const isActive = selectedSpeeds.includes(speed);
+                  return (
+                    <button
+                      key={speed}
+                      onClick={() => toggleSpeed(speed)}
+                      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-green-600 text-white"
+                          : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
+                      <span
+                        className={isActive ? "text-green-200" : "text-zinc-600"}
+                      >
+                        {data?.games}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Time Range Filter */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
-                Speed
+                Period
               </span>
-              {availableSpeeds.map((speed) => {
-                const data = profile.bySpeed?.[speed];
-                const isActive = selectedSpeeds.includes(speed);
-                return (
-                  <button
-                    key={speed}
-                    onClick={() => toggleSpeed(speed)}
-                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                      isActive
-                        ? "bg-green-600 text-white"
-                        : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                    }`}
-                  >
-                    {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
-                    <span
-                      className={isActive ? "text-green-200" : "text-zinc-600"}
-                    >
-                      {data?.games}
-                    </span>
-                  </button>
-                );
-              })}
+              {TIME_RANGES.map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    if (key !== timeRange) {
+                      setTimeRange(key);
+                    }
+                  }}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    timeRange === key
+                      ? "bg-green-600 text-white"
+                      : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  {label}
+                  {timeRangeLoading && timeRange === key && (
+                    <span className="ml-1.5 inline-block h-3 w-3 rounded-full border-2 border-green-200 border-t-transparent animate-spin align-middle" />
+                  )}
+                </button>
+              ))}
             </div>
-          )}
-
-          {/* Time Range Filter */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
-              Period
-            </span>
-            {TIME_RANGES.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => {
-                  if (key !== timeRange) {
-                    setTimeRange(key);
-                  }
-                }}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  timeRange === key
-                    ? "bg-green-600 text-white"
-                    : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                }`}
-              >
-                {label}
-                {timeRangeLoading && timeRange === key && (
-                  <span className="ml-1.5 inline-block h-3 w-3 rounded-full border-2 border-green-200 border-t-transparent animate-spin align-middle" />
-                )}
-              </button>
-            ))}
           </div>
-        </div>
+        )}
 
-        {/* Player Card */}
-        <PlayerCard profile={profile} filteredGames={filteredData.games} />
+        {/* Player Card — show real card when profile loaded, skeleton when only basicData available */}
+        {profile && filteredData ? (
+          <PlayerCard profile={profile} filteredGames={filteredData.games} />
+        ) : basicData ? (
+          <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
+            <div>
+              <h2 className="text-2xl font-bold text-white">{basicData.username}</h2>
+              <p className="text-sm text-zinc-500 mt-1">
+                Analyzing {basicData.totalGames.toLocaleString()} games...
+              </p>
+            </div>
+            {Object.entries(basicData.ratings).filter(([, v]) => v !== undefined).length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-3">
+                {Object.entries(basicData.ratings)
+                  .filter(([, v]) => v !== undefined)
+                  .map(([label, value]) => (
+                    <div key={label} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm">
+                      <span className="text-zinc-500 capitalize">{label}</span>{" "}
+                      <span className="font-mono text-white">{value}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+            <div className="mt-6 space-y-3">
+              <div className="h-4 w-24 rounded bg-zinc-700/50 animate-pulse" />
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="w-24 h-3 rounded bg-zinc-700/30 animate-pulse" />
+                  <div className="flex-1 h-2 rounded-full bg-zinc-700/30 animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
-        {/* Error Profile — only for Lichess mode (PGN games don't have engine evals) */}
-        {!isPGNMode && (displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
+        {/* Error Profile — for Lichess & Chess.com (PGN games don't have engine evals) */}
+        {!isPGNMode && filteredData && (displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
             <div className="mt-4">
               <ErrorProfileCard
                 errorProfile={displayedErrorProfile || {
@@ -1137,6 +1130,17 @@ export default function ScoutPage() {
               />
             </div>
           )}
+
+        {/* Skeleton for error profile while loading */}
+        {!isPGNMode && !filteredData && fullLoading && (
+          <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-5 rounded-md bg-zinc-700/30 animate-pulse" />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* OTB PGN Upload */}
         <OTBUploader
@@ -1165,86 +1169,68 @@ export default function ScoutPage() {
           </div>
 
           <div className="mt-6 tab-content">
-            {activeTab === "openings" && (
-              <OpeningsTab
-                white={filteredData.openings.white}
-                black={filteredData.openings.black}
-                games={isPGNMode ? pgnDrilldownGames : drilldownGames}
-                onAnalyzeGame={handleAnalyzeGame}
-                onRequestGames={isPGNMode ? undefined : fetchRawGames}
-                loadingGames={isPGNMode ? false : loadingDrilldownGames}
-                coverageByOpening={isPGNMode ? undefined : coverageByOpening}
-              />
-            )}
-            {activeTab === "weaknesses" && (
-              <WeaknessesTab
-                weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
-                username={displayName}
-                speeds={selectedSpeeds.join(",")}
-              />
-            )}
-            {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />}
-            {activeTab === "otb" && otbProfile && (
-              <OTBAnalysisTab profile={otbProfile} />
+            {filteredData ? (
+              <>
+                {activeTab === "openings" && (
+                  <OpeningsTab
+                    white={filteredData.openings.white}
+                    black={filteredData.openings.black}
+                    games={isPGNMode ? pgnDrilldownGames : drilldownGames}
+                    onAnalyzeGame={handleAnalyzeGame}
+                    onRequestGames={isPGNMode ? undefined : fetchRawGames}
+                    loadingGames={isPGNMode ? false : loadingDrilldownGames}
+                    coverageByOpening={isPGNMode ? undefined : coverageByOpening}
+                  />
+                )}
+                {activeTab === "weaknesses" && (
+                  <WeaknessesTab
+                    weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
+                    username={displayName}
+                    speeds={selectedSpeeds.join(",")}
+                  />
+                )}
+                {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />}
+                {activeTab === "otb" && otbProfile && (
+                  <OTBAnalysisTab profile={otbProfile} />
+                )}
+              </>
+            ) : (
+              /* Skeleton tab content while loading */
+              <div className="space-y-4">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="h-12 rounded-lg bg-zinc-800/30 animate-pulse" />
+                ))}
+              </div>
             )}
           </div>
         </div>
 
         {/* Practice button */}
-        <div className="mt-8 flex flex-col items-center gap-3">
-          <button
-            onClick={handlePracticeClick}
-            className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
-          >
-            Practice against {displayName}
-          </button>
-          <p className="text-xs text-zinc-500 mt-1">
-            Bot trained on {filteredData.games} {selectedSpeeds.join(" + ")} game{filteredData.games !== 1 ? "s" : ""}
-            {timeRange !== "all" ? ` from ${TIME_RANGES.find(t => t.key === timeRange)?.label?.toLowerCase()}` : ""}
-          </p>
-
-          {showPlayConfirm && isUpgrading && (
-            <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/80 p-4 text-center max-w-md animate-in fade-in duration-200">
-              <p className="text-sm text-zinc-300 mb-3">
-                Analysis is {upgradeProgress?.pct ?? 0}% complete. The bot won&apos;t
-                include the new data until analysis finishes.
-              </p>
-              <div className="flex gap-2 justify-center">
-                <button
-                  onClick={() => {
-                    setShowPlayConfirm(false);
-                    if (enhancedErrorProfile) {
-                      try {
-                        sessionStorage.setItem(
-                          `enhanced-profile:${username}`,
-                          JSON.stringify(enhancedErrorProfile)
-                        );
-                      } catch {
-                        // Storage full — non-fatal
-                      }
-                    }
-                    const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
-                    const since = sinceMs ? Date.now() - sinceMs : undefined;
-                    const platformPrefix = isChesscomMode ? "chesscom:" : "";
-                    let playUrl = `/play/${platformPrefix}${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
-                    if (since) playUrl += `&since=${since}`;
-                    router.push(playUrl);
-                  }}
-                  className="rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50"
-                >
-                  Play now with current data
-                </button>
-                <button
-                  onClick={() => setShowPlayConfirm(false)}
-                  className="rounded-lg border border-green-600/40 bg-green-600/10 px-4 py-2 text-sm font-medium text-green-400 transition-colors hover:bg-green-600/20"
-                >
-                  Wait for analysis
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {filteredData && (
+          <div className="mt-8 flex flex-col items-center gap-3">
+            <button
+              onClick={handlePracticeClick}
+              className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
+            >
+              Practice against {displayName}
+            </button>
+            <p className="text-xs text-zinc-500 mt-1">
+              Bot trained on {filteredData.games} {selectedSpeeds.join(" + ")} game{filteredData.games !== 1 ? "s" : ""}
+              {timeRange !== "all" ? ` from ${TIME_RANGES.find(t => t.key === timeRange)?.label?.toLowerCase()}` : ""}
+            </p>
+          </div>
+        )}
       </div>
+
+      {/* Toast notification for analysis warnings */}
+      {toastMessage && (
+        <Toast
+          message={toastMessage}
+          progress={isUpgrading ? upgradeProgress?.pct : undefined}
+          duration={5000}
+          onDismiss={() => setToastMessage(null)}
+        />
+      )}
     </div>
   );
 }
