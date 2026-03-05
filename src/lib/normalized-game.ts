@@ -229,7 +229,10 @@ function extractPgnHeader(pgn: string, key: string): string | null {
   return match?.[1] && match[1] !== "?" ? match[1] : null;
 }
 
-function resolveOpeningName(eco: string | null, opening: string | null): string {
+function resolveOpeningName(eco: string | null, opening: string | null, preferOpening = false): string {
+  // When preferOpening is true (Chess.com), trust the source's opening name
+  // since ECO_NAMES are too coarse (e.g. C44 → "Scotch Game" covers many openings)
+  if (preferOpening && opening && opening !== "?") return opening;
   if (eco && ECO_NAMES[eco]) return ECO_NAMES[eco];
   if (opening && opening !== "?") return opening;
   return eco || "Unknown";
@@ -356,12 +359,15 @@ export function fromChesscomGame(
   let eco = "";
   let openingName = "";
 
+  let date: string | undefined;
+
   if (pgn) {
     // Extract ECO and opening from PGN headers
     const ecoMatch = pgn.match(/\[ECO\s+"([^"]*)"\]/);
     const openingMatch = pgn.match(/\[Opening\s+"([^"]*)"\]/);
     eco = ecoMatch?.[1] || "";
     openingName = openingMatch?.[1] || "";
+    date = extractPgnHeader(pgn, "Date") || undefined;
 
     // Extract moves from PGN body
     try {
@@ -373,14 +379,19 @@ export function fromChesscomGame(
     }
   }
 
-  // Resolve opening name via ECO lookup
-  let resolvedOpening = resolveOpeningName(eco || null, openingName || null);
-  if (resolvedOpening === "Unknown" && moves) {
+  // Chess.com often lacks [Opening] headers and ECO_NAMES are too coarse
+  // (e.g. C44 → "Scotch Game" covers King's Knight Opening, Ponziani, etc.)
+  // Always prefer move-based classification, then Chess.com header, then ECO_NAMES
+  let resolvedOpening = "Unknown";
+  if (moves) {
     const classified = classifyOpening(moves);
     if (classified) {
       resolvedOpening = classified.name;
       if (!eco) eco = classified.eco;
     }
+  }
+  if (resolvedOpening === "Unknown") {
+    resolvedOpening = resolveOpeningName(eco || null, openingName || null, true);
   }
 
   // Parse time control
@@ -404,6 +415,7 @@ export function fromChesscomGame(
     variant: "standard",
     createdAt: game.end_time * 1000,
     rated: game.rated,
+    date,
   };
 }
 

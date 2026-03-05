@@ -1225,7 +1225,8 @@ export default function ScoutPage() {
                     }
                     const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
                     const since = sinceMs ? Date.now() - sinceMs : undefined;
-                    let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
+                    const platformPrefix = isChesscomMode ? "chesscom:" : "";
+                    let playUrl = `/play/${platformPrefix}${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
                     if (since) playUrl += `&since=${since}`;
                     router.push(playUrl);
                   }}

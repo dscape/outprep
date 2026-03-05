@@ -173,7 +173,7 @@ export default function PlayPage() {
   // Bot data label for display
   const botDataLabel = enhancedErrorProfile
     ? `Bot enhanced with Stockfish analysis`
-    : `Bot based on Lichess game history`;
+    : `Bot based on ${platform === "chesscom" ? "Chess.com" : platform === "fide" ? "FIDE OTB" : "Lichess"} game history`;
 
   // Only block on profile — show color selection ASAP
   if (!profileReady && !error) {
