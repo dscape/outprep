@@ -1,3 +1,4 @@
+import Link from "next/link";
 import SearchInput from "@/components/SearchInput";
 import PGNDropZone from "@/components/PGNDropZone";
 import { getTopPlayers, formatPlayerName } from "@/lib/db";
@@ -146,13 +147,14 @@ export default async function Home() {
           </p>
           <div className="flex flex-wrap justify-center gap-2">
             {topPlayers.map((p) => (
-              <a
+              <Link
                 key={p.slug}
                 href={`/player/${p.slug}`}
+                prefetch={true}
                 className="rounded-md border border-zinc-800/50 bg-zinc-900/30 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:border-zinc-700/50 transition-all"
               >
                 {formatPlayerName(p.name)}
-              </a>
+              </Link>
             ))}
           </div>
         </section>

@@ -95,7 +95,7 @@ function GameList({
             : g.date;
 
           return (
-            <a
+            <Link
               key={g.slug}
               href={`/game/${g.slug}`}
               className="flex items-center gap-3 rounded-lg border border-zinc-800/50 bg-zinc-900/30 px-4 py-3 hover:bg-zinc-800/50 hover:border-zinc-700/50 transition-all text-sm group"
@@ -111,7 +111,7 @@ function GameList({
               )}
               <span className="text-zinc-600 text-xs whitespace-nowrap">{dateLabel}</span>
               <span className="text-zinc-600 group-hover:text-zinc-400">&rarr;</span>
-            </a>
+            </Link>
           );
         })}
       </div>
