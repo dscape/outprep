@@ -214,6 +214,7 @@ export default async function GamePage({
 
           {/* Players Header */}
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
+            <h1 className="sr-only">{white} vs {black} — {game.event}</h1>
             <div className="flex items-center justify-between gap-4">
               {/* White */}
               <div className="flex-1 text-center">
