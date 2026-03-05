@@ -60,7 +60,7 @@ export default function PGNDropZone() {
           }
 
           router.push(
-            `/scout/${encodeURIComponent(playerName)}?source=pgn`
+            `/scout/pgn:${encodeURIComponent(playerName)}`
           );
         } catch (err) {
           setError(

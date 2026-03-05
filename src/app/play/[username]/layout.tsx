@@ -1,20 +1,21 @@
 import { Metadata } from "next";
+import { parsePlatformUsername } from "@/lib/platform-utils";
 
 export async function generateMetadata({
   params,
 }: {
   params: Promise<{ username: string }>;
 }): Promise<Metadata> {
-  const { username } = await params;
-  const decoded = decodeURIComponent(username);
+  const { username: rawParam } = await params;
+  const { username } = parsePlatformUsername(rawParam);
 
   return {
-    title: `Practice Against ${decoded}`,
-    description: `Play against an AI that mimics ${decoded}'s playing style. Built from real game analysis.`,
+    title: `Practice Against ${username}`,
+    description: `Play against an AI that mimics ${username}'s playing style. Built from real game analysis.`,
     robots: { index: false, follow: false },
     openGraph: {
-      title: `Practice Against ${decoded}`,
-      description: `Play against an AI that mimics ${decoded}'s playing style.`,
+      title: `Practice Against ${username}`,
+      description: `Play against an AI that mimics ${username}'s playing style.`,
     },
   };
 }

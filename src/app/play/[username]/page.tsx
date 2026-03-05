@@ -8,6 +8,7 @@ import type { ErrorProfile, OpeningTrie, GameRecord } from "@outprep/engine";
 import { buildOpeningTrie } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
+import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
 
 interface BotData {
   errorProfile: ErrorProfile;
@@ -27,7 +28,7 @@ export default function PlayPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rawUsername = params.username as string;
-  const username = decodeURIComponent(rawUsername);
+  const { platform, username } = parsePlatformUsername(rawUsername);
   const speeds = searchParams.get("speeds") || "";
   const since = searchParams.get("since") || "";
   const eco = searchParams.get("eco") || "";
@@ -77,6 +78,7 @@ export default function PlayPage() {
       try {
         let query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
         if (since) query += `${query ? "&" : "?"}since=${encodeURIComponent(since)}`;
+        if (platform === "chesscom") query += `${query ? "&" : "?"}platform=chesscom`;
 
         // Start bot-data fetch immediately (likely cache-hit from scout pre-warm)
         const botFetch = fetch(
@@ -86,8 +88,9 @@ export default function PlayPage() {
         // Only fetch profile API if not in sessionStorage
         if (!profileFromCache) {
           try {
+            const platformQuery = platform === "chesscom" ? "?platform=chesscom" : "";
             const profileRes = await fetch(
-              `/api/profile/${encodeURIComponent(username)}`
+              `/api/profile/${encodeURIComponent(username)}${platformQuery}`
             );
             if (profileRes.ok) {
               const profileData = await profileRes.json();
@@ -170,7 +173,7 @@ export default function PlayPage() {
   // Bot data label for display
   const botDataLabel = enhancedErrorProfile
     ? `Bot enhanced with Stockfish analysis`
-    : `Bot based on Lichess game history`;
+    : `Bot based on ${platform === "chesscom" ? "Chess.com" : platform === "fide" ? "FIDE OTB" : "Lichess"} game history`;
 
   // Only block on profile — show color selection ASAP
   if (!profileReady && !error) {
@@ -273,7 +276,9 @@ export default function PlayPage() {
       <div className="mx-auto max-w-2xl">
         <div className="mb-6 flex items-center justify-between">
           <button
-            onClick={() => router.push(`/scout/${encodeURIComponent(username)}`)}
+            onClick={() => {
+              router.push(buildScoutUrl(platform, username));
+            }}
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             &larr; Back to scout
