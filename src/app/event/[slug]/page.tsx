@@ -178,27 +178,6 @@ export default async function EventPage({
             </div>
           </div>
 
-          {/* Players */}
-          {event.players.length > 0 && (
-            <div className="mt-8">
-              <h2 className="text-lg font-semibold text-white mb-4">Players</h2>
-              <div className="flex flex-wrap gap-2">
-                {event.players.map((p) => (
-                  <Link
-                    key={p.slug}
-                    href={`/player/${p.slug}`}
-                    className="rounded-md border border-zinc-800/50 bg-zinc-900/30 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:border-zinc-700/50 transition-all flex items-center gap-2"
-                  >
-                    {p.federation && <CountryFlag federation={p.federation} />}
-                    {p.title && <TitleBadge title={p.title} />}
-                    <span>{formatPlayerName(p.name)}</span>
-                    <span className="text-zinc-600">({p.fideRating})</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Games */}
           {event.games.length > 0 && (
             <div className="mt-8">
@@ -244,6 +223,27 @@ export default async function EventPage({
                     </Link>
                   );
                 })}
+              </div>
+            </div>
+          )}
+
+          {/* Players */}
+          {event.players.length > 0 && (
+            <div className="mt-8">
+              <h2 className="text-lg font-semibold text-white mb-4">Players</h2>
+              <div className="flex flex-wrap gap-2">
+                {event.players.map((p) => (
+                  <Link
+                    key={p.slug}
+                    href={`/player/${p.slug}`}
+                    className="rounded-md border border-zinc-800/50 bg-zinc-900/30 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:border-zinc-700/50 transition-all flex items-center gap-2"
+                  >
+                    {p.federation && <CountryFlag federation={p.federation} />}
+                    {p.title && <TitleBadge title={p.title} />}
+                    <span>{formatPlayerName(p.name)}</span>
+                    <span className="text-zinc-600">({p.fideRating})</span>
+                  </Link>
+                ))}
               </div>
             </div>
           )}

@@ -125,7 +125,7 @@ export default function PlayPage() {
     }
 
     load();
-  }, [username, speeds, cachedProfile]);
+  }, [username, speeds, cachedProfile, platform, since]);
 
   // Load opening moves if ECO param is present (separate effect to avoid sync setState)
   useEffect(() => {
