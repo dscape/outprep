@@ -214,6 +214,7 @@ export default async function GamePage({
 
           {/* Players Header */}
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
+            <h1 className="sr-only">{white} vs {black} — {game.event}</h1>
             <div className="flex items-center justify-between gap-4">
               {/* White */}
               <div className="flex-1 text-center">
@@ -223,12 +224,12 @@ export default async function GamePage({
                   {game.whiteTitle && <TitleBadge title={game.whiteTitle} />}
                 </div>
                 {game.whiteSlug ? (
-                  <a
+                  <Link
                     href={`/player/${game.whiteSlug}`}
                     className="text-lg font-bold text-white hover:text-green-400 transition-colors"
                   >
                     {white}
-                  </a>
+                  </Link>
                 ) : (
                   <span className="text-lg font-bold text-white">{white}</span>
                 )}
@@ -251,12 +252,12 @@ export default async function GamePage({
                   {game.blackTitle && <TitleBadge title={game.blackTitle} />}
                 </div>
                 {game.blackSlug ? (
-                  <a
+                  <Link
                     href={`/player/${game.blackSlug}`}
                     className="text-lg font-bold text-white hover:text-green-400 transition-colors"
                   >
                     {black}
-                  </a>
+                  </Link>
                 ) : (
                   <span className="text-lg font-bold text-white">{black}</span>
                 )}
@@ -319,7 +320,7 @@ export default async function GamePage({
           {/* Practice CTAs */}
           <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 gap-4">
             {game.whiteSlug && (
-              <a
+              <Link
                 href={`/player/${game.whiteSlug}`}
                 className="flex items-center justify-center gap-2 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4 hover:bg-zinc-800 hover:border-green-500/30 transition-all group"
               >
@@ -328,10 +329,10 @@ export default async function GamePage({
                   Practice against {white}
                 </span>
                 <span className="text-zinc-600 ml-auto">&rarr;</span>
-              </a>
+              </Link>
             )}
             {game.blackSlug && (
-              <a
+              <Link
                 href={`/player/${game.blackSlug}`}
                 className="flex items-center justify-center gap-2 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4 hover:bg-zinc-800 hover:border-green-500/30 transition-all group"
               >
@@ -340,7 +341,7 @@ export default async function GamePage({
                   Practice against {black}
                 </span>
                 <span className="text-zinc-600 ml-auto">&rarr;</span>
-              </a>
+              </Link>
             )}
           </div>
 
