@@ -54,7 +54,8 @@
       "Bash(kill 39361 40752 46229)",
       "Bash(git show 44f52f5 -- src/app/scout/[username]/page.tsx)",
       "Bash(git show f3fe898 -- src/app/scout/[username]/page.tsx)",
-      "Bash(head -40 /Users/dscape/dev/outprep/src/app/scout/[username]/page.tsx)"
+      "Bash(head -40 /Users/dscape/dev/outprep/src/app/scout/[username]/page.tsx)",
+      "mcp__claude_ai_Vercel__web_fetch_vercel_url"
     ]
   }
 }

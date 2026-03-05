@@ -8,7 +8,6 @@ const FAMOUS_PLAYERS = [
   { name: "Firouzja", slug: "firouzja-alireza-12573981" },
   { name: "Caruana", slug: "caruana-fabiano-2020009" },
   { name: "Nakamura", slug: "nakamura-hikaru-2016192" },
-  { name: "Ding Liren", slug: "ding-liren-8603677" },
   { name: "Gukesh", slug: "gukesh-d-46616543" },
 ];
 
