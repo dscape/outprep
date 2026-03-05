@@ -9,6 +9,7 @@ import { Chess } from "chess.js";
 import type {
   LichessGame,
   LichessEvalAnnotation,
+  ChesscomGame,
   OTBGame,
   GameEvalData,
 } from "./types";
@@ -19,7 +20,7 @@ import { generateGameSlug } from "./game-slug";
 import { ECO_NAMES } from "../../packages/fide-pipeline/src/eco-names";
 import type { GameForDrilldown } from "./game-helpers";
 
-export type GameSource = "lichess" | "fide" | "pgn";
+export type GameSource = "lichess" | "chesscom" | "fide" | "pgn";
 
 export interface NormalizedGame {
   id: string;
@@ -228,7 +229,10 @@ function extractPgnHeader(pgn: string, key: string): string | null {
   return match?.[1] && match[1] !== "?" ? match[1] : null;
 }
 
-function resolveOpeningName(eco: string | null, opening: string | null): string {
+function resolveOpeningName(eco: string | null, opening: string | null, preferOpening = false): string {
+  // When preferOpening is true (Chess.com), trust the source's opening name
+  // since ECO_NAMES are too coarse (e.g. C44 → "Scotch Game" covers many openings)
+  if (preferOpening && opening && opening !== "?") return opening;
   if (eco && ECO_NAMES[eco]) return ECO_NAMES[eco];
   if (opening && opening !== "?") return opening;
   return eco || "Unknown";
@@ -320,6 +324,98 @@ export function fromFidePGN(
     variant: "standard",
     date: date || undefined,
     event: event || undefined,
+  };
+}
+
+// ─── Chess.com adapter ──────────────────────────────────────────────────
+
+/**
+ * Determine result for a Chess.com game result string.
+ * Win results: "win"
+ * Loss results: "checkmated", "resigned", "timeout", "abandoned"
+ * Draw results: "stalemate", "agreed", "repetition", "insufficient", "50move", "timevsinsufficient"
+ */
+function chesscomResultToOutcome(
+  whiteResult: string,
+): "white" | "black" | "draw" | undefined {
+  if (whiteResult === "win") return "white";
+  const drawResults = ["stalemate", "agreed", "repetition", "insufficient", "50move", "timevsinsufficient"];
+  if (drawResults.includes(whiteResult)) return "draw";
+  // Any other white result means black won
+  return "black";
+}
+
+export function fromChesscomGame(
+  game: ChesscomGame,
+  username: string,
+): NormalizedGame {
+  const isWhite = game.white.username.toLowerCase() === username.toLowerCase();
+
+  const result = chesscomResultToOutcome(game.white.result);
+
+  // Extract moves from PGN
+  const pgn = game.pgn || "";
+  let moves = "";
+  let eco = "";
+  let openingName = "";
+
+  let date: string | undefined;
+
+  if (pgn) {
+    // Extract ECO and opening from PGN headers
+    const ecoMatch = pgn.match(/\[ECO\s+"([^"]*)"\]/);
+    const openingMatch = pgn.match(/\[Opening\s+"([^"]*)"\]/);
+    eco = ecoMatch?.[1] || "";
+    openingName = openingMatch?.[1] || "";
+    date = extractPgnHeader(pgn, "Date") || undefined;
+
+    // Extract moves from PGN body
+    try {
+      const chess = new Chess();
+      chess.loadPgn(pgn);
+      moves = chess.history().join(" ");
+    } catch {
+      // Fallback: strip headers and metadata from PGN
+    }
+  }
+
+  // Chess.com often lacks [Opening] headers and ECO_NAMES are too coarse
+  // (e.g. C44 → "Scotch Game" covers King's Knight Opening, Ponziani, etc.)
+  // Always prefer move-based classification, then Chess.com header, then ECO_NAMES
+  let resolvedOpening = "Unknown";
+  if (moves) {
+    const classified = classifyOpening(moves);
+    if (classified) {
+      resolvedOpening = classified.name;
+      if (!eco) eco = classified.eco;
+    }
+  }
+  if (resolvedOpening === "Unknown") {
+    resolvedOpening = resolveOpeningName(eco || null, openingName || null, true);
+  }
+
+  // Parse time control
+  const speed = classifyTimeControl(game.time_control);
+
+  return {
+    id: game.url.split("/").pop() || `chesscom-${game.end_time}`,
+    pgn,
+    moves,
+    white: { name: game.white.username, id: game.white.username.toLowerCase() },
+    black: { name: game.black.username, id: game.black.username.toLowerCase() },
+    result,
+    opening: {
+      eco,
+      name: resolvedOpening,
+      family: openingFamily(resolvedOpening),
+    },
+    source: "chesscom",
+    playerColor: isWhite ? "white" : "black",
+    speed,
+    variant: "standard",
+    createdAt: game.end_time * 1000,
+    rated: game.rated,
+    date,
   };
 }
 

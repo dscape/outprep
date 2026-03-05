@@ -92,19 +92,26 @@ function countTotalEvals(
   return total;
 }
 
+/** Default batch size for onBatchComplete callback */
+const BATCH_COMPLETE_SIZE = 50;
+
 /**
  * Batch evaluate positions from multiple games using Stockfish.
  *
  * For each game, replays moves and evaluates the position before each
  * of the player's moves. Returns eval data in a format compatible with
  * `buildErrorProfileFromEvals`.
+ *
+ * @param onBatchComplete - Optional callback fired every BATCH_COMPLETE_SIZE games
+ *   with (batchResults, allResultsSoFar). Use for incremental profile updates.
  */
 export async function batchEvaluateGames(
   engine: StockfishEngine,
   games: Array<{ moves: string; playerColor: "white" | "black" }>,
   mode: EvalMode,
   onProgress: (progress: BatchEvalProgress) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  onBatchComplete?: (batchResults: GameEvalData[], allResults: GameEvalData[]) => void,
 ): Promise<GameEvalData[]> {
   const depth = DEPTH[mode];
   const skipPlies = SKIP_PLIES[mode];
@@ -156,7 +163,9 @@ export async function batchEvaluateGames(
           try {
             // Evaluate position BEFORE this move (what the player saw)
             const result = await engine.evaluate(chess.fen(), depth);
-            lastEval = result.eval;
+            // Stockfish returns eval from side-to-move's perspective;
+            // convert to white's perspective (negate when black to move)
+            lastEval = (ply % 2 === 0) ? result.eval : -result.eval;
 
             // Store eval before this ply
             if (ply > 0) {
@@ -192,7 +201,8 @@ export async function batchEvaluateGames(
         ) {
           try {
             const afterResult = await engine.evaluate(chess.fen(), depth);
-            evals[ply] = afterResult.eval;
+            // After playing ply, side-to-move flipped: negate if black is now to move
+            evals[ply] = (ply % 2 === 0) ? -afterResult.eval : afterResult.eval;
           } catch {
             evals[ply] = lastEval; // fallback to previous eval
           }
@@ -215,6 +225,18 @@ export async function batchEvaluateGames(
       evalsComplete,
       totalEvals,
     });
+
+    // Fire batch complete callback every BATCH_COMPLETE_SIZE games
+    if (onBatchComplete && gamesComplete % BATCH_COMPLETE_SIZE === 0) {
+      const batchStart = gamesComplete - BATCH_COMPLETE_SIZE;
+      onBatchComplete(results.slice(batchStart), results);
+    }
+  }
+
+  // Fire final batch for remaining games
+  if (onBatchComplete && gamesComplete % BATCH_COMPLETE_SIZE !== 0) {
+    const batchStart = Math.floor(gamesComplete / BATCH_COMPLETE_SIZE) * BATCH_COMPLETE_SIZE;
+    onBatchComplete(results.slice(batchStart), results);
   }
 
   return results;

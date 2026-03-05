@@ -3717,3 +3717,48 @@ export function classifyOpening(
 
   return null;
 }
+
+/**
+ * Get the characteristic move line for an ECO code.
+ * Returns the shortest (most general) move sequence for the given ECO,
+ * formatted with move numbers for readability.
+ *
+ * @param eco  ECO code, e.g. "C44"
+ * @param maxHalfMoves  Maximum number of half-moves to show (default: 10)
+ * @returns  Formatted move string like "1.e4 e5 2.Nf3 Nc6 3.d4", or null if ECO not found
+ */
+export function getEcoMoves(eco: string, maxHalfMoves = 10): string | null {
+  if (!eco) return null;
+
+  // DB is sorted longest-first, so the last matching entry has the fewest moves
+  let shortest: ECOEntry | null = null;
+  const db = getDB();
+  for (const entry of db) {
+    if (entry.eco !== eco) continue;
+    if (!shortest || entry.moves.length < shortest.moves.length) {
+      shortest = entry;
+    }
+  }
+
+  if (!shortest || shortest.moves.length === 0) return null;
+
+  const moves = shortest.moves;
+  const truncated = moves.length > maxHalfMoves;
+  const limited = truncated ? moves.slice(0, maxHalfMoves) : moves;
+
+  // Format with move numbers: "1.e4 e5 2.Nf3 Nc6 ..."
+  let result = "";
+  for (let i = 0; i < limited.length; i++) {
+    const moveNum = Math.floor(i / 2) + 1;
+    if (i % 2 === 0) {
+      if (i > 0) result += " ";
+      result += `${moveNum}.${limited[i]}`;
+    } else {
+      result += ` ${limited[i]}`;
+    }
+  }
+
+  if (truncated) result += " \u2026";
+
+  return result;
+}

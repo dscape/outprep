@@ -267,6 +267,71 @@ export async function searchPlayers(
   }
 }
 
+// ─── Online profile cache ────────────────────────────────────────────────
+
+interface OnlineProfileRow {
+  profileJson: unknown;
+  gameCount: number;
+  newestGameTs: number | null;
+}
+
+/**
+ * Get a cached online profile (Lichess/Chess.com).
+ * Returns null if no cached profile exists or Postgres is unavailable.
+ */
+export async function getOnlineProfile(
+  platform: string,
+  username: string,
+): Promise<OnlineProfileRow | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const u = username.toLowerCase();
+    const { rows } = await sql`
+      SELECT profile_json, game_count, newest_game_ts
+      FROM online_profiles
+      WHERE platform = ${platform} AND username = ${u}
+    `;
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      profileJson: jsonb(row.profile_json, null),
+      gameCount: row.game_count as number,
+      newestGameTs: row.newest_game_ts ? Number(row.newest_game_ts) : null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upsert a cached online profile.
+ */
+export async function upsertOnlineProfile(
+  platform: string,
+  username: string,
+  profile: unknown,
+  gameCount: number,
+  newestGameTs: number | null,
+): Promise<void> {
+  if (!HAS_POSTGRES) return;
+  try {
+    const u = username.toLowerCase();
+    const profileStr = JSON.stringify(profile);
+    await sql`
+      INSERT INTO online_profiles (platform, username, profile_json, game_count, newest_game_ts, updated_at)
+      VALUES (${platform}, ${u}, ${profileStr}::jsonb, ${gameCount}, ${newestGameTs}, NOW())
+      ON CONFLICT (platform, username)
+      DO UPDATE SET
+        profile_json = ${profileStr}::jsonb,
+        game_count = ${gameCount},
+        newest_game_ts = ${newestGameTs},
+        updated_at = NOW()
+    `;
+  } catch {
+    // Non-fatal: cache write failure shouldn't break the app
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 /**
