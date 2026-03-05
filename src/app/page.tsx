@@ -1,7 +1,7 @@
 import Link from "next/link";
 import SearchInput from "@/components/SearchInput";
 import PGNDropZone from "@/components/PGNDropZone";
-import { getTopPlayers, formatPlayerName } from "@/lib/db";
+import { getTopPlayers, getRecentEvents, formatPlayerName } from "@/lib/db";
 
 const FAMOUS_PLAYERS = [
   { name: "Carlsen", slug: "carlsen-magnus-1290026" },
@@ -75,8 +75,21 @@ const jsonLd = {
   ],
 };
 
+function formatEventDate(dateStr: string | null): string {
+  if (!dateStr) return "";
+  const [y, m] = dateStr.split(".");
+  if (!y || !m) return dateStr;
+  return new Date(parseInt(y), parseInt(m) - 1).toLocaleDateString("en-US", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
 export default async function Home() {
-  const topPlayers = await getTopPlayers(12);
+  const [topPlayers, recentEvents] = await Promise.all([
+    getTopPlayers(12),
+    getRecentEvents(8),
+  ]);
 
   return (
     <div className="flex flex-col items-center px-4">
@@ -175,6 +188,46 @@ export default async function Home() {
                 className="rounded-md border border-zinc-800/50 bg-zinc-900/30 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:border-zinc-700/50 transition-all"
               >
                 {formatPlayerName(p.name)}
+              </Link>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Recent Events */}
+      {recentEvents.length > 0 && (
+        <section className="w-full max-w-3xl py-16 border-t border-zinc-800/50">
+          <h2 className="text-xl font-bold text-white text-center mb-2">
+            Recent Events
+          </h2>
+          <p className="text-sm text-zinc-500 text-center mb-8">
+            Browse the latest FIDE-rated tournaments
+          </p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {recentEvents.map((e) => (
+              <Link
+                key={e.slug}
+                href={`/event/${e.slug}`}
+                className="rounded-lg border border-zinc-800/50 bg-zinc-900/30 px-4 py-3 hover:bg-zinc-800/50 hover:border-zinc-700/50 transition-all group"
+              >
+                <div className="text-sm text-zinc-300 group-hover:text-white transition-colors truncate">
+                  {e.name}
+                </div>
+                <div className="mt-1 flex items-center gap-2 text-xs text-zinc-500">
+                  <span>{e.gameCount} games</span>
+                  {e.avgElo && (
+                    <>
+                      <span className="text-zinc-700">·</span>
+                      <span>avg {e.avgElo}</span>
+                    </>
+                  )}
+                  {e.dateEnd && (
+                    <>
+                      <span className="text-zinc-700">·</span>
+                      <span>{formatEventDate(e.dateEnd)}</span>
+                    </>
+                  )}
+                </div>
               </Link>
             ))}
           </div>

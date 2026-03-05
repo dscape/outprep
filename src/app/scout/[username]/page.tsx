@@ -30,7 +30,6 @@ import ErrorProfileCard from "@/components/ErrorProfileCard";
 import Toast from "@/components/Toast";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import {
-  openingFamily,
   detectWeaknessesFromErrorProfile,
   generatePrepTips,
 } from "@/lib/profile-builder";
@@ -488,7 +487,7 @@ export default function ScoutPage() {
     fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`).catch(
       () => {}
     );
-  }, [profile, selectedSpeeds, username, timeRange]);
+  }, [profile, selectedSpeeds, username, timeRange, isPGNMode]);
 
   const toggleSpeed = useCallback((speed: string) => {
     setSelectedSpeeds((prev) => {
@@ -617,7 +616,7 @@ export default function ScoutPage() {
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
       router.push(`/analysis/${game.id}`);
     },
-    [router, username, profile]
+    [router, username, profile, platform]
   );
 
   // Drill-down: lazy-fetch raw games for opening expansion

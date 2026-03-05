@@ -79,7 +79,7 @@ export async function getPlayerByFideId(fideId: string): Promise<FIDEPlayer | nu
  * Get a single game detail by slug.
  * Single SELECT vs blob list() + fetch().
  */
-export async function getGame(slug: string): Promise<GameDetail | null> {
+export async function getGame(slug: string): Promise<(GameDetail & { eventSlug: string | null }) | null> {
   if (!HAS_POSTGRES) return null;
   const { rows } = await sql`SELECT * FROM games WHERE slug = ${slug}`;
   if (rows.length === 0) return null;
@@ -267,6 +267,147 @@ export async function searchPlayers(
   }
 }
 
+// ─── Event queries ──────────────────────────────────────────────────────────
+
+export interface EventSummary {
+  slug: string;
+  name: string;
+  site: string | null;
+  dateStart: string | null;
+  dateEnd: string | null;
+  gameCount: number;
+  avgElo: number | null;
+}
+
+export interface EventDetail extends EventSummary {
+  games: Array<{
+    slug: string;
+    whiteName: string;
+    blackName: string;
+    whiteSlug: string | null;
+    blackSlug: string | null;
+    whiteElo: number;
+    blackElo: number;
+    whiteTitle: string | null;
+    blackTitle: string | null;
+    whiteFederation: string | null;
+    blackFederation: string | null;
+    round: string | null;
+    date: string;
+    eco: string | null;
+    opening: string | null;
+    result: string;
+  }>;
+  players: Array<{
+    slug: string;
+    name: string;
+    title: string | null;
+    federation: string | null;
+    fideRating: number;
+    gamesInEvent: number;
+  }>;
+}
+
+/**
+ * Get an event by its slug with all games and participating players.
+ */
+export async function getEvent(slug: string): Promise<EventDetail | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows: eventRows } = await sql`
+      SELECT slug, name, site, date_start, date_end, game_count, avg_elo
+      FROM events WHERE slug = ${slug}
+    `;
+    if (eventRows.length === 0) return null;
+    const e = eventRows[0];
+
+    const { rows: gameRows } = await sql`
+      SELECT slug, white_name, black_name, white_slug, black_slug,
+             white_elo, black_elo, white_title, black_title,
+             white_federation, black_federation,
+             round, date, eco, opening, result
+      FROM games
+      WHERE event_slug = ${slug}
+      ORDER BY date ASC, round ASC NULLS LAST
+    `;
+
+    // Build unique player list from games
+    const playerMap = new Map<string, {
+      slug: string; name: string; title: string | null;
+      federation: string | null; fideRating: number; gamesInEvent: number;
+    }>();
+
+    for (const g of gameRows) {
+      const ws = g.white_slug as string | null;
+      const bs = g.black_slug as string | null;
+      if (ws) {
+        const existing = playerMap.get(ws);
+        if (existing) {
+          existing.gamesInEvent++;
+        } else {
+          playerMap.set(ws, {
+            slug: ws,
+            name: g.white_name as string,
+            title: (g.white_title as string) ?? null,
+            federation: (g.white_federation as string) ?? null,
+            fideRating: g.white_elo as number,
+            gamesInEvent: 1,
+          });
+        }
+      }
+      if (bs) {
+        const existing = playerMap.get(bs);
+        if (existing) {
+          existing.gamesInEvent++;
+        } else {
+          playerMap.set(bs, {
+            slug: bs,
+            name: g.black_name as string,
+            title: (g.black_title as string) ?? null,
+            federation: (g.black_federation as string) ?? null,
+            fideRating: g.black_elo as number,
+            gamesInEvent: 1,
+          });
+        }
+      }
+    }
+
+    const players = Array.from(playerMap.values())
+      .sort((a, b) => b.fideRating - a.fideRating);
+
+    return {
+      slug: e.slug as string,
+      name: e.name as string,
+      site: (e.site as string) ?? null,
+      dateStart: e.date_start ? formatDateForGame(e.date_start as Date) : null,
+      dateEnd: e.date_end ? formatDateForGame(e.date_end as Date) : null,
+      gameCount: e.game_count as number,
+      avgElo: (e.avg_elo as number) ?? null,
+      games: gameRows.map((g) => ({
+        slug: g.slug as string,
+        whiteName: g.white_name as string,
+        blackName: g.black_name as string,
+        whiteSlug: (g.white_slug as string) ?? null,
+        blackSlug: (g.black_slug as string) ?? null,
+        whiteElo: g.white_elo as number,
+        blackElo: g.black_elo as number,
+        whiteTitle: (g.white_title as string) ?? null,
+        blackTitle: (g.black_title as string) ?? null,
+        whiteFederation: (g.white_federation as string) ?? null,
+        blackFederation: (g.black_federation as string) ?? null,
+        round: (g.round as string) ?? null,
+        date: formatDateForGame(g.date as Date),
+        eco: (g.eco as string) ?? null,
+        opening: (g.opening as string) ?? null,
+        result: g.result as string,
+      })),
+      players,
+    };
+  } catch {
+    return null;
+  }
+}
+
 // ─── Online profile cache ────────────────────────────────────────────────
 
 interface OnlineProfileRow {
@@ -301,6 +442,88 @@ export async function getOnlineProfile(
   } catch {
     return null;
   }
+}
+
+/**
+ * Get recent events for the homepage.
+ */
+export async function getRecentEvents(
+  limit: number,
+): Promise<EventSummary[]> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT slug, name, site, date_start, date_end, game_count, avg_elo
+      FROM events
+      WHERE game_count >= 5
+      ORDER BY date_end DESC NULLS LAST
+      LIMIT ${limit}
+    `;
+    return rows.map((e) => ({
+      slug: e.slug as string,
+      name: e.name as string,
+      site: (e.site as string) ?? null,
+      dateStart: e.date_start ? formatDateForGame(e.date_start as Date) : null,
+      dateEnd: e.date_end ? formatDateForGame(e.date_end as Date) : null,
+      gameCount: e.game_count as number,
+      avgElo: (e.avg_elo as number) ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get event count for sitemap generation.
+ */
+export async function getEventCount(): Promise<number> {
+  if (!HAS_POSTGRES) return 0;
+  try {
+    const { rows } = await sql`SELECT COUNT(*)::int AS count FROM events`;
+    return rows[0].count as number;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * Get event slugs for a sitemap chunk.
+ */
+export async function getEventSlugsForSitemap(
+  offset: number,
+  limit: number,
+): Promise<{ slug: string; gameCount: number; updatedAt: Date }[]> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT slug, game_count, updated_at
+      FROM events
+      ORDER BY id
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+    return rows.map((r) => ({
+      slug: r.slug as string,
+      gameCount: r.game_count as number,
+      updatedAt: new Date(r.updated_at as string),
+    }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Generate a URL-safe slug from an event name.
+ */
+export function generateEventSlug(eventName: string): string {
+  return eventName
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "")
+    .slice(0, 120);
 }
 
 /**
@@ -384,7 +607,7 @@ function mapRowToPlayer(row: Record<string, unknown>): FIDEPlayer {
   };
 }
 
-function mapRowToGameDetail(row: Record<string, unknown>): GameDetail {
+function mapRowToGameDetail(row: Record<string, unknown>): GameDetail & { eventSlug: string | null } {
   return {
     slug: row.slug as string,
     whiteName: row.white_name as string,
@@ -408,6 +631,7 @@ function mapRowToGameDetail(row: Record<string, unknown>): GameDetail {
     variation: (row.variation as string) ?? null,
     result: row.result as string,
     pgn: (row.pgn as string) ?? "",
+    eventSlug: (row.event_slug as string) ?? null,
   };
 }
 

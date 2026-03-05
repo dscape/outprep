@@ -125,6 +125,38 @@ export default async function GamePage({
   const result = resultLabel(game.result);
 
   // JSON-LD structured data
+  const breadcrumbItems = [
+    {
+      "@type": "ListItem" as const,
+      position: 1,
+      name: "Home",
+      item: "https://outprep.xyz",
+    },
+  ];
+  let pos = 2;
+  if (game.eventSlug) {
+    breadcrumbItems.push({
+      "@type": "ListItem",
+      position: pos++,
+      name: game.event,
+      item: `https://outprep.xyz/event/${game.eventSlug}`,
+    });
+  }
+  if (game.whiteSlug) {
+    breadcrumbItems.push({
+      "@type": "ListItem",
+      position: pos++,
+      name: white,
+      item: `https://outprep.xyz/player/${game.whiteSlug}`,
+    });
+  }
+  breadcrumbItems.push({
+    "@type": "ListItem",
+    position: pos,
+    name: `vs ${black}`,
+    item: `https://outprep.xyz/game/${slug}`,
+  });
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -154,27 +186,7 @@ export default async function GamePage({
       },
       {
         "@type": "BreadcrumbList",
-        itemListElement: [
-          {
-            "@type": "ListItem",
-            position: 1,
-            name: "Home",
-            item: "https://outprep.xyz",
-          },
-          ...(game.whiteSlug
-            ? [{
-                "@type": "ListItem",
-                position: 2,
-                name: white,
-                item: `https://outprep.xyz/player/${game.whiteSlug}`,
-              }]
-            : []),
-          {
-            "@type": "ListItem",
-            position: game.whiteSlug ? 3 : 2,
-            name: `${white} vs ${black}`,
-          },
-        ],
+        itemListElement: breadcrumbItems,
       },
     ],
   };
@@ -195,6 +207,17 @@ export default async function GamePage({
             >
               Home
             </Link>
+            {game.eventSlug && (
+              <>
+                <span>/</span>
+                <Link
+                  href={`/event/${game.eventSlug}`}
+                  className="hover:text-zinc-300 transition-colors truncate max-w-[200px]"
+                >
+                  {game.event}
+                </Link>
+              </>
+            )}
             {game.whiteSlug && (
               <>
                 <span>/</span>
@@ -269,7 +292,13 @@ export default async function GamePage({
             <div className="mt-6 grid grid-cols-2 gap-4 text-sm">
               <div>
                 <div className="text-zinc-500 text-xs uppercase tracking-wide mb-1">Event</div>
-                <div className="text-zinc-300">{game.event}</div>
+                {game.eventSlug ? (
+                  <Link href={`/event/${game.eventSlug}`} className="text-zinc-300 hover:text-green-400 transition-colors">
+                    {game.event}
+                  </Link>
+                ) : (
+                  <div className="text-zinc-300">{game.event}</div>
+                )}
               </div>
               <div>
                 <div className="text-zinc-500 text-xs uppercase tracking-wide mb-1">Date</div>

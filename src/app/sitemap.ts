@@ -2,8 +2,10 @@ import type { MetadataRoute } from "next";
 import {
   getPlayerCount,
   getGameCount,
+  getEventCount,
   getPlayerSlugsForSitemap,
   getGameSlugsForSitemap,
+  getEventSlugsForSitemap,
 } from "@/lib/db";
 
 // Generate sitemaps on-demand instead of at build time to avoid timeouts
@@ -15,7 +17,7 @@ const ENTRIES_PER_SITEMAP = 45000; // Stay under 50K limit
 
 /**
  * Generate sitemap IDs:
- * - ID 0: static pages
+ * - ID 0: static pages + event pages (events are few enough to fit in one sitemap)
  * - IDs 1..P: player pages in chunks of 45,000
  * - IDs P+1..P+G: game pages in chunks of 45,000
  */
@@ -45,9 +47,9 @@ export default async function sitemap(
   props: { id: number },
 ): Promise<MetadataRoute.Sitemap> {
   const id = Number(await (props as Record<string, unknown>).id);
-  // Sitemap 0: static pages
+  // Sitemap 0: static pages + event pages
   if (id === 0) {
-    return [
+    const staticPages: MetadataRoute.Sitemap = [
       {
         url: BASE_URL,
         lastModified: new Date(),
@@ -55,6 +57,22 @@ export default async function sitemap(
         priority: 1.0,
       },
     ];
+
+    // Events fit in the static sitemap (typically hundreds, not millions)
+    const eventCount = await getEventCount();
+    if (eventCount > 0) {
+      const events = await getEventSlugsForSitemap(0, eventCount);
+      for (const e of events) {
+        staticPages.push({
+          url: `${BASE_URL}/event/${e.slug}`,
+          lastModified: e.updatedAt,
+          changeFrequency: "weekly",
+          priority: e.gameCount >= 50 ? 0.8 : 0.6,
+        });
+      }
+    }
+
+    return staticPages;
   }
 
   const playerCount = await getPlayerCount();

@@ -145,15 +145,21 @@ Opens at [http://localhost:5180](http://localhost:5180).
 
 ## Database
 
-outprep uses PostgreSQL 16 for all player and game data. The schema (`src/lib/db/schema.sql`) creates five tables:
+outprep uses PostgreSQL 16 for all player and game data. The schema (`src/lib/db/schema.sql`) creates the core tables:
 
 - **players** — 80K+ FIDE-rated players with ratings, openings, recent games
 - **player_aliases** — slug redirects for old/alternative player URLs
 - **games** — 3M+ OTB games with full PGN text (TOAST-compressed)
 - **game_aliases** — legacy game slug redirects
+- **events** — aggregated tournament/event data derived from games
+- **online_profiles** — cached Lichess/Chess.com player profiles
 - **pipeline_runs** — tracks processed TWIC issues and FIDE rating updates
 
-Local development uses Docker (`docker compose up -d`). Production uses any Postgres host (Neon, Supabase, Railway).
+Local development uses Docker (`docker compose up -d`), which auto-runs `schema.sql` on first start. Production uses any Postgres host (Neon, Supabase, Railway).
+
+### Migrations
+
+Schema migrations are applied automatically by `npm run fide-pipeline -- seed-db` (via `ensureSchema()` in `packages/fide-pipeline/src/upload-pg.ts`). All migrations are idempotent — they use `IF NOT EXISTS` and column-existence checks, so they're safe to run repeatedly. Migration files live in `src/lib/db/migrations/`.
 
 ## Scripts
 
