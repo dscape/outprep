@@ -14,7 +14,8 @@ export async function fetchLichessUser(username: string): Promise<LichessUser> {
 
 export async function fetchLichessGames(
   username: string,
-  max = 200
+  max = 200,
+  since?: number,
 ): Promise<LichessGame[]> {
   const params = new URLSearchParams({
     max: String(max),
@@ -24,6 +25,7 @@ export async function fetchLichessGames(
     evals: "true",
     opening: "true",
   });
+  if (since) params.set("since", String(since));
 
   const res = await fetch(
     `${LICHESS_API}/games/user/${username}?${params}`,

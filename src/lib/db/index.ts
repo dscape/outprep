@@ -392,3 +392,224 @@ function formatDateForPlayer(d: Date): string {
 function formatDateForGame(d: Date): string {
   return formatDateForPlayer(d);
 }
+
+// ─── Online player cache queries ────────────────────────────────────────────
+
+export interface CachedOnlinePlayer {
+  id: number;
+  platform: string;
+  platformId: string;
+  username: string;
+  slug: string;
+  bulletRating: number | null;
+  blitzRating: number | null;
+  rapidRating: number | null;
+  classicalRating: number | null;
+  title: string | null;
+  lastFetchedAt: Date;
+}
+
+/**
+ * Get a cached online player. Returns null if not found or DB not available.
+ */
+export async function getCachedOnlinePlayer(
+  platform: string,
+  platformId: string,
+): Promise<CachedOnlinePlayer | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      SELECT id, platform, platform_id, username, slug,
+             bullet_rating, blitz_rating, rapid_rating, classical_rating,
+             title, last_fetched_at
+      FROM online_players
+      WHERE platform = ${platform} AND platform_id = ${platformId}
+    `;
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      id: r.id as number,
+      platform: r.platform as string,
+      platformId: r.platform_id as string,
+      username: r.username as string,
+      slug: r.slug as string,
+      bulletRating: (r.bullet_rating as number) ?? null,
+      blitzRating: (r.blitz_rating as number) ?? null,
+      rapidRating: (r.rapid_rating as number) ?? null,
+      classicalRating: (r.classical_rating as number) ?? null,
+      title: (r.title as string) ?? null,
+      lastFetchedAt: new Date(r.last_fetched_at as string),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upsert an online player record. Returns the ID.
+ */
+export async function upsertCachedOnlinePlayer(data: {
+  platform: string;
+  platformId: string;
+  username: string;
+  slug: string;
+  bulletRating?: number | null;
+  blitzRating?: number | null;
+  rapidRating?: number | null;
+  classicalRating?: number | null;
+  title?: string | null;
+}): Promise<number | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      INSERT INTO online_players (platform, platform_id, username, slug,
+        bullet_rating, blitz_rating, rapid_rating, classical_rating, title,
+        last_fetched_at)
+      VALUES (
+        ${data.platform}, ${data.platformId}, ${data.username}, ${data.slug},
+        ${data.bulletRating ?? null}, ${data.blitzRating ?? null},
+        ${data.rapidRating ?? null}, ${data.classicalRating ?? null},
+        ${data.title ?? null}, NOW()
+      )
+      ON CONFLICT (platform, platform_id) DO UPDATE SET
+        username = EXCLUDED.username,
+        bullet_rating = EXCLUDED.bullet_rating,
+        blitz_rating = EXCLUDED.blitz_rating,
+        rapid_rating = EXCLUDED.rapid_rating,
+        classical_rating = EXCLUDED.classical_rating,
+        title = EXCLUDED.title,
+        last_fetched_at = NOW(),
+        updated_at = NOW()
+      RETURNING id
+    `;
+    return rows[0]?.id as number;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get the most recent game timestamp for an online player.
+ * Used to fetch only newer games incrementally.
+ */
+export async function getLatestOnlineGameTime(
+  onlinePlayerId: number,
+): Promise<Date | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      SELECT MAX(played_at) AS latest
+      FROM online_games
+      WHERE online_player_id = ${onlinePlayerId}
+    `;
+    return rows[0]?.latest ? new Date(rows[0].latest as string) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Insert online games in batch. Uses ON CONFLICT to skip duplicates.
+ */
+export async function insertOnlineGames(
+  games: Array<{
+    platform: string;
+    platformGameId: string;
+    onlinePlayerId: number;
+    playerColor: string;
+    opponentName: string | null;
+    opponentRating: number | null;
+    playerRating: number | null;
+    speed: string | null;
+    variant: string;
+    rated: boolean;
+    result: string | null;
+    eco: string | null;
+    opening: string | null;
+    playedAt: Date | null;
+    moves: string | null;
+    pgn: string | null;
+    clockInitial: number | null;
+    clockIncrement: number | null;
+  }>,
+): Promise<number> {
+  if (!HAS_POSTGRES || games.length === 0) return 0;
+  let inserted = 0;
+  // Insert in batches to avoid query size limits
+  const BATCH = 100;
+  for (let i = 0; i < games.length; i += BATCH) {
+    const batch = games.slice(i, i + BATCH);
+    for (const g of batch) {
+      try {
+        const { rows } = await sql`
+          INSERT INTO online_games (
+            platform, platform_game_id, online_player_id, player_color,
+            opponent_name, opponent_rating, player_rating, speed, variant, rated,
+            result, eco, opening, played_at, moves, pgn, clock_initial, clock_increment
+          ) VALUES (
+            ${g.platform}, ${g.platformGameId}, ${g.onlinePlayerId}, ${g.playerColor},
+            ${g.opponentName}, ${g.opponentRating}, ${g.playerRating},
+            ${g.speed}, ${g.variant}, ${g.rated}, ${g.result},
+            ${g.eco}, ${g.opening}, ${g.playedAt?.toISOString() ?? null},
+            ${g.moves}, ${g.pgn}, ${g.clockInitial}, ${g.clockIncrement}
+          )
+          ON CONFLICT (platform, platform_game_id, online_player_id) DO NOTHING
+          RETURNING id
+        `;
+        if (rows.length > 0) inserted++;
+      } catch {
+        // Skip individual failures
+      }
+    }
+  }
+  return inserted;
+}
+
+/**
+ * Get cached online games for a player, newest first.
+ */
+export async function getCachedOnlineGames(
+  onlinePlayerId: number,
+  limit = 500,
+): Promise<Array<{
+  platformGameId: string;
+  playerColor: string;
+  opponentName: string | null;
+  opponentRating: number | null;
+  playerRating: number | null;
+  speed: string | null;
+  result: string | null;
+  eco: string | null;
+  opening: string | null;
+  playedAt: Date | null;
+  moves: string | null;
+  pgn: string | null;
+}>> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT platform_game_id, player_color, opponent_name, opponent_rating,
+             player_rating, speed, result, eco, opening, played_at, moves, pgn
+      FROM online_games
+      WHERE online_player_id = ${onlinePlayerId}
+      ORDER BY played_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      platformGameId: r.platform_game_id as string,
+      playerColor: r.player_color as string,
+      opponentName: (r.opponent_name as string) ?? null,
+      opponentRating: (r.opponent_rating as number) ?? null,
+      playerRating: (r.player_rating as number) ?? null,
+      speed: (r.speed as string) ?? null,
+      result: (r.result as string) ?? null,
+      eco: (r.eco as string) ?? null,
+      opening: (r.opening as string) ?? null,
+      playedAt: r.played_at ? new Date(r.played_at as string) : null,
+      moves: (r.moves as string) ?? null,
+      pgn: (r.pgn as string) ?? null,
+    }));
+  } catch {
+    return [];
+  }
+}
