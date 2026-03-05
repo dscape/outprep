@@ -48,6 +48,9 @@ packages/tuner/proposals/
 packages/tuner/experiments/
 packages/tuner/tuner-state.json
 
+# TWIC data archives (multi-GB, created by scripts/create-twic-archive.sh)
+twic-archive-*.zip
+
 # vercel
 .vercel
 

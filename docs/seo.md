@@ -8,10 +8,10 @@ outprep uses SEO landing pages to attract chess players searching for preparatio
 
 1. TWIC (This Week in Chess) zip files are downloaded and parsed
 2. Player and game data (names, ratings, openings, events) is extracted
-3. Processed data is uploaded to PostgreSQL via `packages/fide-pipeline/src/upload-pg.ts (CLI command: `seed`)`
-4. FIDE official ratings are enriched monthly via `/api/cron/fide-ratings`
-5. TWIC updates run weekly via `/api/cron/twic-update`
-6. See `packages/fide-pipeline/README.md` for CLI usage
+3. Processed data is seeded to PostgreSQL via `packages/fide-pipeline/src/upload-pg.ts` (CLI command: `seed-db`)
+4. FIDE official ratings are updated monthly via `/api/cron/fide-ratings` (automated on Vercel)
+5. TWIC updates run weekly via `/api/cron/twic-update` (automated on Vercel)
+6. CLI usage: `npm run fide-pipeline -- --help`
 
 ## Indexed Pages
 

@@ -7,11 +7,24 @@ Thanks for your interest in contributing. This document covers how to get set up
 ```bash
 git clone https://github.com/dscape/outprep.git
 cd outprep
+
+# Start local PostgreSQL
+docker compose up -d
+
+# Install dependencies
 npm install
+
+# Set up environment
+cp .env.example .env
+
+# Seed the database with sample data
+npm run fide-pipeline -- smoke
+
+# Start the dev server
 npm run dev
 ```
 
-This installs all workspace dependencies and copies the Stockfish WASM files to `public/`. The app runs at [http://localhost:3000](http://localhost:3000).
+This installs all workspace dependencies, copies the Stockfish WASM files to `public/`, seeds the local database, and starts the app at [http://localhost:3000](http://localhost:3000).
 
 ## Project layout
 
@@ -19,12 +32,49 @@ This installs all workspace dependencies and copies the Stockfish WASM files to 
 src/                    Next.js app (pages, API routes, components)
 packages/
   engine/               Core bot logic (pure TypeScript, no framework deps)
+  fide-pipeline/        TWIC/FIDE data pipeline (download, parse, seed Postgres)
   harness/              CLI for accuracy testing against real games
   tuner/                Autonomous parameter optimizer (needs Claude API key)
   dashboard/            Vite + React results visualizer
 ```
 
 The `engine` package is the foundation — it has no dependencies on Next.js or the UI. The `harness` and `tuner` build on top of it. The main app in `src/` ties everything together.
+
+## Working with the database
+
+The local database is PostgreSQL 16, started via `docker compose up -d`. The schema is in `src/lib/db/schema.sql` and is applied automatically when the container first starts.
+
+To seed with full data (80K+ players, 3M+ games), see the README's "Full data setup" section.
+
+Useful commands:
+```bash
+# Check database tables
+docker compose exec postgres psql -U outprep -d outprep -c "\dt"
+
+# Query player count
+docker compose exec postgres psql -U outprep -d outprep -c "SELECT COUNT(*) FROM players"
+
+# Reset database (drops all data)
+docker compose down -v && docker compose up -d
+```
+
+## Working with the pipeline
+
+The `fide-pipeline` package downloads TWIC chess game data, enriches it with FIDE ratings, and seeds PostgreSQL:
+
+```bash
+# Quick smoke test (1 issue)
+npm run fide-pipeline -- smoke
+
+# Download new TWIC issues
+npm run fide-pipeline -- download --from 1634 --to 1634
+
+# Process all PGN files
+npm run fide-pipeline -- process --min-games 3
+
+# Seed the database
+npm run fide-pipeline -- seed-db
+```
 
 ## How to contribute
 

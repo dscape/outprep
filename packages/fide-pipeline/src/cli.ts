@@ -13,7 +13,6 @@ import {
   buildPlayerIndex,
   normalizePlayerName,
 } from "./aggregate";
-// import { uploadAllFromDisk } from "./upload"; // DEPRECATED: Blob uploads removed
 import {
   ensureSchema,
   upsertPlayers,
@@ -110,7 +109,7 @@ function ensureDirs(): void {
 
 const program = new Command()
   .name("fide-pipeline")
-  .description("Download TWIC data, process FIDE players, upload to Vercel Blob")
+  .description("Download TWIC data, process FIDE players, seed PostgreSQL")
   .version("0.1.0");
 
 // ─── Shared helpers ──────────────────────────────────────────────────────────

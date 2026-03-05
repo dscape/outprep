@@ -184,7 +184,7 @@ export async function upsertPlayerAliases(
 
 /**
  * Stream game details from JSONL file into Postgres.
- * PGN text is uploaded to Vercel Blob; only metadata goes to Postgres.
+ * PGN text is stored directly in the games table (TOAST-compressed by Postgres).
  * Processes one line at a time to avoid OOM on 4.8GB files.
  */
 export async function upsertGamesFromJsonl(

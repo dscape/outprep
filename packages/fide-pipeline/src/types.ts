@@ -1,5 +1,5 @@
 /**
- * Types for the FIDE pipeline — TWIC data processing and Vercel Blob storage.
+ * Types for the FIDE pipeline — TWIC data processing and PostgreSQL storage.
  */
 
 /** Extracted from a single PGN game's header tags (no move parsing). */
@@ -94,7 +94,7 @@ export interface PlayerIndexEntry {
   blitzRating?: number;
 }
 
-/** Master index stored in Vercel Blob. */
+/** Master player index (used during processing, data lives in Postgres). */
 export interface PlayerIndex {
   generatedAt: string; // ISO timestamp
   totalPlayers: number;
@@ -169,7 +169,7 @@ export interface GameIndexEntry {
   opening: string | null;
 }
 
-/** Master game index stored in Vercel Blob. */
+/** Master game index (used during processing, data lives in Postgres). */
 export interface GameIndex {
   generatedAt: string; // ISO timestamp
   totalGames: number;

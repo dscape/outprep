@@ -4,16 +4,54 @@ Scout any chess player, study their openings and weaknesses, then practice again
 
 Enter a Lichess username or drop a PGN file, and outprep builds a profile of the player's repertoire, tendencies, and mistakes. Then it spawns a Stockfish-based bot tuned to mimic that player's style so you can practice before your next game.
 
+## Prerequisites
+
+- [Node.js](https://nodejs.org) 20+
+- [Docker](https://docs.docker.com/get-docker/) (for local PostgreSQL)
+
 ## Quick start
 
 ```bash
+# 1. Start the local database
+docker compose up -d
+
+# 2. Install dependencies (copies Stockfish WASM to public/ automatically)
 npm install
+
+# 3. Set up environment
+cp .env.example .env
+
+# 4. Seed the database with sample data (1 TWIC issue, ~1 min)
+npm run fide-pipeline -- smoke
+
+# 5. Start the dev server
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). Enter a Lichess username and hit **Scout**.
+Open [http://localhost:3000](http://localhost:3000). Enter a Lichess username and hit **Scout**, or browse FIDE player pages.
 
-Stockfish WASM files are copied to `public/` automatically via `postinstall`.
+### Full data setup
+
+For the complete dataset (~80K players, 3M+ games), either:
+
+**Option A** — Extract from a TWIC archive (fastest):
+```bash
+# Get the archive from a team member, then:
+mkdir -p packages/fide-pipeline/data/ratings
+cd packages/fide-pipeline/data
+unzip /path/to/twic-archive-YYYYMMDD.zip
+mv players_list.zip ratings/
+cd ../../..
+
+# Process and seed
+npm run fide-pipeline -- process --min-games 3
+npm run fide-pipeline -- seed-db
+```
+
+**Option B** — Download from source (~1 hour download):
+```bash
+npm run fide-pipeline -- full --from 924 --to 1633
+```
 
 ## How it works
 
@@ -31,6 +69,7 @@ This is an npm workspaces monorepo:
 src/                    Next.js app (frontend + API routes)
 packages/
   engine/               Core bot logic (move selection, config, types)
+  fide-pipeline/        TWIC/FIDE data pipeline (download, parse, seed Postgres)
   harness/              CLI to replay positions and measure bot accuracy
   tuner/                Autonomous parameter optimizer (uses Claude API)
   dashboard/            Vite + React app to visualize harness results
@@ -39,6 +78,24 @@ packages/
 ### `@outprep/engine`
 
 Reusable TypeScript library. Boltzmann-weighted move selection, opening trie, error profiling, phase detection, complexity-based depth adjustment, and move style biases. All behavior is driven by a single `BotConfig` object.
+
+### `@outprep/fide-pipeline`
+
+CLI tool that downloads TWIC (The Week in Chess) PGN files, enriches players with official FIDE ratings, and seeds PostgreSQL.
+
+```bash
+# Full pipeline: download, process, and seed
+npm run fide-pipeline -- full --from 924 --to 1633
+
+# Individual steps
+npm run fide-pipeline -- download --from 1634 --to 1634
+npm run fide-pipeline -- download-ratings --force
+npm run fide-pipeline -- process --min-games 3
+npm run fide-pipeline -- seed-db
+
+# Quick smoke test (1 TWIC issue)
+npm run fide-pipeline -- smoke
+```
 
 ### `@outprep/harness`
 
@@ -86,6 +143,18 @@ npm run dashboard
 
 Opens at [http://localhost:5180](http://localhost:5180).
 
+## Database
+
+outprep uses PostgreSQL 16 for all player and game data. The schema (`src/lib/db/schema.sql`) creates five tables:
+
+- **players** — 80K+ FIDE-rated players with ratings, openings, recent games
+- **player_aliases** — slug redirects for old/alternative player URLs
+- **games** — 3M+ OTB games with full PGN text (TOAST-compressed)
+- **game_aliases** — legacy game slug redirects
+- **pipeline_runs** — tracks processed TWIC issues and FIDE rating updates
+
+Local development uses Docker (`docker compose up -d`). Production uses any Postgres host (Neon, Supabase, Railway).
+
 ## Scripts
 
 | Command | Description |
@@ -93,6 +162,10 @@ Opens at [http://localhost:5180](http://localhost:5180).
 | `npm run dev` | Start the Next.js dev server |
 | `npm run build` | Production build |
 | `npm run lint` | ESLint |
+| `npm run fide-pipeline -- smoke` | Quick data test (1 TWIC issue) |
+| `npm run fide-pipeline -- full --from N --to N` | Full pipeline: download + process + seed |
+| `npm run fide-pipeline -- seed-db` | Seed Postgres from processed data |
+| `npm run twic-archive` | Create a TWIC data archive for dev bootstrapping |
 | `npm run harness:create` | Create a test dataset from Lichess |
 | `npm run harness:run` | Run accuracy test |
 | `npm run harness:compare` | Compare two result sets |
@@ -103,6 +176,7 @@ Opens at [http://localhost:5180](http://localhost:5180).
 ## Tech stack
 
 - [Next.js](https://nextjs.org) 16 + React 19 + Tailwind CSS 4
+- [PostgreSQL](https://www.postgresql.org) 16 via [porsager/postgres](https://github.com/porsager/postgres)
 - [chess.js](https://github.com/jhlywa/chess.js) for move generation and validation
 - [Stockfish](https://stockfishchess.org) 18 WASM for evaluation
 - [react-chessboard](https://github.com/Clariity/react-chessboard) for board UI

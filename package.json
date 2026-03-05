@@ -17,14 +17,15 @@
     "harness:compare": "npm run harness -- compare",
     "dashboard": "npm run --workspace=packages/dashboard dev",
     "tuner": "npm run --workspace=packages/tuner tuner --",
-    "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --"
+    "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --",
+    "twic-archive": "bash scripts/create-twic-archive.sh"
   },
   "dependencies": {
     "@types/uuid": "^11.0.0",
     "@vercel/analytics": "^1.6.1",
-    "@vercel/blob": "^2.3.0",
     "@vercel/speed-insights": "^1.3.1",
     "chess.js": "^1.4.0",
+    "fflate": "^0.8.2",
     "next": "16.1.6",
     "postgres": "^3.4.8",
     "react": "19.2.3",
