@@ -158,6 +158,47 @@ export interface KeyMoment {
   weaknessContext?: string;
 }
 
+// ─── Chess.com types ────────────────────────────────────────────────────────
+
+export interface ChesscomUser {
+  username: string;
+  player_id: number;
+  title?: string;
+  url: string;
+  country?: string;
+}
+
+interface ChesscomStatEntry {
+  last: { rating: number };
+  record: { win: number; loss: number; draw: number };
+}
+
+export interface ChesscomStats {
+  chess_bullet?: ChesscomStatEntry;
+  chess_blitz?: ChesscomStatEntry;
+  chess_rapid?: ChesscomStatEntry;
+  chess_daily?: ChesscomStatEntry;
+}
+
+export interface ChesscomGame {
+  url: string;
+  pgn?: string;
+  time_control: string;
+  end_time: number;
+  rated: boolean;
+  rules: string; // "chess" for standard
+  white: {
+    username: string;
+    rating: number;
+    result: string; // "win" | "checkmated" | "resigned" | "timeout" | "stalemate" | "agreed" | "repetition" | "insufficient" | "50move" | "timevsinsufficient" | "abandoned"
+  };
+  black: {
+    username: string;
+    rating: number;
+    result: string;
+  };
+}
+
 export interface OTBGame {
   white: string;
   black: string;
@@ -200,4 +241,5 @@ export interface GameAnalysis {
   coachingNarrative: string;
   opponentFideEstimate?: number;
   scoutedUsername?: string; // When reviewing a scouted player's game (playerColor = scouted player's color)
+  scoutedPlatform?: string;
 }

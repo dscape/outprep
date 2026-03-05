@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   PlayerProfile,
   OTBProfile,
@@ -19,6 +19,7 @@ import {
   EvalMode,
   batchEvaluateGames,
 } from "@/lib/engine/batch-eval";
+import { getStoredEvals, storeEvals } from "@/lib/engine/eval-cache";
 import PlayerCard from "@/components/PlayerCard";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
@@ -26,6 +27,7 @@ import PrepTipsTab from "@/components/PrepTipsTab";
 import OTBUploader from "@/components/OTBUploader";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
 import ErrorProfileCard from "@/components/ErrorProfileCard";
+import Toast from "@/components/Toast";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import {
   openingFamily,
@@ -34,8 +36,10 @@ import {
 } from "@/lib/profile-builder";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
 import { LichessGame } from "@/lib/types";
-import { fromLichessGame, fromOTBGame, normalizedToGameForDrilldown } from "@/lib/normalized-game";
+import { fromLichessGame, fromChesscomGame, fromOTBGame, normalizedToGameForDrilldown } from "@/lib/normalized-game";
 import type { NormalizedGame } from "@/lib/normalized-game";
+import { parsePlatformUsername } from "@/lib/platform-utils";
+import { fetchChesscomGames } from "@/lib/chesscom";
 
 type Tab = "openings" | "weaknesses" | "prep" | "otb";
 
@@ -209,12 +213,11 @@ const TIME_RANGES = [
 export default function ScoutPage() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const rawUsername = params.username as string;
-  const username = decodeURIComponent(rawUsername);
-  const sourceParam = searchParams.get("source");
-  const isFIDEMode = sourceParam === "fide";
-  const isPGNMode = sourceParam === "pgn" || isFIDEMode;
+  const { platform, username } = parsePlatformUsername(rawUsername);
+  const isChesscomMode = platform === "chesscom";
+  const isFIDEMode = platform === "fide";
+  const isPGNMode = platform === "pgn" || isFIDEMode;
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [basicData, setBasicData] = useState<{
@@ -231,7 +234,7 @@ export default function ScoutPage() {
   const [otbProfile, setOtbProfile] = useState<OTBProfile | null>(null);
 
   // Upgrade state
-  const [showPlayConfirm, setShowPlayConfirm] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [upgradeProgress, setUpgradeProgress] = useState<{
     gamesComplete: number;
@@ -252,8 +255,8 @@ export default function ScoutPage() {
   const initialFilterSetRef = useRef(false);
 
   // Drill-down: normalized games for opening expansion
-  const [rawLichessGames, setRawLichessGames] = useState<NormalizedGame[] | null>(null);
-  const [loadingLichessGames, setLoadingLichessGames] = useState(false);
+  const [rawDrilldownGames, setRawDrilldownGames] = useState<NormalizedGame[] | null>(null);
+  const [loadingDrilldownGames, setLoadingDrilldownGames] = useState(false);
 
   // Load OTB data and cached enhanced profile from sessionStorage on mount
   useEffect(() => {
@@ -385,8 +388,9 @@ export default function ScoutPage() {
     // Phase 1: Fast basic data (username + ratings)
     async function loadBasic() {
       try {
+        const basicQuery = isChesscomMode ? "?platform=chesscom" : "";
         const res = await fetch(
-          `/api/profile-basic/${encodeURIComponent(username)}`
+          `/api/profile-basic/${encodeURIComponent(username)}${basicQuery}`
         );
         if (res.ok) {
           setBasicData(await res.json());
@@ -404,9 +408,12 @@ export default function ScoutPage() {
       try {
         const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
         const since = sinceMs ? Date.now() - sinceMs : undefined;
-        const sinceQuery = since ? `?since=${since}` : "";
+        const queryParams = new URLSearchParams();
+        if (since) queryParams.set("since", String(since));
+        if (isChesscomMode) queryParams.set("platform", "chesscom");
+        const queryStr = queryParams.toString() ? `?${queryParams}` : "";
         const res = await fetch(
-          `/api/profile/${encodeURIComponent(username)}${sinceQuery}`
+          `/api/profile/${encodeURIComponent(username)}${queryStr}`
         );
 
         if (!res.ok) {
@@ -443,7 +450,7 @@ export default function ScoutPage() {
 
   // Reset drill-down cache when time range changes
   useEffect(() => {
-    setRawLichessGames(null);
+    setRawDrilldownGames(null);
   }, [timeRange]);
 
   // Cleanup on unmount
@@ -605,6 +612,7 @@ export default function ScoutPage() {
         opponentUsername: game.opponent,
         opponentFideEstimate: profile?.fideEstimate?.rating,
         scoutedUsername: username,
+        scoutedPlatform: platform,
       };
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
       router.push(`/analysis/${game.id}`);
@@ -612,39 +620,46 @@ export default function ScoutPage() {
     [router, username, profile]
   );
 
-  // Drill-down: lazy-fetch raw Lichess games for opening expansion
-  const fetchLichessRawGames = useCallback(async () => {
-    if (rawLichessGames || loadingLichessGames || isPGNMode) return;
-    setLoadingLichessGames(true);
+  // Drill-down: lazy-fetch raw games for opening expansion
+  const fetchRawGames = useCallback(async () => {
+    if (rawDrilldownGames || loadingDrilldownGames || isPGNMode) return;
+    setLoadingDrilldownGames(true);
     try {
       const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
       const since = sinceMs ? Date.now() - sinceMs : undefined;
-      const params = new URLSearchParams({
-        max: "500",
-        rated: "true",
-        pgnInJson: "true",
-        opening: "true",
-      });
-      if (since) params.set("since", String(since));
-      const res = await fetch(
-        `https://lichess.org/api/games/user/${encodeURIComponent(username)}?${params}`,
-        { headers: { Accept: "application/x-ndjson" } }
-      );
-      if (!res.ok) {
-        console.error("Failed to fetch Lichess games:", res.status);
-        return;
+
+      if (isChesscomMode) {
+        const games = await fetchChesscomGames(username, 2000, since ?? undefined);
+        const normalized = games.map((g) => fromChesscomGame(g, username));
+        setRawDrilldownGames(normalized);
+      } else {
+        const params = new URLSearchParams({
+          max: "2000",
+          rated: "true",
+          pgnInJson: "true",
+          opening: "true",
+        });
+        if (since) params.set("since", String(since));
+        const res = await fetch(
+          `https://lichess.org/api/games/user/${encodeURIComponent(username)}?${params}`,
+          { headers: { Accept: "application/x-ndjson" } }
+        );
+        if (!res.ok) {
+          console.error("Failed to fetch games:", res.status);
+          return;
+        }
+        const text = await res.text();
+        const lines = text.trim().split("\n").filter(Boolean);
+        const lichessGames: LichessGame[] = lines.map((line) => JSON.parse(line));
+        const normalized = lichessGames.map((g) => fromLichessGame(g, username));
+        setRawDrilldownGames(normalized);
       }
-      const text = await res.text();
-      const lines = text.trim().split("\n").filter(Boolean);
-      const lichessGames: LichessGame[] = lines.map((line) => JSON.parse(line));
-      const normalized = lichessGames.map((g) => fromLichessGame(g, username));
-      setRawLichessGames(normalized);
     } catch (err) {
-      console.error("Failed to fetch Lichess games:", err);
+      console.error("Failed to fetch games:", err);
     } finally {
-      setLoadingLichessGames(false);
+      setLoadingDrilldownGames(false);
     }
-  }, [username, rawLichessGames, loadingLichessGames, isPGNMode, timeRange]);
+  }, [username, rawDrilldownGames, loadingDrilldownGames, isPGNMode, isChesscomMode, timeRange]);
 
   // Drill-down: memoize converted games
   // Use otbProfile.username (resolved player name) for color detection, not URL slug
@@ -656,16 +671,16 @@ export default function ScoutPage() {
     );
   }, [isPGNMode, otbProfile, username]);
 
-  const lichessDrilldownGames = useMemo(() => {
-    if (!rawLichessGames) return undefined;
-    return rawLichessGames.map(normalizedToGameForDrilldown);
-  }, [rawLichessGames]);
+  const drilldownGames = useMemo(() => {
+    if (!rawDrilldownGames) return undefined;
+    return rawDrilldownGames.map(normalizedToGameForDrilldown);
+  }, [rawDrilldownGames]);
 
   // Build opening coverage map from raw Lichess games
   const coverageByOpening = useMemo(() => {
-    if (!rawLichessGames) return undefined;
+    if (!rawDrilldownGames) return undefined;
     const map = new Map<string, { analyzed: number; total: number }>();
-    for (const g of rawLichessGames) {
+    for (const g of rawDrilldownGames) {
       if (!g.opening.name || g.opening.name === "Unknown") continue;
       if ((g.variant ?? "standard") !== "standard") continue;
       const family = g.opening.family;
@@ -675,7 +690,22 @@ export default function ScoutPage() {
       map.set(family, entry);
     }
     return map;
-  }, [rawLichessGames]);
+  }, [rawDrilldownGames]);
+
+  // Helper: update weaknesses + prep tips from an error profile
+  const updateWeaknessesAndTips = useCallback((merged: ErrorProfile) => {
+    const currentFilteredData = filteredDataRef.current;
+    if (currentFilteredData) {
+      const updatedWeaknesses = detectWeaknessesFromErrorProfile(
+        merged,
+        currentFilteredData.weaknesses
+      );
+      setEnhancedWeaknesses(updatedWeaknesses);
+      setEnhancedPrepTips(
+        generatePrepTips(updatedWeaknesses, currentFilteredData.openings, currentFilteredData.style)
+      );
+    }
+  }, []);
 
   // Handle upgrade request
   const handleUpgrade = useCallback(
@@ -699,6 +729,7 @@ export default function ScoutPage() {
             ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
             : "";
         if (sinceVal) query += `${query ? "&" : "?"}since=${sinceVal}`;
+        if (isChesscomMode) query += `${query ? "&" : "?"}platform=chesscom`;
         const res = await fetch(
           `/api/bot-data/${encodeURIComponent(username)}${query}`
         );
@@ -709,6 +740,7 @@ export default function ScoutPage() {
 
         const botData = await res.json();
         const allGameMoves: Array<{
+          id: string;
           moves: string;
           playerColor: "white" | "black";
           hasEvals: boolean;
@@ -716,11 +748,42 @@ export default function ScoutPage() {
 
         setTotalGameCount(allGameMoves.length);
 
-        // Filter to games WITHOUT evals — don't re-evaluate what Lichess already has
-        const unevaluated = allGameMoves.filter((g) => !g.hasEvals);
+        // Filter to games WITHOUT Lichess evals
+        const noLichessEvals = allGameMoves.filter((g) => !g.hasEvals);
 
-        if (unevaluated.length === 0) {
-          // All games already have evals — show brief completion
+        // Check IndexedDB for previously computed evals
+        const cachedEvalMap = await getStoredEvals(
+          platform,
+          username,
+          noLichessEvals.map((g) => g.id),
+        );
+
+        // Separate: games with cached evals vs games needing Stockfish
+        const cachedEvals: GameEvalData[] = [];
+        const needsStockfish: typeof noLichessEvals = [];
+        for (const g of noLichessEvals) {
+          const cached = cachedEvalMap.get(g.id);
+          if (cached) {
+            cachedEvals.push(cached);
+          } else {
+            needsStockfish.push(g);
+          }
+        }
+
+        // If we have cached evals, show an initial error profile immediately
+        const baseProfile = filteredData?.errorProfile;
+        if (cachedEvals.length > 0) {
+          const cachedProfile = buildErrorProfileFromEvals(cachedEvals);
+          const initialMerged = baseProfile && baseProfile.gamesAnalyzed > 0
+            ? mergeErrorProfiles([baseProfile, cachedProfile])
+            : cachedProfile;
+          setEnhancedErrorProfile(initialMerged);
+          computedEvalsRef.current = cachedEvals;
+          updateWeaknessesAndTips(initialMerged);
+        }
+
+        if (needsStockfish.length === 0) {
+          // All games covered by Lichess evals + IndexedDB cache
           setUpgradeProgress({
             gamesComplete: allGameMoves.length,
             totalGames: allGameMoves.length,
@@ -734,7 +797,7 @@ export default function ScoutPage() {
         // Set initial progress immediately so the UI shows feedback
         setUpgradeProgress({
           gamesComplete: 0,
-          totalGames: unevaluated.length,
+          totalGames: needsStockfish.length,
           pct: 0,
         });
 
@@ -754,12 +817,9 @@ export default function ScoutPage() {
 
         if (abort.signal.aborted) return;
 
-        // Track the base error profile (from Lichess evals) for merging
-        const baseProfile = filteredData?.errorProfile;
-
         const evalData = await batchEvaluateGames(
           evalEngineRef.current,
-          unevaluated,
+          needsStockfish,
           mode,
           (progress) => {
             if (abort.signal.aborted) return;
@@ -775,16 +835,39 @@ export default function ScoutPage() {
                   : 0,
             });
           },
-          abort.signal
+          abort.signal,
+          // onBatchComplete: incremental profile updates + IndexedDB persistence
+          (batchResults, allResults) => {
+            if (abort.signal.aborted) return;
+
+            // Build incremental error profile from all computed evals so far
+            const allEvals = [...cachedEvals, ...allResults];
+            const incrementalProfile = buildErrorProfileFromEvals(allEvals);
+            const merged = baseProfile && baseProfile.gamesAnalyzed > 0
+              ? mergeErrorProfiles([baseProfile, incrementalProfile])
+              : incrementalProfile;
+            setEnhancedErrorProfile(merged);
+            computedEvalsRef.current = allEvals;
+            updateWeaknessesAndTips(merged);
+
+            // Persist new batch to IndexedDB (fire-and-forget)
+            const startIdx = allResults.length - batchResults.length;
+            const batchEntries = batchResults.map((data, i) => ({
+              gameId: needsStockfish[startIdx + i].id,
+              data,
+              evalMode: mode,
+            }));
+            storeEvals(platform, username, batchEntries).catch(() => {});
+          },
         );
 
         if (abort.signal.aborted) return;
 
-        // Build error profile from computed evals
-        const computedProfile = buildErrorProfileFromEvals(evalData);
-        computedEvalsRef.current = evalData;
+        // Final merged profile
+        const allEvals = [...cachedEvals, ...evalData];
+        const computedProfile = buildErrorProfileFromEvals(allEvals);
+        computedEvalsRef.current = allEvals;
 
-        // Merge with existing Lichess-based profile
         const merged =
           baseProfile && baseProfile.gamesAnalyzed > 0
             ? mergeErrorProfiles([baseProfile, computedProfile])
@@ -792,26 +875,9 @@ export default function ScoutPage() {
 
         setEnhancedErrorProfile(merged);
         setUpgradeComplete(true);
+        updateWeaknessesAndTips(merged);
 
-        // Recalculate weaknesses and prep tips with enhanced error data
-        // Use ref to get fresh filteredData (avoids stale closure)
-        const currentFilteredData = filteredDataRef.current;
-        if (currentFilteredData) {
-          const updatedWeaknesses = detectWeaknessesFromErrorProfile(
-            merged,
-            currentFilteredData.weaknesses
-          );
-          setEnhancedWeaknesses(updatedWeaknesses);
-
-          const updatedTips = generatePrepTips(
-            updatedWeaknesses,
-            currentFilteredData.openings,
-            currentFilteredData.style
-          );
-          setEnhancedPrepTips(updatedTips);
-        }
-
-        // Cache in sessionStorage
+        // Cache in sessionStorage (L1 cache for same-tab instant loads)
         try {
           sessionStorage.setItem(
             `enhanced-profile:${username}`,
@@ -836,7 +902,7 @@ export default function ScoutPage() {
     },
     // filteredData accessed via filteredDataRef to avoid stale closures
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [username, selectedSpeeds, timeRange]
+    [username, platform, selectedSpeeds, timeRange, updateWeaknessesAndTips]
   );
 
   // Cancel an in-progress upgrade
@@ -863,6 +929,14 @@ export default function ScoutPage() {
     }
   }, [filteredData, enhancedErrorProfile, isUpgrading, upgradeComplete, isPGNMode, handleUpgrade]);
 
+  // Eagerly fetch raw games in background once profile loads (for instant drill-down)
+  useEffect(() => {
+    if (filteredData && !isPGNMode && !rawDrilldownGames && !loadingDrilldownGames) {
+      fetchRawGames();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredData, isPGNMode]);
+
   // Determine displayed error profile: enhanced if available, otherwise base
   const displayedErrorProfile =
     enhancedErrorProfile || filteredData?.errorProfile;
@@ -873,13 +947,11 @@ export default function ScoutPage() {
 
   const handlePracticeClick = useCallback(() => {
     if (isPGNMode) {
-      router.push(`/play/${encodeURIComponent(username)}?source=pgn`);
+      router.push(`/play/pgn:${encodeURIComponent(username)}`);
       return;
     }
-    if (isUpgrading) {
-      setShowPlayConfirm(true);
-      return;
-    }
+
+    // Save enhanced profile if available
     if (enhancedErrorProfile) {
       try {
         sessionStorage.setItem(
@@ -890,92 +962,26 @@ export default function ScoutPage() {
         // Storage full — non-fatal
       }
     }
+
+    // Show toast warning if analysis is still running or hasn't started
+    if (isUpgrading && upgradeProgress) {
+      setToastMessage(
+        `Analysis ${upgradeProgress.pct}% complete \u2014 bot may not reflect full game history`
+      );
+    } else if (!upgradeComplete && !enhancedErrorProfile) {
+      setToastMessage(
+        "Analysis hasn\u2019t started yet \u2014 the bot will use limited data"
+      );
+    }
+
+    // Navigate immediately (don't block on confirmation)
     const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
     const since = sinceMs ? Date.now() - sinceMs : undefined;
-    let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
+    const platformPrefix = isChesscomMode ? "chesscom:" : "";
+    let playUrl = `/play/${platformPrefix}${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
     if (since) playUrl += `&since=${since}`;
     router.push(playUrl);
-  }, [isPGNMode, isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
-
-  if (fullLoading) {
-    return (
-      <div className="min-h-screen px-4 py-8">
-        <div className="mx-auto max-w-3xl">
-          <button
-            onClick={() => router.push("/")}
-            className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
-          >
-            &larr; Back to search
-          </button>
-
-          {basicData ? (
-            <>
-              {/* Partial PlayerCard: username + ratings */}
-              <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
-                <div>
-                  <h2 className="text-2xl font-bold text-white">{basicData.username}</h2>
-                  <p className="text-sm text-zinc-500 mt-1">
-                    Analyzing {basicData.totalGames.toLocaleString()} games...
-                  </p>
-                </div>
-                {Object.entries(basicData.ratings).filter(([, v]) => v !== undefined).length > 0 && (
-                  <div className="mt-4 flex flex-wrap gap-3">
-                    {Object.entries(basicData.ratings)
-                      .filter(([, v]) => v !== undefined)
-                      .map(([label, value]) => (
-                        <div key={label} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm">
-                          <span className="text-zinc-500 capitalize">{label}</span>{" "}
-                          <span className="font-mono text-white">{value}</span>
-                        </div>
-                      ))}
-                  </div>
-                )}
-                {/* Skeleton style bars */}
-                <div className="mt-6 space-y-3">
-                  <div className="h-4 w-24 rounded bg-zinc-700/50 animate-pulse" />
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="flex items-center gap-3">
-                      <div className="w-24 h-3 rounded bg-zinc-700/30 animate-pulse" />
-                      <div className="flex-1 h-2 rounded-full bg-zinc-700/30 animate-pulse" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Skeleton for error profile */}
-              <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
-                <div className="space-y-3">
-                  {[1, 2, 3].map((i) => (
-                    <div key={i} className="h-5 rounded-md bg-zinc-700/30 animate-pulse" />
-                  ))}
-                </div>
-              </div>
-
-              {/* Skeleton for tabs */}
-              <div className="mt-8">
-                <div className="flex gap-1 border-b border-zinc-800">
-                  {["Openings", "Weaknesses", "Prep Tips"].map((label) => (
-                    <div key={label} className="px-4 py-2.5 text-sm text-zinc-600">
-                      {label}
-                    </div>
-                  ))}
-                </div>
-                <div className="mt-6 space-y-4">
-                  {[1, 2, 3, 4].map((i) => (
-                    <div key={i} className="h-12 rounded-lg bg-zinc-800/30 animate-pulse" />
-                  ))}
-                </div>
-              </div>
-            </>
-          ) : (
-            <div className="flex min-h-[60vh] items-center justify-center">
-              <div className="h-12 w-12 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
-            </div>
-          )}
-        </div>
-      </div>
-    );
-  }
+  }, [isPGNMode, isChesscomMode, isUpgrading, upgradeProgress, upgradeComplete, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
 
   if (error) {
     return (
@@ -994,12 +1000,10 @@ export default function ScoutPage() {
     );
   }
 
-  if (!profile || !filteredData) return null;
-
   // In FIDE mode, username is a slug — use the profile's resolved name
-  const displayName = isPGNMode && profile.username ? profile.username : profile.username;
+  const displayName = profile?.username || basicData?.username || username;
 
-  const availableSpeeds = Object.keys(profile.bySpeed || {}).sort(
+  const availableSpeeds = Object.keys(profile?.bySpeed || {}).sort(
     (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
   );
 
@@ -1009,6 +1013,25 @@ export default function ScoutPage() {
     ["prep", "Prep Tips"],
     ...(!isPGNMode && otbProfile ? [["otb", "OTB Games"] as [Tab, string]] : []),
   ];
+
+  // Show spinner only when no data at all (neither basicData nor profile)
+  if (!basicData && !profile && fullLoading) {
+    return (
+      <div className="min-h-screen px-4 py-8">
+        <div className="mx-auto max-w-3xl">
+          <button
+            onClick={() => router.push("/")}
+            className="mb-6 text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
+          >
+            &larr; Back to search
+          </button>
+          <div className="flex min-h-[60vh] items-center justify-center">
+            <div className="h-12 w-12 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen px-4 py-8">
@@ -1029,81 +1052,117 @@ export default function ScoutPage() {
           >
             &larr; Back to search
           </button>
-          <button
-            onClick={handlePracticeClick}
-            className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
-            style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
-          >
-            Practice &#9654;
-          </button>
+          {filteredData && (
+            <button
+              onClick={handlePracticeClick}
+              className="rounded-lg bg-green-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-green-500"
+              style={{ animation: "pulse-glow 2s ease-in-out infinite" }}
+            >
+              Practice &#9654;
+            </button>
+          )}
         </div>
 
-        {/* Filters */}
-        <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
-          {/* Speed Filter */}
-          {availableSpeeds.length >= 1 && (
+        {/* Filters — show only when profile is loaded */}
+        {profile && (
+          <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+            {/* Speed Filter */}
+            {availableSpeeds.length >= 1 && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
+                  Speed
+                </span>
+                {availableSpeeds.map((speed) => {
+                  const data = profile.bySpeed?.[speed];
+                  const isActive = selectedSpeeds.includes(speed);
+                  return (
+                    <button
+                      key={speed}
+                      onClick={() => toggleSpeed(speed)}
+                      className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                        isActive
+                          ? "bg-green-600 text-white"
+                          : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                      }`}
+                    >
+                      {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
+                      <span
+                        className={isActive ? "text-green-200" : "text-zinc-600"}
+                      >
+                        {data?.games}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Time Range Filter */}
             <div className="flex items-center gap-2">
               <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
-                Speed
+                Period
               </span>
-              {availableSpeeds.map((speed) => {
-                const data = profile.bySpeed?.[speed];
-                const isActive = selectedSpeeds.includes(speed);
-                return (
-                  <button
-                    key={speed}
-                    onClick={() => toggleSpeed(speed)}
-                    className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                      isActive
-                        ? "bg-green-600 text-white"
-                        : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                    }`}
-                  >
-                    {speed.charAt(0).toUpperCase() + speed.slice(1)}{" "}
-                    <span
-                      className={isActive ? "text-green-200" : "text-zinc-600"}
-                    >
-                      {data?.games}
-                    </span>
-                  </button>
-                );
-              })}
+              {TIME_RANGES.map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => {
+                    if (key !== timeRange) {
+                      setTimeRange(key);
+                    }
+                  }}
+                  className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
+                    timeRange === key
+                      ? "bg-green-600 text-white"
+                      : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
+                  }`}
+                >
+                  {label}
+                  {timeRangeLoading && timeRange === key && (
+                    <span className="ml-1.5 inline-block h-3 w-3 rounded-full border-2 border-green-200 border-t-transparent animate-spin align-middle" />
+                  )}
+                </button>
+              ))}
             </div>
-          )}
-
-          {/* Time Range Filter */}
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-zinc-500 uppercase tracking-wide mr-1">
-              Period
-            </span>
-            {TIME_RANGES.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => {
-                  if (key !== timeRange) {
-                    setTimeRange(key);
-                  }
-                }}
-                className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-                  timeRange === key
-                    ? "bg-green-600 text-white"
-                    : "bg-zinc-800 text-zinc-500 hover:text-zinc-300"
-                }`}
-              >
-                {label}
-                {timeRangeLoading && timeRange === key && (
-                  <span className="ml-1.5 inline-block h-3 w-3 rounded-full border-2 border-green-200 border-t-transparent animate-spin align-middle" />
-                )}
-              </button>
-            ))}
           </div>
-        </div>
+        )}
 
-        {/* Player Card */}
-        <PlayerCard profile={profile} filteredGames={filteredData.games} />
+        {/* Player Card — show real card when profile loaded, skeleton when only basicData available */}
+        {profile && filteredData ? (
+          <PlayerCard profile={profile} filteredGames={filteredData.games} />
+        ) : basicData ? (
+          <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6">
+            <div>
+              <h2 className="text-2xl font-bold text-white">{basicData.username}</h2>
+              <p className="text-sm text-zinc-500 mt-1">
+                Analyzing {basicData.totalGames.toLocaleString()} games...
+              </p>
+            </div>
+            {Object.entries(basicData.ratings).filter(([, v]) => v !== undefined).length > 0 && (
+              <div className="mt-4 flex flex-wrap gap-3">
+                {Object.entries(basicData.ratings)
+                  .filter(([, v]) => v !== undefined)
+                  .map(([label, value]) => (
+                    <div key={label} className="rounded-md bg-zinc-900 px-3 py-1.5 text-sm">
+                      <span className="text-zinc-500 capitalize">{label}</span>{" "}
+                      <span className="font-mono text-white">{value}</span>
+                    </div>
+                  ))}
+              </div>
+            )}
+            <div className="mt-6 space-y-3">
+              <div className="h-4 w-24 rounded bg-zinc-700/50 animate-pulse" />
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} className="flex items-center gap-3">
+                  <div className="w-24 h-3 rounded bg-zinc-700/30 animate-pulse" />
+                  <div className="flex-1 h-2 rounded-full bg-zinc-700/30 animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
-        {/* Error Profile — only for Lichess mode (PGN games don't have engine evals) */}
-        {!isPGNMode && (displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
+        {/* Error Profile — for Lichess & Chess.com (PGN games don't have engine evals) */}
+        {!isPGNMode && filteredData && (displayedErrorProfile || isUpgrading || filteredData.games > 0) && (
             <div className="mt-4">
               <ErrorProfileCard
                 errorProfile={displayedErrorProfile || {
@@ -1119,9 +1178,21 @@ export default function ScoutPage() {
                 upgradeProgress={upgradeProgress}
                 isUpgrading={isUpgrading}
                 upgradeComplete={upgradeComplete}
+                platform={platform}
               />
             </div>
           )}
+
+        {/* Skeleton for error profile while loading */}
+        {!isPGNMode && !filteredData && fullLoading && (
+          <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-5">
+            <div className="space-y-3">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-5 rounded-md bg-zinc-700/30 animate-pulse" />
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* OTB PGN Upload */}
         <OTBUploader
@@ -1150,85 +1221,68 @@ export default function ScoutPage() {
           </div>
 
           <div className="mt-6 tab-content">
-            {activeTab === "openings" && (
-              <OpeningsTab
-                white={filteredData.openings.white}
-                black={filteredData.openings.black}
-                games={isPGNMode ? pgnDrilldownGames : lichessDrilldownGames}
-                onAnalyzeGame={handleAnalyzeGame}
-                onRequestGames={isPGNMode ? undefined : fetchLichessRawGames}
-                loadingGames={isPGNMode ? false : loadingLichessGames}
-                coverageByOpening={isPGNMode ? undefined : coverageByOpening}
-              />
-            )}
-            {activeTab === "weaknesses" && (
-              <WeaknessesTab
-                weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
-                username={displayName}
-                speeds={selectedSpeeds.join(",")}
-              />
-            )}
-            {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />}
-            {activeTab === "otb" && otbProfile && (
-              <OTBAnalysisTab profile={otbProfile} />
+            {filteredData ? (
+              <>
+                {activeTab === "openings" && (
+                  <OpeningsTab
+                    white={filteredData.openings.white}
+                    black={filteredData.openings.black}
+                    games={isPGNMode ? pgnDrilldownGames : drilldownGames}
+                    onAnalyzeGame={handleAnalyzeGame}
+                    onRequestGames={isPGNMode ? undefined : fetchRawGames}
+                    loadingGames={isPGNMode ? false : loadingDrilldownGames}
+                    coverageByOpening={isPGNMode ? undefined : coverageByOpening}
+                  />
+                )}
+                {activeTab === "weaknesses" && (
+                  <WeaknessesTab
+                    weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
+                    username={displayName}
+                    speeds={selectedSpeeds.join(",")}
+                  />
+                )}
+                {activeTab === "prep" && <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />}
+                {activeTab === "otb" && otbProfile && (
+                  <OTBAnalysisTab profile={otbProfile} />
+                )}
+              </>
+            ) : (
+              /* Skeleton tab content while loading */
+              <div className="space-y-4">
+                {[1, 2, 3, 4, 5].map((i) => (
+                  <div key={i} className="h-12 rounded-lg bg-zinc-800/30 animate-pulse" />
+                ))}
+              </div>
             )}
           </div>
         </div>
 
         {/* Practice button */}
-        <div className="mt-8 flex flex-col items-center gap-3">
-          <button
-            onClick={handlePracticeClick}
-            className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
-          >
-            Practice against {displayName}
-          </button>
-          <p className="text-xs text-zinc-500 mt-1">
-            Bot trained on {filteredData.games} {selectedSpeeds.join(" + ")} game{filteredData.games !== 1 ? "s" : ""}
-            {timeRange !== "all" ? ` from ${TIME_RANGES.find(t => t.key === timeRange)?.label?.toLowerCase()}` : ""}
-          </p>
-
-          {showPlayConfirm && isUpgrading && (
-            <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/80 p-4 text-center max-w-md animate-in fade-in duration-200">
-              <p className="text-sm text-zinc-300 mb-3">
-                Analysis is {upgradeProgress?.pct ?? 0}% complete. The bot won&apos;t
-                include the new data until analysis finishes.
-              </p>
-              <div className="flex gap-2 justify-center">
-                <button
-                  onClick={() => {
-                    setShowPlayConfirm(false);
-                    if (enhancedErrorProfile) {
-                      try {
-                        sessionStorage.setItem(
-                          `enhanced-profile:${username}`,
-                          JSON.stringify(enhancedErrorProfile)
-                        );
-                      } catch {
-                        // Storage full — non-fatal
-                      }
-                    }
-                    const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
-                    const since = sinceMs ? Date.now() - sinceMs : undefined;
-                    let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
-                    if (since) playUrl += `&since=${since}`;
-                    router.push(playUrl);
-                  }}
-                  className="rounded-lg border border-zinc-600/40 bg-zinc-700/30 px-4 py-2 text-sm font-medium text-zinc-300 transition-colors hover:bg-zinc-700/50"
-                >
-                  Play now with current data
-                </button>
-                <button
-                  onClick={() => setShowPlayConfirm(false)}
-                  className="rounded-lg border border-green-600/40 bg-green-600/10 px-4 py-2 text-sm font-medium text-green-400 transition-colors hover:bg-green-600/20"
-                >
-                  Wait for analysis
-                </button>
-              </div>
-            </div>
-          )}
-        </div>
+        {filteredData && (
+          <div className="mt-8 flex flex-col items-center gap-3">
+            <button
+              onClick={handlePracticeClick}
+              className="rounded-lg bg-green-600 px-6 py-3 text-lg font-medium text-white transition-colors hover:bg-green-500"
+            >
+              Practice against {displayName}
+            </button>
+            <p className="text-xs text-zinc-500 mt-1">
+              Bot trained on {filteredData.games} {selectedSpeeds.join(" + ")} game{filteredData.games !== 1 ? "s" : ""}
+              {timeRange !== "all" ? ` from ${TIME_RANGES.find(t => t.key === timeRange)?.label?.toLowerCase()}` : ""}
+            </p>
+          </div>
+        )}
       </div>
+
+      {/* Toast notification for analysis warnings */}
+      {toastMessage && (
+        <Toast
+          message={toastMessage}
+          progress={isUpgrading ? upgradeProgress?.pct : undefined}
+          duration={5000}
+          onDismiss={() => setToastMessage(null)}
+        />
+      )}
     </div>
   );
 }

@@ -3,6 +3,14 @@ import SearchInput from "@/components/SearchInput";
 import PGNDropZone from "@/components/PGNDropZone";
 import { getTopPlayers, getRecentEvents, formatPlayerName } from "@/lib/db";
 
+const FAMOUS_PLAYERS = [
+  { name: "Carlsen", slug: "carlsen-magnus-1290026" },
+  { name: "Firouzja", slug: "firouzja-alireza-12573981" },
+  { name: "Caruana", slug: "caruana-fabiano-2020009" },
+  { name: "Nakamura", slug: "nakamura-hikaru-2016192" },
+  { name: "Gukesh", slug: "gukesh-d-46616543" },
+];
+
 const faqs = [
   {
     q: "What is outprep?",
@@ -104,6 +112,19 @@ export default async function Home() {
 
         <SearchInput />
 
+        {/* Quick-try famous players */}
+        <div className="mt-3 flex flex-wrap justify-center gap-1.5">
+          {FAMOUS_PLAYERS.map((p) => (
+            <Link
+              key={p.slug}
+              href={`/player/${p.slug}`}
+              className="rounded-full border border-zinc-800/50 px-2.5 py-0.5 text-xs text-zinc-500 hover:text-white hover:border-zinc-600 transition-colors"
+            >
+              {p.name}
+            </Link>
+          ))}
+        </div>
+
         <div className="my-6 flex items-center gap-3 w-full">
           <div className="flex-1 border-t border-zinc-800" />
           <span className="text-sm text-zinc-600">or</span>
@@ -160,13 +181,14 @@ export default async function Home() {
           </p>
           <div className="flex flex-wrap justify-center gap-2">
             {topPlayers.map((p) => (
-              <a
+              <Link
                 key={p.slug}
                 href={`/player/${p.slug}`}
+                prefetch={true}
                 className="rounded-md border border-zinc-800/50 bg-zinc-900/30 px-3 py-2 text-sm text-zinc-400 hover:text-white hover:border-zinc-700/50 transition-all"
               >
                 {formatPlayerName(p.name)}
-              </a>
+              </Link>
             ))}
           </div>
         </section>

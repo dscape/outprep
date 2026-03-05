@@ -25,7 +25,7 @@ export function CountryFlag({
 
   const emoji = isoToEmoji(iso);
   return (
-    <span className={className} title={federation}>
+    <span className={className} title={federation} role="img" aria-label={`Flag of ${federation}`}>
       {emoji}
       {showCode && <span className="ml-1">{federation}</span>}
     </span>

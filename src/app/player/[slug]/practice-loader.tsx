@@ -42,7 +42,7 @@ export default function PracticeLoader({
 
       // Navigate to scout page in FIDE mode (uses slug for clean URL)
       router.push(
-        `/scout/${encodeURIComponent(slug)}?source=fide`
+        `/scout/fide:${encodeURIComponent(slug)}`
       );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load games");

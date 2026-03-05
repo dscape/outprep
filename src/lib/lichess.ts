@@ -14,7 +14,7 @@ export async function fetchLichessUser(username: string): Promise<LichessUser> {
 
 export async function fetchLichessGames(
   username: string,
-  max = 200
+  max = 2000
 ): Promise<LichessGame[]> {
   const params = new URLSearchParams({
     max: String(max),

@@ -123,3 +123,19 @@ CREATE TABLE pipeline_runs (
 );
 
 CREATE UNIQUE INDEX idx_pipeline_runs_unique ON pipeline_runs (run_type, identifier);
+
+-- ─── Online profiles ────────────────────────────────────────────────────────
+-- Caches computed PlayerProfile JSON for Lichess/Chess.com users.
+-- Enables instant repeat visits without re-fetching from provider APIs.
+
+CREATE TABLE online_profiles (
+  id              SERIAL PRIMARY KEY,
+  platform        TEXT NOT NULL,          -- 'lichess' | 'chesscom'
+  username        TEXT NOT NULL,          -- lowercased
+  profile_json    JSONB NOT NULL,         -- full PlayerProfile object
+  game_count      INTEGER NOT NULL,
+  newest_game_ts  BIGINT,                 -- ms timestamp of newest game included
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_online_profiles_lookup ON online_profiles (platform, username);
