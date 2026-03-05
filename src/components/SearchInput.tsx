@@ -19,10 +19,18 @@ function formatPlayerName(name: string): string {
   return name;
 }
 
+type Platform = "lichess" | "chesscom";
+
+const PLATFORMS: { key: Platform; label: string }[] = [
+  { key: "lichess", label: "Lichess" },
+  { key: "chesscom", label: "Chess.com" },
+];
+
 export default function SearchInput() {
   const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [platform, setPlatform] = useState<Platform>("lichess");
   const router = useRouter();
 
   // Autocomplete state
@@ -136,33 +144,72 @@ export default function SearchInput() {
     setError("");
 
     try {
-      // Quick check that the user exists
-      const res = await fetch(`/api/lichess/${encodeURIComponent(trimmed)}?type=user`);
-      if (res.status === 404) {
-        setError(`Player "${trimmed}" not found on Lichess`);
-        setLoading(false);
-        return;
+      if (platform === "chesscom") {
+        // Verify Chess.com user exists
+        const res = await fetch(
+          `https://api.chess.com/pub/player/${trimmed.toLowerCase()}`,
+        );
+        if (res.status === 404) {
+          setError(`Player "${trimmed}" not found on Chess.com`);
+          setLoading(false);
+          return;
+        }
+        if (!res.ok) {
+          setError("Something went wrong. Please try again.");
+          setLoading(false);
+          return;
+        }
+        router.push(`/scout/${trimmed}?source=chesscom`);
+      } else {
+        // Verify Lichess user exists
+        const res = await fetch(`/api/lichess/${encodeURIComponent(trimmed)}?type=user`);
+        if (res.status === 404) {
+          setError(`Player "${trimmed}" not found on Lichess`);
+          setLoading(false);
+          return;
+        }
+        if (res.status === 429) {
+          setError("Rate limited. Please wait a moment and try again.");
+          setLoading(false);
+          return;
+        }
+        if (!res.ok) {
+          setError("Something went wrong. Please try again.");
+          setLoading(false);
+          return;
+        }
+        router.push(`/scout/${trimmed}`);
       }
-      if (res.status === 429) {
-        setError("Rate limited. Please wait a moment and try again.");
-        setLoading(false);
-        return;
-      }
-      if (!res.ok) {
-        setError("Something went wrong. Please try again.");
-        setLoading(false);
-        return;
-      }
-
-      router.push(`/scout/${trimmed}`);
     } catch {
       setError("Network error. Please check your connection.");
       setLoading(false);
     }
   }
 
+  const placeholderText = platform === "chesscom"
+    ? "Search FIDE player or Chess.com username..."
+    : "Search FIDE player or Lichess username...";
+
   return (
     <form onSubmit={handleSubmit} className="w-full max-w-md" autoComplete="off">
+      {/* Platform tabs */}
+      <div className="flex gap-1 mb-2">
+        {PLATFORMS.map((p) => (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => { setPlatform(p.key); setError(""); }}
+            className={`px-3 py-1 text-xs rounded-md transition-colors ${
+              platform === p.key
+                ? "bg-zinc-700 text-white"
+                : "text-zinc-500 hover:text-zinc-300"
+            }`}
+          >
+            {p.label}
+          </button>
+        ))}
+      </div>
+
       <div ref={wrapperRef} className="relative">
         <input
           role="combobox"
@@ -179,7 +226,7 @@ export default function SearchInput() {
           onFocus={() => {
             if (suggestions.length > 0) setShowDropdown(true);
           }}
-          placeholder="Search FIDE player or Lichess username..."
+          placeholder={placeholderText}
           name="lichess-search"
           autoComplete="one-time-code"
           data-1p-ignore

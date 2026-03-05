@@ -9,6 +9,7 @@ import { Chess } from "chess.js";
 import type {
   LichessGame,
   LichessEvalAnnotation,
+  ChesscomGame,
   OTBGame,
   GameEvalData,
 } from "./types";
@@ -19,7 +20,7 @@ import { generateGameSlug } from "./game-slug";
 import { ECO_NAMES } from "../../packages/fide-pipeline/src/eco-names";
 import type { GameForDrilldown } from "./game-helpers";
 
-export type GameSource = "lichess" | "fide" | "pgn";
+export type GameSource = "lichess" | "chesscom" | "fide" | "pgn";
 
 export interface NormalizedGame {
   id: string;
@@ -320,6 +321,89 @@ export function fromFidePGN(
     variant: "standard",
     date: date || undefined,
     event: event || undefined,
+  };
+}
+
+// ─── Chess.com adapter ──────────────────────────────────────────────────
+
+/**
+ * Determine result for a Chess.com game result string.
+ * Win results: "win"
+ * Loss results: "checkmated", "resigned", "timeout", "abandoned"
+ * Draw results: "stalemate", "agreed", "repetition", "insufficient", "50move", "timevsinsufficient"
+ */
+function chesscomResultToOutcome(
+  whiteResult: string,
+): "white" | "black" | "draw" | undefined {
+  if (whiteResult === "win") return "white";
+  const drawResults = ["stalemate", "agreed", "repetition", "insufficient", "50move", "timevsinsufficient"];
+  if (drawResults.includes(whiteResult)) return "draw";
+  // Any other white result means black won
+  return "black";
+}
+
+export function fromChesscomGame(
+  game: ChesscomGame,
+  username: string,
+): NormalizedGame {
+  const isWhite = game.white.username.toLowerCase() === username.toLowerCase();
+
+  const result = chesscomResultToOutcome(game.white.result);
+
+  // Extract moves from PGN
+  const pgn = game.pgn || "";
+  let moves = "";
+  let eco = "";
+  let openingName = "";
+
+  if (pgn) {
+    // Extract ECO and opening from PGN headers
+    const ecoMatch = pgn.match(/\[ECO\s+"([^"]*)"\]/);
+    const openingMatch = pgn.match(/\[Opening\s+"([^"]*)"\]/);
+    eco = ecoMatch?.[1] || "";
+    openingName = openingMatch?.[1] || "";
+
+    // Extract moves from PGN body
+    try {
+      const chess = new Chess();
+      chess.loadPgn(pgn);
+      moves = chess.history().join(" ");
+    } catch {
+      // Fallback: strip headers and metadata from PGN
+    }
+  }
+
+  // Resolve opening name via ECO lookup
+  let resolvedOpening = resolveOpeningName(eco || null, openingName || null);
+  if (resolvedOpening === "Unknown" && moves) {
+    const classified = classifyOpening(moves);
+    if (classified) {
+      resolvedOpening = classified.name;
+      if (!eco) eco = classified.eco;
+    }
+  }
+
+  // Parse time control
+  const speed = classifyTimeControl(game.time_control);
+
+  return {
+    id: game.url.split("/").pop() || `chesscom-${game.end_time}`,
+    pgn,
+    moves,
+    white: { name: game.white.username, id: game.white.username.toLowerCase() },
+    black: { name: game.black.username, id: game.black.username.toLowerCase() },
+    result,
+    opening: {
+      eco,
+      name: resolvedOpening,
+      family: openingFamily(resolvedOpening),
+    },
+    source: "chesscom",
+    playerColor: isWhite ? "white" : "black",
+    speed,
+    variant: "standard",
+    createdAt: game.end_time * 1000,
+    rated: game.rated,
   };
 }
 

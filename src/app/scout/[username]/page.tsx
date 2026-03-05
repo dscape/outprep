@@ -214,6 +214,7 @@ export default function ScoutPage() {
   const username = decodeURIComponent(rawUsername);
   const sourceParam = searchParams.get("source");
   const isFIDEMode = sourceParam === "fide";
+  const isChesscomMode = sourceParam === "chesscom";
   const isPGNMode = sourceParam === "pgn" || isFIDEMode;
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
@@ -385,8 +386,9 @@ export default function ScoutPage() {
     // Phase 1: Fast basic data (username + ratings)
     async function loadBasic() {
       try {
+        const basicQuery = isChesscomMode ? "?platform=chesscom" : "";
         const res = await fetch(
-          `/api/profile-basic/${encodeURIComponent(username)}`
+          `/api/profile-basic/${encodeURIComponent(username)}${basicQuery}`
         );
         if (res.ok) {
           setBasicData(await res.json());
@@ -404,9 +406,12 @@ export default function ScoutPage() {
       try {
         const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
         const since = sinceMs ? Date.now() - sinceMs : undefined;
-        const sinceQuery = since ? `?since=${since}` : "";
+        const queryParams = new URLSearchParams();
+        if (since) queryParams.set("since", String(since));
+        if (isChesscomMode) queryParams.set("platform", "chesscom");
+        const queryStr = queryParams.toString() ? `?${queryParams}` : "";
         const res = await fetch(
-          `/api/profile/${encodeURIComponent(username)}${sinceQuery}`
+          `/api/profile/${encodeURIComponent(username)}${queryStr}`
         );
 
         if (!res.ok) {
