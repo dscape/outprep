@@ -4,7 +4,7 @@ import PGNDropZone from "@/components/PGNDropZone";
 import { getTopPlayers, getRecentEvents, formatPlayerName } from "@/lib/db";
 
 const FAMOUS_PLAYERS = [
-  { name: "Carlsen", slug: "carlsen-magnus-1290026" },
+  { name: "Carlsen", slug: "carlsen-magnus-1503014" },
   { name: "Firouzja", slug: "firouzja-alireza-12573981" },
   { name: "Caruana", slug: "caruana-fabiano-2020009" },
   { name: "Nakamura", slug: "nakamura-hikaru-2016192" },
