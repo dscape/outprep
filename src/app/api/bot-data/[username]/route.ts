@@ -1,12 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessGames } from "@/lib/lichess";
+import { fetchChesscomGames } from "@/lib/chesscom";
 import type { OpeningTrie, ErrorProfile } from "@outprep/engine";
 import { buildOpeningTrie, buildErrorProfileFromEvals } from "@outprep/engine";
-import { fromLichessGame, normalizedToGameRecord, normalizedToGameEvalData } from "@/lib/normalized-game";
+import { fromLichessGame, fromChesscomGame, normalizedToGameRecord, normalizedToGameEvalData } from "@/lib/normalized-game";
+import type { NormalizedGame } from "@/lib/normalized-game";
 
 /**
  * Returns the bot data needed to play against an opponent:
- * - Error profile (per-phase mistake rates from Lichess evals)
+ * - Error profile (per-phase mistake rates from evals)
  * - Opening tries (one per color, JSON move trie)
  */
 
@@ -29,7 +31,8 @@ export async function GET(
   const speeds = speedsParam ? speedsParam.split(",").filter(Boolean) : [];
   const sinceParam = request.nextUrl.searchParams.get("since");
   const since = sinceParam ? parseInt(sinceParam) : undefined;
-  const cacheKey = `bot:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}:${since || "all"}`;
+  const platform = request.nextUrl.searchParams.get("platform") || "lichess";
+  const cacheKey = `bot:${platform}:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}:${since || "all"}`;
 
   try {
     const cached = cache.get(cacheKey);
@@ -37,16 +40,27 @@ export async function GET(
       return NextResponse.json(cached.data);
     }
 
-    const rawGames = await fetchLichessGames(username, 500);
-    let filtered = rawGames.filter((g) => g.variant === "standard");
-    if (speeds.length > 0) {
-      filtered = filtered.filter((g) => speeds.includes(g.speed));
-    }
-    if (since) {
-      filtered = filtered.filter((g) => (g.createdAt ?? 0) >= since);
+    let normalized: NormalizedGame[];
+
+    if (platform === "chesscom") {
+      const rawGames = await fetchChesscomGames(username, 2000, since);
+      normalized = rawGames.map((g) => fromChesscomGame(g, username));
+      // Apply speed filtering on normalized games (Chess.com raw games don't have a speed field)
+      if (speeds.length > 0) {
+        normalized = normalized.filter((g) => g.speed && speeds.includes(g.speed));
+      }
+    } else {
+      const rawGames = await fetchLichessGames(username, 2000);
+      let filtered = rawGames.filter((g) => g.variant === "standard");
+      if (speeds.length > 0) {
+        filtered = filtered.filter((g) => speeds.includes(g.speed));
+      }
+      if (since) {
+        filtered = filtered.filter((g) => (g.createdAt ?? 0) >= since);
+      }
+      normalized = filtered.map((g) => fromLichessGame(g, username));
     }
 
-    const normalized = filtered.map((g) => fromLichessGame(g, username));
     const evalData = normalized
       .map(normalizedToGameEvalData)
       .filter((d): d is NonNullable<typeof d> => d !== null);

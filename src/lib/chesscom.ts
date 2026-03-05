@@ -32,12 +32,12 @@ export async function fetchChesscomStats(username: string): Promise<ChesscomStat
 
 /**
  * Fetch games from Chess.com, optionally only after a given timestamp.
- * Fetches monthly archives in reverse chronological order, stopping when
- * all games in a month are older than `since`.
+ * Fetches monthly archives in reverse chronological order (3 at a time),
+ * stopping when all games in a batch are older than `since`.
  */
 export async function fetchChesscomGames(
   username: string,
-  max = 200,
+  max = 2000,
   since?: number,
 ): Promise<ChesscomGame[]> {
   const lower = username.toLowerCase();
@@ -49,36 +49,40 @@ export async function fetchChesscomGames(
 
   if (!archives || archives.length === 0) return [];
 
-  // Process archives in reverse (newest first)
+  // Process archives in reverse (newest first), 3 at a time for speed
   const games: ChesscomGame[] = [];
   const reversed = [...archives].reverse();
+  const BATCH_SIZE = 3;
+  let hitSinceCutoff = false;
 
-  for (const archiveUrl of reversed) {
-    if (games.length >= max) break;
-
-    const { games: monthGames } = await chesscomFetch<{ games: ChesscomGame[] }>(archiveUrl);
-    if (!monthGames) continue;
-
-    // Filter: only standard chess, rated, with PGN
-    const valid = monthGames.filter(
-      (g) => g.rules === "chess" && g.rated && g.pgn,
+  for (let i = 0; i < reversed.length && games.length < max && !hitSinceCutoff; i += BATCH_SIZE) {
+    const batch = reversed.slice(i, i + BATCH_SIZE);
+    const results = await Promise.all(
+      batch.map((url) =>
+        chesscomFetch<{ games: ChesscomGame[] }>(url).catch(() => ({ games: [] as ChesscomGame[] })),
+      ),
     );
 
-    // Sort newest first within the month
-    valid.sort((a, b) => b.end_time - a.end_time);
+    for (const { games: monthGames } of results) {
+      if (games.length >= max || hitSinceCutoff) break;
+      if (!monthGames) continue;
 
-    for (const g of valid) {
-      if (since && g.end_time * 1000 < since) {
-        // All remaining games in older archives will be older too
-        return games.slice(0, max);
+      // Filter: only standard chess, rated, with PGN
+      const valid = monthGames.filter(
+        (g) => g.rules === "chess" && g.rated && g.pgn,
+      );
+
+      // Sort newest first within the month
+      valid.sort((a, b) => b.end_time - a.end_time);
+
+      for (const g of valid) {
+        if (since && g.end_time * 1000 < since) {
+          hitSinceCutoff = true;
+          break;
+        }
+        games.push(g);
+        if (games.length >= max) break;
       }
-      games.push(g);
-      if (games.length >= max) break;
-    }
-
-    // If oldest game in this month is before `since`, no need to check older archives
-    if (since && valid.length > 0 && valid[valid.length - 1].end_time * 1000 < since) {
-      break;
     }
   }
 

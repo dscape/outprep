@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo, useCallback, useRef } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   PlayerProfile,
   OTBProfile,
@@ -34,8 +34,10 @@ import {
 } from "@/lib/profile-builder";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
 import { LichessGame } from "@/lib/types";
-import { fromLichessGame, fromOTBGame, normalizedToGameForDrilldown } from "@/lib/normalized-game";
+import { fromLichessGame, fromChesscomGame, fromOTBGame, normalizedToGameForDrilldown } from "@/lib/normalized-game";
 import type { NormalizedGame } from "@/lib/normalized-game";
+import { parsePlatformUsername } from "@/lib/platform-utils";
+import { fetchChesscomGames } from "@/lib/chesscom";
 
 type Tab = "openings" | "weaknesses" | "prep" | "otb";
 
@@ -209,13 +211,11 @@ const TIME_RANGES = [
 export default function ScoutPage() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const rawUsername = params.username as string;
-  const username = decodeURIComponent(rawUsername);
-  const sourceParam = searchParams.get("source");
-  const isFIDEMode = sourceParam === "fide";
-  const isChesscomMode = sourceParam === "chesscom";
-  const isPGNMode = sourceParam === "pgn" || isFIDEMode;
+  const { platform, username } = parsePlatformUsername(rawUsername);
+  const isChesscomMode = platform === "chesscom";
+  const isFIDEMode = platform === "fide";
+  const isPGNMode = platform === "pgn" || isFIDEMode;
 
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [basicData, setBasicData] = useState<{
@@ -253,8 +253,8 @@ export default function ScoutPage() {
   const initialFilterSetRef = useRef(false);
 
   // Drill-down: normalized games for opening expansion
-  const [rawLichessGames, setRawLichessGames] = useState<NormalizedGame[] | null>(null);
-  const [loadingLichessGames, setLoadingLichessGames] = useState(false);
+  const [rawDrilldownGames, setRawDrilldownGames] = useState<NormalizedGame[] | null>(null);
+  const [loadingDrilldownGames, setLoadingDrilldownGames] = useState(false);
 
   // Load OTB data and cached enhanced profile from sessionStorage on mount
   useEffect(() => {
@@ -448,7 +448,7 @@ export default function ScoutPage() {
 
   // Reset drill-down cache when time range changes
   useEffect(() => {
-    setRawLichessGames(null);
+    setRawDrilldownGames(null);
   }, [timeRange]);
 
   // Cleanup on unmount
@@ -610,6 +610,7 @@ export default function ScoutPage() {
         opponentUsername: game.opponent,
         opponentFideEstimate: profile?.fideEstimate?.rating,
         scoutedUsername: username,
+        scoutedPlatform: platform,
       };
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));
       router.push(`/analysis/${game.id}`);
@@ -617,39 +618,46 @@ export default function ScoutPage() {
     [router, username, profile]
   );
 
-  // Drill-down: lazy-fetch raw Lichess games for opening expansion
-  const fetchLichessRawGames = useCallback(async () => {
-    if (rawLichessGames || loadingLichessGames || isPGNMode) return;
-    setLoadingLichessGames(true);
+  // Drill-down: lazy-fetch raw games for opening expansion
+  const fetchRawGames = useCallback(async () => {
+    if (rawDrilldownGames || loadingDrilldownGames || isPGNMode) return;
+    setLoadingDrilldownGames(true);
     try {
       const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
       const since = sinceMs ? Date.now() - sinceMs : undefined;
-      const params = new URLSearchParams({
-        max: "500",
-        rated: "true",
-        pgnInJson: "true",
-        opening: "true",
-      });
-      if (since) params.set("since", String(since));
-      const res = await fetch(
-        `https://lichess.org/api/games/user/${encodeURIComponent(username)}?${params}`,
-        { headers: { Accept: "application/x-ndjson" } }
-      );
-      if (!res.ok) {
-        console.error("Failed to fetch Lichess games:", res.status);
-        return;
+
+      if (isChesscomMode) {
+        const games = await fetchChesscomGames(username, 2000, since ?? undefined);
+        const normalized = games.map((g) => fromChesscomGame(g, username));
+        setRawDrilldownGames(normalized);
+      } else {
+        const params = new URLSearchParams({
+          max: "2000",
+          rated: "true",
+          pgnInJson: "true",
+          opening: "true",
+        });
+        if (since) params.set("since", String(since));
+        const res = await fetch(
+          `https://lichess.org/api/games/user/${encodeURIComponent(username)}?${params}`,
+          { headers: { Accept: "application/x-ndjson" } }
+        );
+        if (!res.ok) {
+          console.error("Failed to fetch games:", res.status);
+          return;
+        }
+        const text = await res.text();
+        const lines = text.trim().split("\n").filter(Boolean);
+        const lichessGames: LichessGame[] = lines.map((line) => JSON.parse(line));
+        const normalized = lichessGames.map((g) => fromLichessGame(g, username));
+        setRawDrilldownGames(normalized);
       }
-      const text = await res.text();
-      const lines = text.trim().split("\n").filter(Boolean);
-      const lichessGames: LichessGame[] = lines.map((line) => JSON.parse(line));
-      const normalized = lichessGames.map((g) => fromLichessGame(g, username));
-      setRawLichessGames(normalized);
     } catch (err) {
-      console.error("Failed to fetch Lichess games:", err);
+      console.error("Failed to fetch games:", err);
     } finally {
-      setLoadingLichessGames(false);
+      setLoadingDrilldownGames(false);
     }
-  }, [username, rawLichessGames, loadingLichessGames, isPGNMode, timeRange]);
+  }, [username, rawDrilldownGames, loadingDrilldownGames, isPGNMode, isChesscomMode, timeRange]);
 
   // Drill-down: memoize converted games
   // Use otbProfile.username (resolved player name) for color detection, not URL slug
@@ -661,16 +669,16 @@ export default function ScoutPage() {
     );
   }, [isPGNMode, otbProfile, username]);
 
-  const lichessDrilldownGames = useMemo(() => {
-    if (!rawLichessGames) return undefined;
-    return rawLichessGames.map(normalizedToGameForDrilldown);
-  }, [rawLichessGames]);
+  const drilldownGames = useMemo(() => {
+    if (!rawDrilldownGames) return undefined;
+    return rawDrilldownGames.map(normalizedToGameForDrilldown);
+  }, [rawDrilldownGames]);
 
   // Build opening coverage map from raw Lichess games
   const coverageByOpening = useMemo(() => {
-    if (!rawLichessGames) return undefined;
+    if (!rawDrilldownGames) return undefined;
     const map = new Map<string, { analyzed: number; total: number }>();
-    for (const g of rawLichessGames) {
+    for (const g of rawDrilldownGames) {
       if (!g.opening.name || g.opening.name === "Unknown") continue;
       if ((g.variant ?? "standard") !== "standard") continue;
       const family = g.opening.family;
@@ -680,7 +688,7 @@ export default function ScoutPage() {
       map.set(family, entry);
     }
     return map;
-  }, [rawLichessGames]);
+  }, [rawDrilldownGames]);
 
   // Handle upgrade request
   const handleUpgrade = useCallback(
@@ -704,6 +712,7 @@ export default function ScoutPage() {
             ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
             : "";
         if (sinceVal) query += `${query ? "&" : "?"}since=${sinceVal}`;
+        if (isChesscomMode) query += `${query ? "&" : "?"}platform=chesscom`;
         const res = await fetch(
           `/api/bot-data/${encodeURIComponent(username)}${query}`
         );
@@ -878,7 +887,7 @@ export default function ScoutPage() {
 
   const handlePracticeClick = useCallback(() => {
     if (isPGNMode) {
-      router.push(`/play/${encodeURIComponent(username)}?source=pgn`);
+      router.push(`/play/pgn:${encodeURIComponent(username)}`);
       return;
     }
     if (isUpgrading) {
@@ -897,10 +906,11 @@ export default function ScoutPage() {
     }
     const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
     const since = sinceMs ? Date.now() - sinceMs : undefined;
-    let playUrl = `/play/${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
+    const platformPrefix = isChesscomMode ? "chesscom:" : "";
+    let playUrl = `/play/${platformPrefix}${encodeURIComponent(username)}?speeds=${selectedSpeeds.join(",")}`;
     if (since) playUrl += `&since=${since}`;
     router.push(playUrl);
-  }, [isPGNMode, isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
+  }, [isPGNMode, isChesscomMode, isUpgrading, enhancedErrorProfile, username, selectedSpeeds, timeRange, router]);
 
   if (fullLoading) {
     return (
@@ -1159,10 +1169,10 @@ export default function ScoutPage() {
               <OpeningsTab
                 white={filteredData.openings.white}
                 black={filteredData.openings.black}
-                games={isPGNMode ? pgnDrilldownGames : lichessDrilldownGames}
+                games={isPGNMode ? pgnDrilldownGames : drilldownGames}
                 onAnalyzeGame={handleAnalyzeGame}
-                onRequestGames={isPGNMode ? undefined : fetchLichessRawGames}
-                loadingGames={isPGNMode ? false : loadingLichessGames}
+                onRequestGames={isPGNMode ? undefined : fetchRawGames}
+                loadingGames={isPGNMode ? false : loadingDrilldownGames}
                 coverageByOpening={isPGNMode ? undefined : coverageByOpening}
               />
             )}

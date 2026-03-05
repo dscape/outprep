@@ -13,6 +13,7 @@ import { lookupOpening } from "@/lib/analysis/opening-lookup";
 import { describeMoveError } from "@/lib/analysis/move-descriptions";
 import AnalysisCard from "@/components/AnalysisCard";
 import GameReplay from "@/components/GameReplay";
+import { buildScoutUrl } from "@/lib/platform-utils";
 
 interface StoredGame {
   pgn: string;
@@ -23,6 +24,7 @@ interface StoredGame {
   precomputedMoves?: MoveEval[];
   precomputedSummary?: AnalysisSummary;
   scoutedUsername?: string; // When reviewing a scouted player's game (not your own)
+  scoutedPlatform?: string;
 }
 
 export default function AnalysisPage() {
@@ -146,6 +148,7 @@ export default function AnalysisPage() {
           coachingNarrative,
           opponentFideEstimate: gd.opponentFideEstimate,
           scoutedUsername: gd.scoutedUsername,
+          scoutedPlatform: gd.scoutedPlatform,
         });
 
         setStage("");
@@ -190,7 +193,7 @@ export default function AnalysisPage() {
           <div className="mb-6 flex items-center justify-between">
             <button
               onClick={() =>
-                router.push(`/scout/${encodeURIComponent(gameData.scoutedUsername || gameData.opponentUsername)}`)
+                router.push(buildScoutUrl(gameData.scoutedPlatform || "lichess", gameData.scoutedUsername || gameData.opponentUsername))
               }
               className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
             >
@@ -261,16 +264,17 @@ export default function AnalysisPage() {
         <div className="mb-6 flex items-center justify-between">
           <button
             onClick={() =>
-              router.push(`/scout/${encodeURIComponent(analysis.scoutedUsername || analysis.opponentUsername)}`)
+              router.push(buildScoutUrl(analysis.scoutedPlatform || "lichess", analysis.scoutedUsername || analysis.opponentUsername))
             }
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             &larr; Back to {analysis.scoutedUsername || analysis.opponentUsername}
           </button>
           <button
-            onClick={() =>
-              router.push(`/play/${encodeURIComponent(analysis.scoutedUsername || analysis.opponentUsername)}`)
-            }
+            onClick={() => {
+              const prefix = analysis.scoutedPlatform && analysis.scoutedPlatform !== "lichess" ? `${analysis.scoutedPlatform}:` : "";
+              router.push(`/play/${prefix}${encodeURIComponent(analysis.scoutedUsername || analysis.opponentUsername)}`);
+            }}
             className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-500 transition-colors"
           >
             Practice against {analysis.scoutedUsername || analysis.opponentUsername}

@@ -68,7 +68,7 @@ async function handleLichess(
   if (!user || !games) {
     [user, games] = await Promise.all([
       fetchLichessUser(username),
-      fetchLichessGames(username, 500),
+      fetchLichessGames(username, 2000),
     ]);
     setCache(userCacheKey, user);
     setCache(gamesCacheKey, games);
@@ -91,7 +91,7 @@ async function handleChesscom(
   profileCacheKey: string,
 ) {
   const userCacheKey = `user:chesscom:${username.toLowerCase()}`;
-  const gamesCacheKey = `games:chesscom:${username.toLowerCase()}`;
+  const gamesCacheKey = `games:chesscom:${username.toLowerCase()}:${since || "all"}`;
 
   let userLike = getCached(userCacheKey) as LichessUser | null;
   let games = getCached(gamesCacheKey) as ChesscomGame[] | null;
@@ -100,7 +100,7 @@ async function handleChesscom(
     const [ccUser, ccStats, ccGames] = await Promise.all([
       fetchChesscomUser(username),
       fetchChesscomStats(username),
-      fetchChesscomGames(username, 500, since),
+      fetchChesscomGames(username, 2000, since),
     ]);
 
     // Convert Chess.com user/stats to LichessUser-compatible shape for buildProfile

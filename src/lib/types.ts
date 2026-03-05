@@ -236,4 +236,5 @@ export interface GameAnalysis {
   coachingNarrative: string;
   opponentFideEstimate?: number;
   scoutedUsername?: string; // When reviewing a scouted player's game (playerColor = scouted player's color)
+  scoutedPlatform?: string;
 }
