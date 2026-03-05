@@ -392,3 +392,249 @@ function formatDateForPlayer(d: Date): string {
 function formatDateForGame(d: Date): string {
   return formatDateForPlayer(d);
 }
+
+// ─── Online player linking queries ──────────────────────────────────────────
+
+export interface OnlinePlayerLink {
+  id: number;
+  playerId: number;
+  onlinePlayerId: number;
+  platform: string;
+  username: string;
+  status: string;
+  suggestedBy: string | null;
+  suggestedAt: Date;
+  reviewedBy: string | null;
+  reviewedAt: Date | null;
+  notes: string | null;
+  fideId: string;
+  playerName: string;
+}
+
+/**
+ * Get or create an online_players record.
+ * Returns the id.
+ */
+export async function upsertOnlinePlayer(data: {
+  platform: string;
+  platformId: string;
+  username: string;
+  slug: string;
+  title?: string | null;
+  bulletRating?: number | null;
+  blitzRating?: number | null;
+  rapidRating?: number | null;
+  classicalRating?: number | null;
+  profileData?: Record<string, unknown>;
+}): Promise<number | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      INSERT INTO online_players (platform, platform_id, username, slug, title,
+        bullet_rating, blitz_rating, rapid_rating, classical_rating, profile_data, last_fetched_at)
+      VALUES (
+        ${data.platform}, ${data.platformId}, ${data.username}, ${data.slug},
+        ${data.title ?? null},
+        ${data.bulletRating ?? null}, ${data.blitzRating ?? null},
+        ${data.rapidRating ?? null}, ${data.classicalRating ?? null},
+        ${JSON.stringify(data.profileData ?? {})},
+        NOW()
+      )
+      ON CONFLICT (platform, platform_id) DO UPDATE SET
+        username = EXCLUDED.username,
+        title = EXCLUDED.title,
+        bullet_rating = EXCLUDED.bullet_rating,
+        blitz_rating = EXCLUDED.blitz_rating,
+        rapid_rating = EXCLUDED.rapid_rating,
+        classical_rating = EXCLUDED.classical_rating,
+        profile_data = EXCLUDED.profile_data,
+        last_fetched_at = NOW(),
+        updated_at = NOW()
+      RETURNING id
+    `;
+    return rows[0]?.id as number;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Get an online player by platform and platform ID.
+ */
+export async function getOnlinePlayer(platform: string, platformId: string): Promise<{
+  id: number;
+  platform: string;
+  platformId: string;
+  username: string;
+  slug: string;
+  lastFetchedAt: Date;
+} | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      SELECT id, platform, platform_id, username, slug, last_fetched_at
+      FROM online_players
+      WHERE platform = ${platform} AND platform_id = ${platformId}
+    `;
+    if (rows.length === 0) return null;
+    const r = rows[0];
+    return {
+      id: r.id as number,
+      platform: r.platform as string,
+      platformId: r.platform_id as string,
+      username: r.username as string,
+      slug: r.slug as string,
+      lastFetchedAt: new Date(r.last_fetched_at as string),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Suggest a link between a FIDE player and an online account.
+ * Returns the link ID on success, null if the player or online account doesn't exist.
+ */
+export async function suggestLink(data: {
+  fideId: string;
+  platform: string;
+  platformId: string;
+  suggestedBy?: string;
+}): Promise<{ id: number; status: string } | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      INSERT INTO online_player_links (player_id, online_player_id, suggested_by)
+      SELECT p.id, op.id, ${data.suggestedBy ?? null}
+      FROM players p, online_players op
+      WHERE p.fide_id = ${data.fideId}
+        AND op.platform = ${data.platform}
+        AND op.platform_id = ${data.platformId}
+      ON CONFLICT (player_id, online_player_id) DO NOTHING
+      RETURNING id, status
+    `;
+    if (rows.length === 0) return null;
+    return { id: rows[0].id as number, status: rows[0].status as string };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * List pending link suggestions for admin review.
+ */
+export async function getPendingLinks(limit: number = 50): Promise<OnlinePlayerLink[]> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT l.id, l.player_id, l.online_player_id, l.status,
+             l.suggested_by, l.suggested_at, l.reviewed_by, l.reviewed_at, l.notes,
+             op.platform, op.username,
+             p.fide_id, p.name AS player_name
+      FROM online_player_links l
+      JOIN online_players op ON op.id = l.online_player_id
+      JOIN players p ON p.id = l.player_id
+      WHERE l.status = 'pending'
+      ORDER BY l.suggested_at DESC
+      LIMIT ${limit}
+    `;
+    return rows.map(mapRowToLink);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Update a link's status (approve, reject, revoke).
+ */
+export async function updateLinkStatus(
+  linkId: number,
+  status: "approved" | "rejected" | "revoked",
+  reviewedBy?: string,
+  notes?: string,
+): Promise<boolean> {
+  if (!HAS_POSTGRES) return false;
+  try {
+    const { rows } = await sql`
+      UPDATE online_player_links
+      SET status = ${status},
+          reviewed_by = ${reviewedBy ?? null},
+          reviewed_at = NOW(),
+          notes = ${notes ?? null}
+      WHERE id = ${linkId}
+      RETURNING id
+    `;
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get all links for a FIDE player (by fide_id).
+ */
+export async function getLinksForPlayer(fideId: string): Promise<OnlinePlayerLink[]> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT l.id, l.player_id, l.online_player_id, l.status,
+             l.suggested_by, l.suggested_at, l.reviewed_by, l.reviewed_at, l.notes,
+             op.platform, op.username,
+             p.fide_id, p.name AS player_name
+      FROM online_player_links l
+      JOIN online_players op ON op.id = l.online_player_id
+      JOIN players p ON p.id = l.player_id
+      WHERE p.fide_id = ${fideId}
+      ORDER BY l.suggested_at DESC
+    `;
+    return rows.map(mapRowToLink);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Get approved online accounts for a FIDE player slug.
+ * Used on the player page to show linked accounts.
+ */
+export async function getApprovedLinksForPlayerSlug(slug: string): Promise<Array<{
+  platform: string;
+  username: string;
+  onlinePlayerSlug: string;
+}>> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT op.platform, op.username, op.slug AS online_player_slug
+      FROM online_player_links l
+      JOIN online_players op ON op.id = l.online_player_id
+      JOIN players p ON p.id = l.player_id
+      WHERE p.slug = ${slug} AND l.status = 'approved'
+    `;
+    return rows.map((r) => ({
+      platform: r.platform as string,
+      username: r.username as string,
+      onlinePlayerSlug: r.online_player_slug as string,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function mapRowToLink(r: Record<string, unknown>): OnlinePlayerLink {
+  return {
+    id: r.id as number,
+    playerId: r.player_id as number,
+    onlinePlayerId: r.online_player_id as number,
+    platform: r.platform as string,
+    username: r.username as string,
+    status: r.status as string,
+    suggestedBy: (r.suggested_by as string) ?? null,
+    suggestedAt: new Date(r.suggested_at as string),
+    reviewedBy: (r.reviewed_by as string) ?? null,
+    reviewedAt: r.reviewed_at ? new Date(r.reviewed_at as string) : null,
+    notes: (r.notes as string) ?? null,
+    fideId: r.fide_id as string,
+    playerName: r.player_name as string,
+  };
+}

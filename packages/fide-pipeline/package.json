@@ -6,6 +6,7 @@
   "scripts": {
     "pipeline": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/cli.ts",
     "fide-pipeline": "NODE_OPTIONS='--max-old-space-size=8192' tsx src/cli.ts",
+    "admin-links": "tsx src/admin-links.ts",
     "build": "echo 'fide-pipeline uses tsx, no build step'",
     "typecheck": "tsc --noEmit"
   },

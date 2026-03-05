@@ -91,6 +91,89 @@ CREATE TABLE game_aliases (
   canonical_slug TEXT NOT NULL
 );
 
+-- ─── Online players ─────────────────────────────────────────────────────────
+-- Cached profiles from Lichess / Chess.com
+
+CREATE TABLE online_players (
+  id               SERIAL PRIMARY KEY,
+  platform         TEXT NOT NULL,
+  platform_id      TEXT NOT NULL,
+  username         TEXT NOT NULL,
+  slug             TEXT NOT NULL UNIQUE,
+  bullet_rating    SMALLINT,
+  blitz_rating     SMALLINT,
+  rapid_rating     SMALLINT,
+  classical_rating SMALLINT,
+  title            TEXT,
+  profile_data     JSONB NOT NULL DEFAULT '{}',
+  last_fetched_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_online_players_platform_id ON online_players (platform, platform_id);
+
+-- ─── Online games ───────────────────────────────────────────────────────────
+-- Cached games from online platforms
+
+CREATE TABLE online_games (
+  id                SERIAL PRIMARY KEY,
+  platform          TEXT NOT NULL,
+  platform_game_id  TEXT NOT NULL,
+  online_player_id  INTEGER NOT NULL REFERENCES online_players(id) ON DELETE CASCADE,
+  player_color      TEXT NOT NULL,
+  opponent_name     TEXT,
+  opponent_rating   SMALLINT,
+  player_rating     SMALLINT,
+  speed             TEXT,
+  variant           TEXT NOT NULL DEFAULT 'standard',
+  rated             BOOLEAN NOT NULL DEFAULT true,
+  result            TEXT,
+  eco               TEXT,
+  opening           TEXT,
+  played_at         TIMESTAMPTZ,
+  moves             TEXT,
+  pgn               TEXT,
+  evals             JSONB,
+  clock_initial     INTEGER,
+  clock_increment   INTEGER,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_online_games_dedup ON online_games (platform, platform_game_id, online_player_id);
+CREATE INDEX idx_online_games_player_date ON online_games (online_player_id, played_at DESC);
+
+-- ─── Online player links ────────────────────────────────────────────────────
+-- Maps online accounts to FIDE players with approval workflow
+
+CREATE TABLE online_player_links (
+  id               SERIAL PRIMARY KEY,
+  player_id        INTEGER NOT NULL REFERENCES players(id) ON DELETE CASCADE,
+  online_player_id INTEGER NOT NULL REFERENCES online_players(id) ON DELETE CASCADE,
+  status           TEXT NOT NULL DEFAULT 'pending',
+  suggested_by     TEXT,
+  suggested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  reviewed_by      TEXT,
+  reviewed_at      TIMESTAMPTZ,
+  notes            TEXT,
+  UNIQUE (player_id, online_player_id)
+);
+
+CREATE INDEX idx_links_approved ON online_player_links (player_id) WHERE status = 'approved';
+CREATE INDEX idx_links_pending ON online_player_links (status) WHERE status = 'pending';
+
+-- ─── Game dedup links ───────────────────────────────────────────────────────
+-- Cross-source deduplication between TWIC games and online games
+
+CREATE TABLE game_dedup_links (
+  id              SERIAL PRIMARY KEY,
+  game_id         INTEGER NOT NULL REFERENCES games(id) ON DELETE CASCADE,
+  online_game_id  INTEGER NOT NULL REFERENCES online_games(id) ON DELETE CASCADE,
+  match_method    TEXT,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (game_id, online_game_id)
+);
+
 -- ─── Pipeline metadata ───────────────────────────────────────────────────────
 -- Tracks processed TWIC issues and FIDE rating updates for incremental processing
 
