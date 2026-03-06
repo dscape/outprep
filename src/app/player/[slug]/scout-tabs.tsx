@@ -1,12 +1,10 @@
 "use client";
 
 import { useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
 import PrepTipsTab from "@/components/PrepTipsTab";
 import OTBAnalysisTab from "@/components/OTBAnalysisTab";
-import OTBUploader from "@/components/OTBUploader";
 import type { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import { fromFidePGN, normalizedToGameForDrilldown } from "@/lib/normalized-game";
@@ -28,7 +26,6 @@ export default function ScoutTabs({
   playerName,
   playerFideId,
 }: ScoutTabsProps) {
-  const router = useRouter();
   const [activeTab, setActiveTab] = useState<Tab>("openings");
 
   // FIDE game fetching (replaces fide-openings.tsx)
@@ -43,8 +40,8 @@ export default function ScoutTabs({
     isPGNMode,
     isFIDEMode,
     otbProfile,
-    handleOtbReady,
-    handleOtbClear,
+    fullLoading,
+    isUpgrading,
     enhancedWeaknesses,
     enhancedPrepTips,
     drilldownGames,
@@ -54,12 +51,6 @@ export default function ScoutTabs({
     coverageByOpening,
     handleAnalyzeGame,
   } = useScout();
-
-  const handleOtbClearWithNav = useCallback(() => {
-    handleOtbClear();
-    if (activeTab === "otb") setActiveTab("openings");
-    if (isPGNMode) router.push("/");
-  }, [handleOtbClear, activeTab, isPGNMode, router]);
 
   // Fetch FIDE games for opening drilldown
   const fetchFideGames = useCallback(async () => {
@@ -102,14 +93,6 @@ export default function ScoutTabs({
 
   return (
     <>
-      {/* OTB PGN Upload */}
-      <OTBUploader
-        username={displayName}
-        onProfileReady={handleOtbReady}
-        existingProfile={otbProfile}
-        onClear={handleOtbClearWithNav}
-      />
-
       {/* Tabs */}
       <div className="mt-8">
         <div className="flex gap-1 border-b border-zinc-800">
@@ -153,15 +136,23 @@ export default function ScoutTabs({
                   />
                 )
               )}
-              {activeTab === "weaknesses" && filteredData && (
-                <WeaknessesTab
-                  weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
-                  username={displayName}
-                  speeds={selectedSpeeds.join(",")}
-                />
+              {activeTab === "weaknesses" && (
+                !filteredData || (fullLoading && !enhancedWeaknesses && filteredData.weaknesses.length === 0) ? (
+                  <TabSkeleton />
+                ) : (
+                  <WeaknessesTab
+                    weaknesses={enhancedWeaknesses ?? filteredData.weaknesses}
+                    username={displayName}
+                    speeds={selectedSpeeds.join(",")}
+                  />
+                )
               )}
               {activeTab === "prep" && (
-                <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />
+                !filteredData || (fullLoading && !enhancedPrepTips && filteredPrepTips.length === 0) ? (
+                  <TabSkeleton />
+                ) : (
+                  <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />
+                )
               )}
               {activeTab === "otb" && otbProfile && (
                 <OTBAnalysisTab profile={otbProfile} />
@@ -177,5 +168,19 @@ export default function ScoutTabs({
         </div>
       </div>
     </>
+  );
+}
+
+function TabSkeleton() {
+  return (
+    <div className="space-y-4">
+      {[1, 2, 3].map((i) => (
+        <div key={i} className="rounded-lg border border-zinc-700/50 bg-zinc-800/30 p-4">
+          <div className="h-4 w-1/3 rounded bg-zinc-700/40 animate-pulse mb-3" />
+          <div className="h-3 w-2/3 rounded bg-zinc-700/30 animate-pulse mb-2" />
+          <div className="h-3 w-1/2 rounded bg-zinc-700/20 animate-pulse" />
+        </div>
+      ))}
+    </div>
   );
 }

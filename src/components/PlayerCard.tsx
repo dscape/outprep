@@ -96,7 +96,7 @@ export default function PlayerCard({
                   {" · "}
                 </>
               )}
-              {displayGames.toLocaleString()} {profile.platform === "fide" ? "OTB" : "standard"} games analyzed
+              {displayGames.toLocaleString()} games analyzed
               {profile.totalGames !== displayGames && (
                 <span className="text-zinc-500">
                   {" "}(of {profile.totalGames.toLocaleString()} total)
