@@ -79,6 +79,7 @@ export default function PlayPage() {
         let query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
         if (since) query += `${query ? "&" : "?"}since=${encodeURIComponent(since)}`;
         if (platform === "chesscom") query += `${query ? "&" : "?"}platform=chesscom`;
+        if (platform === "fide") query += `${query ? "&" : "?"}platform=fide`;
 
         // Start bot-data fetch immediately (likely cache-hit from scout pre-warm)
         const botFetch = fetch(
@@ -281,7 +282,7 @@ export default function PlayPage() {
             }}
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            &larr; Back to scout
+            &larr; Back to player
           </button>
           <h1 className="text-lg font-medium text-white">
             vs {profile?.username}
