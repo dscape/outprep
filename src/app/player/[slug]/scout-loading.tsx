@@ -5,7 +5,7 @@ import { useScout } from "./scout-context";
 
 export default function ScoutLoading() {
   const router = useRouter();
-  const { basicData, profile, fullLoading, error, isPGNMode, platform } = useScout();
+  const { basicData, profile, fullLoading, error, isPGNMode, platform, partialData } = useScout();
 
   if (error) {
     return (
@@ -24,16 +24,21 @@ export default function ScoutLoading() {
 
   // Phase 2: basic data arrived, full profile still loading
   if (basicData && !profile && fullLoading && !isPGNMode) {
+    const hasPartial = !!partialData;
     return (
       <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4">
         <div className="flex items-center gap-3">
           <div className="h-6 w-6 rounded-full border-2 border-green-500 border-t-transparent animate-spin flex-shrink-0" />
           <div>
             <p className="text-sm text-zinc-300 font-medium">
-              Building profile for {basicData.username}...
+              {hasPartial
+                ? `Analyzing play style for ${basicData.username}...`
+                : `Building profile for ${basicData.username}...`}
             </p>
             <p className="text-xs text-zinc-500 mt-0.5">
-              Analyzing game patterns and openings
+              {hasPartial
+                ? "Openings loaded — computing style, weaknesses, and prep tips"
+                : "Analyzing game patterns and openings"}
             </p>
           </div>
         </div>

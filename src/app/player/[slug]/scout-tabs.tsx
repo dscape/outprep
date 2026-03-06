@@ -47,6 +47,7 @@ export default function ScoutTabs({
     loadingDrilldownGames,
     coverageByOpening,
     handleAnalyzeGame,
+    partialData,
   } = useScout();
 
   // Fetch FIDE games for opening drilldown
@@ -75,8 +76,8 @@ export default function ScoutTabs({
     }
   }, []);
 
-  // Determine which openings data to use: client filtered or SSR
-  const openings = filteredData?.openings ?? ssrOpenings;
+  // Determine which openings data to use: client filtered → partial stream → SSR
+  const openings = filteredData?.openings ?? partialData?.openings ?? ssrOpenings;
 
   // Use SSR openings path (FIDE with no client data yet) or client data path
   const useFidePath = isFIDEMode && !filteredData && ssrOpenings;
@@ -108,7 +109,7 @@ export default function ScoutTabs({
         </div>
 
         <div className="mt-6 tab-content">
-          {openings || filteredData ? (
+          {openings || filteredData || partialData ? (
             <>
               {activeTab === "openings" && openings && (
                 useFidePath ? (
