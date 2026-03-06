@@ -8,10 +8,15 @@ interface NarrativeInput {
   keyMoments: KeyMoment[];
   profile: PlayerProfile;
   totalMoves: number;
+  playerName?: string;
 }
 
 export function generateNarrative(input: NarrativeInput): string {
-  const { result, playerColor, opening, summary, keyMoments, profile, totalMoves } = input;
+  const { result, playerColor, opening, summary, keyMoments, profile, totalMoves, playerName } = input;
+
+  const youSubject = playerName || "You";
+  const yourPossessive = playerName ? `${playerName}'s` : "Your";
+  const yourLower = playerName ? `${playerName}'s` : "your";
 
   const sentences: string[] = [];
 
@@ -36,15 +41,15 @@ export function generateNarrative(input: NarrativeInput): string {
   // Performance sentence
   if (summary.accuracy >= 90) {
     sentences.push(
-      `You played excellent chess with ${summary.accuracy}% accuracy.`
+      `${youSubject} played excellent chess with ${summary.accuracy}% accuracy.`
     );
   } else if (summary.accuracy >= 75) {
     sentences.push(
-      `Your play was solid at ${summary.accuracy}% accuracy, though there were some improvements available.`
+      `${yourPossessive} play was solid at ${summary.accuracy}% accuracy, though there were some improvements available.`
     );
   } else {
     sentences.push(
-      `Your accuracy was ${summary.accuracy}%, with ${summary.blunders} blunder${summary.blunders !== 1 ? "s" : ""} and ${summary.mistakes} mistake${summary.mistakes !== 1 ? "s" : ""} to address.`
+      `${yourPossessive} accuracy was ${summary.accuracy}%, with ${summary.blunders} blunder${summary.blunders !== 1 ? "s" : ""} and ${summary.mistakes} mistake${summary.mistakes !== 1 ? "s" : ""} to address.`
     );
   }
 
@@ -56,7 +61,7 @@ export function generateNarrative(input: NarrativeInput): string {
   if (prepHits.length > 0) {
     const hit = prepHits[0];
     sentences.push(
-      `You successfully exploited their patterns around move ${hit.moveNum}.`
+      `${youSubject} successfully exploited their patterns around move ${hit.moveNum}.`
     );
   }
 
@@ -71,20 +76,20 @@ export function generateNarrative(input: NarrativeInput): string {
 
   if (errors.length > 0 && errors.length <= 2) {
     sentences.push(
-      `Watch out for move ${errors[0].moveNum} — that was your main missed opportunity.`
+      `Watch out for move ${errors[0].moveNum} — that was ${yourLower} main missed opportunity.`
     );
   } else if (errors.length > 2) {
     sentences.push(
-      `Focus on moves ${errors.slice(0, 3).map((e) => e.moveNum).join(", ")} — these were your key missed opportunities.`
+      `Focus on moves ${errors.slice(0, 3).map((e) => e.moveNum).join(", ")} — these were ${yourLower} key missed opportunities.`
     );
   }
 
   // Result-based conclusion
   if (result === "win") {
     if (totalMoves < 30) {
-      sentences.push("A convincing victory — your preparation paid off.");
+      sentences.push(`A convincing victory — ${yourLower} preparation paid off.`);
     } else {
-      sentences.push("Well played — you converted the advantage successfully.");
+      sentences.push(`Well played — ${playerName || "you"} converted the advantage successfully.`);
     }
   } else if (result === "loss") {
     const topOpening = opponentOpenings[0];

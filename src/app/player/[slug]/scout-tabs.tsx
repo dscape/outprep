@@ -133,7 +133,7 @@ export default function ScoutTabs({
                 )
               )}
               {activeTab === "weaknesses" && (
-                !filteredData || (fullLoading && !enhancedWeaknesses && filteredData.weaknesses.length === 0) ? (
+                !filteredData || (!enhancedWeaknesses && filteredData.weaknesses.length === 0 && fullLoading) ? (
                   <TabSkeleton />
                 ) : (
                   <WeaknessesTab
@@ -144,7 +144,7 @@ export default function ScoutTabs({
                 )
               )}
               {activeTab === "prep" && (
-                !filteredData || (fullLoading && !enhancedPrepTips && filteredPrepTips.length === 0) ? (
+                !filteredData || (!enhancedPrepTips && filteredPrepTips.length === 0 && fullLoading) ? (
                   <TabSkeleton />
                 ) : (
                   <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />

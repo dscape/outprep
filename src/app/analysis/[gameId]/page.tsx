@@ -24,6 +24,7 @@ interface StoredGame {
   precomputedMoves?: MoveEval[];
   precomputedSummary?: AnalysisSummary;
   scoutedUsername?: string; // When reviewing a scouted player's game (not your own)
+  scoutedDisplayName?: string; // Formatted display name for UI labels
   scoutedPlatform?: string;
 }
 
@@ -106,13 +107,14 @@ export default function AnalysisPage() {
 
         // Step 4: Opponent context overlay
         setStage("Cross-referencing opponent patterns...");
+        const scoutedLabel = gd.scoutedDisplayName || gd.scoutedUsername;
         let keyMoments = profile
-          ? tagMoments(moves, contexts, profile, gd.playerColor, gd.scoutedUsername)
+          ? tagMoments(moves, contexts, profile, gd.playerColor, scoutedLabel)
           : [];
 
         // Fallback: generate basic key moments from eval swings if no profile available
         if (keyMoments.length === 0) {
-          keyMoments = generateBasicKeyMoments(moves, gd.playerColor, gd.scoutedUsername);
+          keyMoments = generateBasicKeyMoments(moves, gd.playerColor, scoutedLabel);
         }
 
         // Step 5: Generate narrative
@@ -136,6 +138,7 @@ export default function AnalysisPage() {
               keyMoments,
               profile,
               totalMoves,
+              playerName: scoutedLabel,
             })
           : `Game analysis complete. Your accuracy was ${summary.accuracy}% with ${summary.blunders} blunder(s) and ${summary.mistakes} mistake(s). Average centipawn loss: ${summary.averageCentipawnLoss}.`;
 
@@ -153,6 +156,7 @@ export default function AnalysisPage() {
           coachingNarrative,
           opponentFideEstimate: gd.opponentFideEstimate,
           scoutedUsername: gd.scoutedUsername,
+          scoutedDisplayName: gd.scoutedDisplayName,
           scoutedPlatform: gd.scoutedPlatform,
         });
 
@@ -185,7 +189,7 @@ export default function AnalysisPage() {
 
   // Progressive loading: show board and context while analysis runs
   if (!analysis && gameData) {
-    const playerLabel = gameData.scoutedUsername || "You";
+    const playerLabel = gameData.scoutedDisplayName || gameData.scoutedUsername || "You";
     const resultLabel = gameData.result === "1-0"
       ? (gameData.playerColor === "white" ? `${playerLabel} won` : `${playerLabel} lost`)
       : gameData.result === "0-1"
@@ -202,7 +206,7 @@ export default function AnalysisPage() {
               }
               className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
             >
-              &larr; Back to {gameData.scoutedUsername || gameData.opponentUsername}
+              &larr; Back to {gameData.scoutedDisplayName || gameData.scoutedUsername || gameData.opponentUsername}
             </button>
           </div>
 
@@ -273,7 +277,7 @@ export default function AnalysisPage() {
             }
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            &larr; Back to {analysis.scoutedUsername || analysis.opponentUsername}
+            &larr; Back to {analysis.scoutedDisplayName || analysis.scoutedUsername || analysis.opponentUsername}
           </button>
           <button
             onClick={() => {
@@ -282,7 +286,7 @@ export default function AnalysisPage() {
             }}
             className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-500 transition-colors"
           >
-            Practice against {analysis.scoutedUsername || analysis.opponentUsername}
+            Practice against {analysis.scoutedDisplayName || analysis.scoutedUsername || analysis.opponentUsername}
           </button>
         </div>
 

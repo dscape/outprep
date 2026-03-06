@@ -4,6 +4,7 @@ import { useState, useMemo, useEffect, useCallback, useRef, Fragment } from "rea
 import { Chessboard } from "react-chessboard";
 import { Chess } from "chess.js";
 import { GameAnalysis, MoveEval, MomentTag } from "@/lib/types";
+import Toast from "@/components/Toast";
 import {
   classColor,
   classBg,
@@ -137,7 +138,7 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   selectedPlyRef.current = selectedPly;
 
   // Player label: use scouted player's name when reviewing their game, otherwise "You"
-  const playerLabel = analysis.scoutedUsername || "You";
+  const playerLabel = analysis.scoutedDisplayName || analysis.scoutedUsername || "You";
 
   // Extract player names and Elo from PGN headers
   const pgnInfo = useMemo(() => {
@@ -280,7 +281,7 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   }, [analysis.pgn]);
 
   // Open on Lichess
-  const [lichessError, setLichessError] = useState<string | null>(null);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const handleOpenLichess = useCallback(async () => {
     // Valid Lichess game IDs are exactly 8 alphanumeric characters
     const isLichessGame = /^[A-Za-z0-9]{8}$/.test(analysis.gameId);
@@ -290,15 +291,14 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
     }
     // Non-Lichess game (OTB, played, synthetic) — copy PGN and open Lichess paste
     setLichessImporting(true);
-    setLichessError(null);
     try {
       await navigator.clipboard.writeText(analysis.pgn);
-      setLichessError("PGN copied — paste it on the Lichess page.");
+      setToastMessage("PGN copied — paste it on the Lichess page.");
     } catch {
-      setLichessError("Copy PGN first, then paste at lichess.org/paste");
+      setToastMessage("Copy PGN first, then paste at lichess.org/paste");
     }
-    window.open("https://lichess.org/paste", "_blank");
     setLichessImporting(false);
+    setTimeout(() => window.open("https://lichess.org/paste", "_blank"), 1500);
   }, [analysis.gameId, analysis.pgn]);
 
   // Group moves into pairs: (white, black)
@@ -422,9 +422,6 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
             </>
           )}
         </button>
-        {lichessError && (
-          <p className="text-xs text-red-400">{lichessError}</p>
-        )}
       </div>
 
       {/* Summary stats */}
@@ -485,28 +482,28 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
             <div className="flex justify-center gap-1.5 mt-3">
               <button
                 onClick={goFirst}
-                className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
+                className="flex-1 flex justify-center rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
                 title="First move (Home)"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="4" x2="5" y2="20"/><polyline points="13 4 7 12 13 20"/></svg>
               </button>
               <button
                 onClick={goPrev}
-                className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
+                className="flex-1 flex justify-center rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
                 title="Previous move (←)"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
               </button>
               <button
                 onClick={goNext}
-                className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-4 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
+                className="flex-1 flex justify-center rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
                 title="Next move (→)"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 6 15 12 9 18"/></svg>
               </button>
               <button
                 onClick={goLast}
-                className="rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
+                className="flex-1 flex justify-center rounded-lg bg-zinc-800 border border-zinc-700/50 px-3 py-2 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors"
                 title="Last move (End)"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="11 4 17 12 11 20"/><line x1="19" y1="4" x2="19" y2="20"/></svg>
@@ -736,6 +733,14 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
         </h3>
         <p className="text-zinc-300 leading-relaxed">{analysis.coachingNarrative}</p>
       </div>
+
+      {toastMessage && (
+        <Toast
+          message={toastMessage}
+          duration={3000}
+          onDismiss={() => setToastMessage(null)}
+        />
+      )}
     </div>
   );
 }

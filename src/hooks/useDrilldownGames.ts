@@ -120,6 +120,7 @@ export function useDrilldownGames({
         opponentUsername: game.opponent,
         opponentFideEstimate: profile?.fideEstimate?.rating,
         scoutedUsername: username,
+        scoutedDisplayName: profile?.username || username,
         scoutedPlatform: platform,
       };
       sessionStorage.setItem(`game:${game.id}`, JSON.stringify(storedGame));

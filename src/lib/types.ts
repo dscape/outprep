@@ -241,5 +241,6 @@ export interface GameAnalysis {
   coachingNarrative: string;
   opponentFideEstimate?: number;
   scoutedUsername?: string; // When reviewing a scouted player's game (playerColor = scouted player's color)
+  scoutedDisplayName?: string; // Formatted display name (e.g. "Carlsen, Magnus") for UI labels
   scoutedPlatform?: string;
 }

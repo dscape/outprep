@@ -22,11 +22,32 @@ export default function ScoutLoading() {
     );
   }
 
-  // Show spinner only when no data at all for online players
-  if (!basicData && !profile && fullLoading && !isPGNMode && platform !== "fide") {
+  // Phase 2: basic data arrived, full profile still loading
+  if (basicData && !profile && fullLoading && !isPGNMode) {
     return (
-      <div className="mt-8 flex justify-center">
-        <div className="h-12 w-12 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
+      <div className="mt-4 rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4">
+        <div className="flex items-center gap-3">
+          <div className="h-6 w-6 rounded-full border-2 border-green-500 border-t-transparent animate-spin flex-shrink-0" />
+          <div>
+            <p className="text-sm text-zinc-300 font-medium">
+              Building profile for {basicData.username}...
+            </p>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Analyzing game patterns and openings
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Phase 1: no data at all for online players
+  if (!basicData && !profile && fullLoading && !isPGNMode && platform !== "fide") {
+    const platformLabel = platform === "chesscom" ? "Chess.com" : "Lichess";
+    return (
+      <div className="mt-8 flex flex-col items-center gap-3">
+        <div className="h-10 w-10 rounded-full border-2 border-green-500 border-t-transparent animate-spin" />
+        <p className="text-sm text-zinc-400">Fetching games from {platformLabel}...</p>
       </div>
     );
   }
