@@ -1,38 +1,12 @@
-import { Metadata } from "next";
-import { redirect } from "next/navigation";
-import { getPlayerByFideId } from "@/lib/db";
+import { permanentRedirect } from "next/navigation";
 import { parsePlatformUsername } from "@/lib/platform-utils";
+import { getPlayerByFideId } from "@/lib/db";
 
-export async function generateMetadata({
-  params,
-}: {
-  params: Promise<{ username: string }>;
-}): Promise<Metadata> {
-  const { username: rawParam } = await params;
-  const { username } = parsePlatformUsername(rawParam);
-
-  return {
-    title: `${username} - Chess Scouting Report`,
-    description: `Scouting report for ${username}. Openings, weaknesses, playing style, and preparation tips.`,
-    alternates: {
-      canonical: `https://outprep.xyz/scout/${rawParam}`,
-    },
-    openGraph: {
-      title: `${username} - Scouting Report`,
-      description: `Study ${username}'s openings, weaknesses, and playing style.`,
-      url: `https://outprep.xyz/scout/${rawParam}`,
-      siteName: "outprep",
-    },
-    twitter: {
-      card: "summary_large_image",
-      title: `${username} - Scouting Report`,
-      description: `Study ${username}'s openings, weaknesses, and playing style.`,
-    },
-  };
-}
-
+/**
+ * All /scout/* routes permanently redirect to /player/*.
+ * The /scout route is deprecated — all players now live under /player.
+ */
 export default async function ScoutLayout({
-  children,
   params,
 }: {
   children: React.ReactNode;
@@ -41,13 +15,18 @@ export default async function ScoutLayout({
   const { username: rawParam } = await params;
   const { platform, username } = parsePlatformUsername(rawParam);
 
-  // Support fide:{numericId} shorthand — redirect to the full FIDE scout URL with slug
-  if (platform === "fide" && /^\d+$/.test(username)) {
-    const player = await getPlayerByFideId(username);
-    if (player) {
-      redirect(`/scout/fide:${player.slug}`);
+  if (platform === "fide") {
+    // FIDE numeric ID → resolve to slug first
+    if (/^\d+$/.test(username)) {
+      const player = await getPlayerByFideId(username);
+      if (player) {
+        permanentRedirect(`/player/${player.slug}`);
+      }
     }
+    // FIDE slug → redirect without prefix (canonical FIDE URL)
+    permanentRedirect(`/player/${username}`);
   }
 
-  return children;
+  // lichess, chesscom, pgn → redirect with platform prefix
+  permanentRedirect(`/player/${platform}:${username}`);
 }

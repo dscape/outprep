@@ -2,7 +2,7 @@
 
 ## Overview
 
-outprep uses SEO landing pages to attract chess players searching for preparation tools. Each FIDE-rated player with OTB games gets a landing page at `/player/{slug}`, and each recorded game gets a page at `/game/{slug}`.
+outprep uses SEO landing pages to attract chess players searching for preparation tools. All players — FIDE, Lichess, Chess.com, and PGN uploads — are served under a unified `/player/{slug}` route. Each recorded game gets a page at `/game/{slug}`.
 
 ## Data Pipeline
 
@@ -17,28 +17,47 @@ outprep uses SEO landing pages to attract chess players searching for preparatio
 
 ### Player Pages (`/player/[slug]`)
 
-- **Route:** `/player/[slug]` (e.g., `/player/carlsen-magnus-2020009`)
-- **Rendering:** ISR (Incremental Static Regeneration) with 7-day revalidation
-- **All players are generated on-demand** via ISR (`dynamicParams: true`, `generateStaticParams` returns `[]`). This avoids pre-rendering 80K+ pages at build time.
-- **Alias handling:** Legacy/alternative slugs 301-redirect to canonical slugs via `player_aliases` table
+All player types use the same route with different slug formats:
 
-**Page content:**
+| Platform | Slug Format | Example |
+|----------|-------------|---------|
+| FIDE | `{name}-{fideId}` | `/player/carlsen-magnus-1503014` |
+| Lichess | `lichess:{username}` | `/player/lichess:DrNykterstein` |
+| Chess.com | `chesscom:{username}` | `/player/chesscom:hikaru` |
+| PGN Upload | `pgn:{playerName}` | `/player/pgn:PlayerName` |
+
+- **Rendering:** Server-side rendered. FIDE players use ISR with 7-day revalidation from the `players` table. Online players use cached data from the `online_profiles` table when available.
+- **All players are generated on-demand** via ISR (`dynamicParams: true`, `generateStaticParams` returns `[]`).
+- **Alias handling:** Legacy/alternative FIDE slugs 301-redirect to canonical slugs via `player_aliases` table.
+- **Scout redirects:** All legacy `/scout/*` URLs permanently redirect to `/player/*`.
+
+**Page content (FIDE):**
 - Name, FIDE title badge, rating (Standard/Rapid/Blitz)
 - Win/draw/loss percentages
 - Recent tournament events
-- Opening repertoire (as white and black)
+- Opening repertoire (as white and black) — SSR from DB
+- Scout features (style, weaknesses, prep tips, error rates) — progressive client-side loading
 - Notable and recent games with links to game pages
 - "Practice Against [Name]" CTA button
 
-**Metadata:**
-- Dynamic `<title>`: `{Name} ({Title} {Rating}) - Chess Preparation | outprep`
-- Dynamic meta description with ratings, federation, game count
-- Canonical URL: `https://outprep.xyz/player/{slug}`
-- Open Graph tags (type: `profile`)
-- Twitter card: `summary_large_image`
-- Dynamic OG image generated via `opengraph-image.tsx` (player name, ratings, stats)
+**Page content (Lichess/Chess.com):**
+- Username, ratings by speed
+- Scout features (style, weaknesses, prep tips, error rates) — progressive client-side loading
+- Opening repertoire with drill-down
+- Stockfish upgrade scan for error profiling
 
-**JSON-LD structured data:**
+**Metadata:**
+- Dynamic `<title>`: varies by platform
+  - FIDE: `{Name} ({Title} {Rating}) - Chess Preparation`
+  - Lichess: `{Username} - Lichess Scouting Report`
+  - Chess.com: `{Username} - Chess.com Scouting Report`
+- Dynamic meta description with ratings, game count
+- Canonical URL: `https://outprep.xyz/player/{slug}`
+- Open Graph tags
+- Twitter card: `summary_large_image`
+- Dynamic OG image generated via `opengraph-image.tsx` (FIDE players only)
+
+**JSON-LD structured data (FIDE):**
 - `Person` schema (name, description, nationality, FIDE profile link via `sameAs`)
 - `WebApplication` schema (outprep app metadata)
 - `BreadcrumbList` (Home > {Player Name})
@@ -85,16 +104,10 @@ outprep uses SEO landing pages to attract chess players searching for preparatio
 - `FAQPage` schema
 
 **Content sections:**
-- Hero with search + PGN upload
+- Hero with search (FIDE, Lichess, Chess.com) + PGN upload
 - How It Works (Scout → Study → Practice)
 - Featured Players grid (top 12 by rating, links to player pages)
 - FAQ (4 questions with collapsible answers)
-
-### Scout Pages (`/scout/[username]`)
-
-- Indexed with canonical URL: `https://outprep.xyz/scout/{username}`
-- Dynamic title and OG metadata
-- Not in sitemap (user-initiated, infinite URL space)
 
 ### Non-Indexed Pages
 
@@ -138,7 +151,6 @@ All images use the Geist font (`src/assets/fonts/Geist-Bold.ttf` and `Geist-Regu
 - Player pages → Game pages (via recent/notable games lists)
 - Game pages → Player pages (via player names and practice CTAs)
 - Game pages have visible breadcrumb navigation (Home > Player > Game)
-- Scout pages link to player pages and game pages
 
 ## Keyword Strategy
 
@@ -156,7 +168,7 @@ All images use the Geist font (`src/assets/fonts/Geist-Bold.ttf` and `Geist-Regu
    - "practice against chess AI"
    - "chess opening preparation"
    - "chess scouting report"
-   - Target: Homepage and `/scout/{username}` pages
+   - Target: Homepage and `/player/{platform}:{username}` pages
 
 3. **Game archive:**
    - "{white} vs {black} chess game"
@@ -175,14 +187,20 @@ All images use the Geist font (`src/assets/fonts/Geist-Bold.ttf` and `Geist-Regu
 # Start dev server
 npm run dev
 
-# Check a player page (view source for meta tags)
-open http://localhost:3000/player/carlsen-magnus-2020009
+# Check a FIDE player page (view source for meta tags)
+open http://localhost:3000/player/carlsen-magnus-1503014
+
+# Check a Lichess player page
+open http://localhost:3000/player/lichess:DrNykterstein
 
 # Check OG image renders
-open http://localhost:3000/player/carlsen-magnus-2020009/opengraph-image
+open http://localhost:3000/player/carlsen-magnus-1503014/opengraph-image
 
 # Check a game page
 open http://localhost:3000/game/carlsen-magnus-vs-caruana-fabiano-2023-01-15-tata-steel
+
+# Check redirects
+open http://localhost:3000/scout/lichess:DrNykterstein  # should 301 to /player/lichess:DrNykterstein
 
 # Check sitemap
 open http://localhost:3000/sitemap.xml

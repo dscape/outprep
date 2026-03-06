@@ -26,13 +26,16 @@ export function parsePlatformUsername(rawParam: string): {
 }
 
 /**
- * Build a scout URL for a given platform and username.
+ * Build a player URL for a given platform and username.
  * All platforms use explicit prefixes for consistency.
  */
-export function buildScoutUrl(
+export function buildPlayerUrl(
   platform: Platform | string,
   username: string,
 ): string {
   const p = platform || "lichess";
-  return `/scout/${p}:${encodeURIComponent(username)}`;
+  return `/player/${p}:${encodeURIComponent(username)}`;
 }
+
+/** @deprecated Use buildPlayerUrl instead */
+export const buildScoutUrl = buildPlayerUrl;

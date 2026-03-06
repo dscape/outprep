@@ -173,7 +173,7 @@ export default function SearchInput() {
       const user = lichessSuggestions[index];
       if (user) {
         setLichessSuggestions([]);
-        router.push(`/scout/lichess:${user.id}`);
+        router.push(`/player/lichess:${user.id}`);
       }
     }
   }
@@ -202,7 +202,7 @@ export default function SearchInput() {
           setLoading(false);
           return;
         }
-        router.push(`/scout/chesscom:${trimmed}`);
+        router.push(`/player/chesscom:${trimmed}`);
       } else if (platform === "lichess") {
         const res = await fetch(`/api/lichess/${encodeURIComponent(trimmed)}?type=user`);
         if (res.status === 404) {
@@ -220,7 +220,7 @@ export default function SearchInput() {
           setLoading(false);
           return;
         }
-        router.push(`/scout/lichess:${trimmed}`);
+        router.push(`/player/lichess:${trimmed}`);
       } else {
         // FIDE: shouldn't normally submit without selecting from dropdown,
         // but handle gracefully by searching and navigating to first result

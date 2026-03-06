@@ -56,7 +56,7 @@ const jsonLd = {
         "@type": "SearchAction",
         target: {
           "@type": "EntryPoint",
-          urlTemplate: "https://outprep.xyz/scout/{username}",
+          urlTemplate: "https://outprep.xyz/player/{username}",
         },
         "query-input": "required name=username",
       },
