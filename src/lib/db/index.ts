@@ -555,6 +555,84 @@ export async function upsertOnlineProfile(
   }
 }
 
+// ─── FIDE profile cache ─────────────────────────────────────────────────────
+
+interface FideProfileRow {
+  profileJson: unknown;
+  gameCount: number;
+  month: string;
+}
+
+export async function getFideProfile(
+  slug: string,
+  month: string,
+): Promise<FideProfileRow | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      SELECT profile_json, game_count, month
+      FROM fide_profiles
+      WHERE slug = ${slug} AND month = ${month}
+    `;
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      profileJson: jsonb(row.profile_json, null),
+      gameCount: row.game_count as number,
+      month: row.month as string,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function getLatestFideProfile(
+  slug: string,
+): Promise<FideProfileRow | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      SELECT profile_json, game_count, month
+      FROM fide_profiles
+      WHERE slug = ${slug}
+      ORDER BY month DESC
+      LIMIT 1
+    `;
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      profileJson: jsonb(row.profile_json, null),
+      gameCount: row.game_count as number,
+      month: row.month as string,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function upsertFideProfile(
+  slug: string,
+  month: string,
+  profile: unknown,
+  gameCount: number,
+): Promise<void> {
+  if (!HAS_POSTGRES) return;
+  try {
+    const profileStr = JSON.stringify(profile);
+    await sql`
+      INSERT INTO fide_profiles (slug, month, profile_json, game_count, updated_at)
+      VALUES (${slug}, ${month}, ${profileStr}::jsonb, ${gameCount}, NOW())
+      ON CONFLICT (slug, month)
+      DO UPDATE SET
+        profile_json = ${profileStr}::jsonb,
+        game_count = ${gameCount},
+        updated_at = NOW()
+    `;
+  } catch {
+    // Non-fatal: cache write failure shouldn't break the app
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 /**

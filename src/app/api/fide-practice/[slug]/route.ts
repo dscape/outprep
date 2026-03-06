@@ -1,32 +1,82 @@
-import { NextRequest } from "next/server";
+import { NextRequest, after } from "next/server";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
-import { getPlayerByFideId, getPlayerGamePgns, formatPlayerName } from "@/lib/db";
+import {
+  getPlayerByFideId,
+  getPlayerGamePgns,
+  formatPlayerName,
+  getFideProfile,
+  getLatestFideProfile,
+  upsertFideProfile,
+} from "@/lib/db";
 import type { PlayerRatings } from "@/lib/types";
+
+const CACHE_HEADERS = {
+  "Cache-Control": "public, max-age=86400, s-maxage=604800",
+};
+
+/** Current month in YYYY-MM format (UTC). */
+function currentMonth(): string {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = String(now.getUTCMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
 
 /**
  * Build an OTBProfile server-side for FIDE players.
- * Returns a compact profile (games have pgn stripped) to avoid
- * exceeding the client's sessionStorage quota.
+ * Uses a monthly DB cache to avoid expensive PGN parsing on every request.
+ *
+ * Flow:
+ *  1. Current month cache hit → return immediately
+ *  2. Any month cache hit → return stale + recompute in background
+ *  3. No cache → compute synchronously, cache, return
  */
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
+  const month = currentMonth();
 
-  // Extract FIDE ID from slug (trailing digits after last hyphen)
+  // ─── 1. Check current month's cached profile ─────────────────────
+  const cached = await getFideProfile(slug, month);
+  if (cached?.profileJson) {
+    return Response.json(cached.profileJson, { headers: CACHE_HEADERS });
+  }
+
+  // ─── 2. Fall back to most recent cached profile ──────────────────
+  const stale = await getLatestFideProfile(slug);
+  if (stale?.profileJson) {
+    // Return stale data immediately, recompute current month in background
+    after(async () => {
+      await computeAndCache(slug, month, req);
+    });
+    return Response.json(stale.profileJson, { headers: CACHE_HEADERS });
+  }
+
+  // ─── 3. No cache — compute synchronously ─────────────────────────
+  const result = await computeAndCache(slug, month, req);
+  if (result.error) {
+    return Response.json({ error: result.error }, { status: result.status });
+  }
+  return Response.json(result.profile, { headers: CACHE_HEADERS });
+}
+
+async function computeAndCache(
+  slug: string,
+  month: string,
+  req: NextRequest,
+): Promise<{ profile?: unknown; error?: string; status?: number }> {
   const fideIdMatch = slug.match(/-(\d{4,})$/);
   const fideId = fideIdMatch ? fideIdMatch[1] : null;
 
-  // Look up canonical player name and ratings from DB using FIDE ID
   let displayName: string | null = null;
   let fideRatings: PlayerRatings | undefined;
   if (fideId) {
     const player = await getPlayerByFideId(fideId);
     if (player) {
       displayName = formatPlayerName(player.name);
-      // Populate ratings from official FIDE data
       const ratings: PlayerRatings = {};
       if (player.standardRating) ratings.classical = player.standardRating;
       if (player.rapidRating) ratings.rapid = player.rapidRating;
@@ -35,36 +85,28 @@ export async function GET(
     }
   }
 
-  // Fallback: use ?name= param or derive from slug
   const nameParam = req.nextUrl.searchParams.get("name");
-  const playerName = displayName || nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
+  const playerName =
+    displayName || nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
   const rawPgns = await getPlayerGamePgns(slug);
 
   if (!rawPgns || rawPgns.length === 0) {
-    return Response.json({ error: "No games found for this player" }, { status: 404 });
+    return { error: "No games found for this player", status: 404 };
   }
 
   const combinedPgn = rawPgns.join("\n\n");
   const otbGames = parseAllPGNGames(combinedPgn);
 
   if (otbGames.length === 0) {
-    return Response.json({ error: "Could not parse any games" }, { status: 422 });
+    return { error: "Could not parse any games", status: 422 };
   }
 
   const profile = analyzeOTBGames(otbGames, playerName);
 
-  // Override username with clean display name from DB (avoids PGN-format names)
-  if (displayName) {
-    profile.username = displayName;
-  }
-
-  // Attach FIDE ratings if available
-  if (fideRatings) {
-    profile.ratings = fideRatings;
-  }
+  if (displayName) profile.username = displayName;
+  if (fideRatings) profile.ratings = fideRatings;
 
   // Strip raw PGN text from each game to keep the payload small.
-  // The moves, headers, and metadata are still available for display.
   const compactGames = (profile.games || []).map((g) => ({
     white: g.white,
     black: g.black,
@@ -75,15 +117,13 @@ export async function GET(
     opening: g.opening,
     timeControl: g.timeControl,
     moves: g.moves,
-    pgn: "", // Stripped — fetch individual PGN on-demand if needed
+    pgn: "",
   }));
 
-  return Response.json(
-    { ...profile, games: compactGames },
-    {
-      headers: {
-        "Cache-Control": "public, max-age=86400, s-maxage=604800",
-      },
-    }
-  );
+  const compactProfile = { ...profile, games: compactGames };
+
+  // Persist to DB cache
+  await upsertFideProfile(slug, month, compactProfile, otbGames.length);
+
+  return { profile: compactProfile };
 }

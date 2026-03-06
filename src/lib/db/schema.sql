@@ -139,3 +139,19 @@ CREATE TABLE online_profiles (
 );
 
 CREATE UNIQUE INDEX idx_online_profiles_lookup ON online_profiles (platform, username);
+
+-- ─── FIDE playing style profiles ──────────────────────────────────────────
+-- Caches computed PlayerProfile JSON for FIDE players, keyed by month.
+-- Eliminates expensive PGN parsing + analysis on every API call.
+
+CREATE TABLE fide_profiles (
+  id              SERIAL PRIMARY KEY,
+  slug            TEXT NOT NULL,            -- player slug (e.g. "magnus-carlsen-1503014")
+  month           TEXT NOT NULL,            -- 'YYYY-MM' (UTC)
+  profile_json    JSONB NOT NULL,           -- full PlayerProfile object (games stripped)
+  game_count      INTEGER NOT NULL,
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_fide_profiles_lookup ON fide_profiles (slug, month);
+CREATE INDEX idx_fide_profiles_slug ON fide_profiles (slug, updated_at DESC);

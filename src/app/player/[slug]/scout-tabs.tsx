@@ -4,13 +4,12 @@ import { useState, useCallback } from "react";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
 import PrepTipsTab from "@/components/PrepTipsTab";
-import OTBAnalysisTab from "@/components/OTBAnalysisTab";
 import type { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import { fromFidePGN, normalizedToGameForDrilldown } from "@/lib/normalized-game";
 import { useScout } from "./scout-context";
 
-type Tab = "openings" | "weaknesses" | "prep" | "otb";
+type Tab = "openings" | "weaknesses" | "prep";
 
 interface ScoutTabsProps {
   /** SSR opening data for FIDE players (instant from DB) */
@@ -39,9 +38,7 @@ export default function ScoutTabs({
     displayName,
     isPGNMode,
     isFIDEMode,
-    otbProfile,
     fullLoading,
-    isUpgrading,
     enhancedWeaknesses,
     enhancedPrepTips,
     drilldownGames,
@@ -88,7 +85,6 @@ export default function ScoutTabs({
     ["openings", "Openings"],
     ["weaknesses", "Weaknesses"],
     ["prep", "Prep Tips"],
-    ...(!isPGNMode && otbProfile ? [["otb", "OTB Games"] as [Tab, string]] : []),
   ];
 
   return (
@@ -153,9 +149,6 @@ export default function ScoutTabs({
                 ) : (
                   <PrepTipsTab tips={enhancedPrepTips ?? filteredPrepTips} />
                 )
-              )}
-              {activeTab === "otb" && otbProfile && (
-                <OTBAnalysisTab profile={otbProfile} />
               )}
             </>
           ) : (
