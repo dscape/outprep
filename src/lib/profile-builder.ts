@@ -78,7 +78,7 @@ export function buildProfile(
   };
 }
 
-function extractRatings(user: LichessUser): PlayerRatings {
+export function extractRatings(user: LichessUser): PlayerRatings {
   const ratings: PlayerRatings = {};
   if (user.perfs?.bullet && !user.perfs.bullet.prov) ratings.bullet = user.perfs.bullet.rating;
   if (user.perfs?.blitz && !user.perfs.blitz.prov) ratings.blitz = user.perfs.blitz.rating;

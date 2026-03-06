@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessUser, fetchLichessGames } from "@/lib/lichess";
 import { fetchChesscomUser, fetchChesscomStats, fetchChesscomGames } from "@/lib/chesscom";
-import { buildProfile } from "@/lib/profile-builder";
+import { buildProfile, analyzeOpenings, extractRatings } from "@/lib/profile-builder";
+import { estimateFIDE } from "@/lib/fide-estimator";
 import { fromLichessGame, fromChesscomGame } from "@/lib/normalized-game";
 import type { LichessUser, LichessGame, ChesscomGame } from "@/lib/types";
 import { getOnlineProfile, upsertOnlineProfile } from "@/lib/db";
@@ -90,18 +91,46 @@ async function handleLichess(
     : games;
 
   const normalized = filtered.map((g) => fromLichessGame(g, user!.username));
-  const profile = buildProfile(user!, normalized);
-  setCache(profileCacheKey, profile);
+  const standardGames = normalized.filter((g) => (g.variant ?? "standard") === "standard");
 
-  // Persist all-time profile to DB for fast repeat visits
-  if (!since) {
-    const newestTs = games.length > 0
-      ? Math.max(...games.map((g) => g.createdAt ?? 0))
-      : null;
-    upsertOnlineProfile("lichess", username, profile, games.length, newestTs).catch(() => {});
-  }
+  // Stream NDJSON: openings first (fast), full profile second (slow)
+  const capturedUser = user!;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const enc = new TextEncoder();
 
-  return NextResponse.json(profile);
+      // Line 1: fast computations — openings, ratings, fideEstimate
+      const openings = analyzeOpenings(standardGames);
+      const ratings = extractRatings(capturedUser);
+      const fideEst = estimateFIDE(capturedUser);
+      controller.enqueue(enc.encode(JSON.stringify({
+        type: "openings",
+        openings,
+        ratings,
+        username: capturedUser.username,
+        gameCount: standardGames.length,
+        fideEstimate: fideEst,
+      }) + "\n"));
+
+      // Line 2: full profile (includes expensive analyzeStyle)
+      const profile = buildProfile(capturedUser, normalized);
+      setCache(profileCacheKey, profile);
+      controller.enqueue(enc.encode(JSON.stringify({ type: "profile", profile }) + "\n"));
+      controller.close();
+
+      // Persist all-time profile to DB for fast repeat visits
+      if (!since) {
+        const newestTs = games!.length > 0
+          ? Math.max(...games!.map((g) => g.createdAt ?? 0))
+          : null;
+        upsertOnlineProfile("lichess", username, profile, games!.length, newestTs).catch(() => {});
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { "Content-Type": "application/x-ndjson" },
+  });
 }
 
 async function handleChesscom(
@@ -155,16 +184,45 @@ async function handleChesscom(
     : games;
 
   const normalized = filtered.map((g) => fromChesscomGame(g, userLike!.username));
-  const profile = buildProfile(userLike!, normalized);
-  setCache(profileCacheKey, profile);
+  const standardGames = normalized.filter((g) => (g.variant ?? "standard") === "standard");
 
-  // Persist all-time profile to DB for fast repeat visits
-  if (!since) {
-    const newestTs = games.length > 0
-      ? Math.max(...games.map((g) => g.end_time * 1000))
-      : null;
-    upsertOnlineProfile("chesscom", username, profile, games.length, newestTs).catch(() => {});
-  }
+  // Stream NDJSON: openings first (fast), full profile second (slow)
+  const capturedUser = userLike!;
+  const capturedGames = games;
+  const stream = new ReadableStream({
+    async start(controller) {
+      const enc = new TextEncoder();
 
-  return NextResponse.json(profile);
+      // Line 1: fast computations
+      const openings = analyzeOpenings(standardGames);
+      const ratings = extractRatings(capturedUser);
+      const fideEst = estimateFIDE(capturedUser);
+      controller.enqueue(enc.encode(JSON.stringify({
+        type: "openings",
+        openings,
+        ratings,
+        username: capturedUser.username,
+        gameCount: standardGames.length,
+        fideEstimate: fideEst,
+      }) + "\n"));
+
+      // Line 2: full profile (includes expensive analyzeStyle)
+      const profile = buildProfile(capturedUser, normalized);
+      setCache(profileCacheKey, profile);
+      controller.enqueue(enc.encode(JSON.stringify({ type: "profile", profile }) + "\n"));
+      controller.close();
+
+      // Persist all-time profile to DB
+      if (!since) {
+        const newestTs = capturedGames!.length > 0
+          ? Math.max(...capturedGames!.map((g) => g.end_time * 1000))
+          : null;
+        upsertOnlineProfile("chesscom", username, profile, capturedGames!.length, newestTs).catch(() => {});
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: { "Content-Type": "application/x-ndjson" },
+  });
 }

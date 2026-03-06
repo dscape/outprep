@@ -5,6 +5,9 @@ import type {
   PlayerProfile,
   OTBProfile,
   PrepTip,
+  OpeningStats,
+  PlayerRatings,
+  FIDEEstimate,
 } from "@/lib/types";
 import type { Platform } from "@/lib/platform-utils";
 import {
@@ -31,6 +34,13 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
     username: string;
     ratings: Record<string, number | undefined>;
     totalGames: number;
+  } | null>(null);
+  const [partialData, setPartialData] = useState<{
+    openings: { white: OpeningStats[]; black: OpeningStats[] };
+    ratings: PlayerRatings;
+    username: string;
+    gameCount: number;
+    fideEstimate?: FIDEEstimate;
   } | null>(null);
   const [fullLoading, setFullLoading] = useState(true);
   const [timeRangeLoading, setTimeRangeLoading] = useState(false);
@@ -167,7 +177,7 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
       }
     }
 
-    // Phase 2: Full profile
+    // Phase 2: Full profile (supports NDJSON streaming or JSON cache hit)
     async function loadFullProfile(isTimeRangeChange: boolean) {
       if (isTimeRangeChange) {
         setTimeRangeLoading(true);
@@ -191,14 +201,51 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
           return;
         }
 
-        const data = await res.json();
-        setProfile(data);
-        profileRef.current = data;
-        setSelectedSpeeds(
-          Object.keys(data.bySpeed || {}).sort(
-            (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
-          )
-        );
+        const contentType = res.headers.get("content-type") || "";
+
+        if (contentType.includes("application/json")) {
+          // Cache hit — single JSON response
+          const data = await res.json();
+          setProfile(data);
+          profileRef.current = data;
+          setSelectedSpeeds(
+            Object.keys(data.bySpeed || {}).sort(
+              (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
+            )
+          );
+        } else {
+          // Streaming NDJSON — read progressively
+          const reader = res.body!.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split("\n");
+            buffer = lines.pop()!;
+            for (const line of lines) {
+              if (!line.trim()) continue;
+              const chunk = JSON.parse(line);
+              if (chunk.type === "openings") {
+                setPartialData(chunk);
+                setBasicData({
+                  username: chunk.username,
+                  ratings: chunk.ratings,
+                  totalGames: chunk.gameCount,
+                });
+              } else if (chunk.type === "profile") {
+                setProfile(chunk.profile);
+                profileRef.current = chunk.profile;
+                setSelectedSpeeds(
+                  Object.keys(chunk.profile.bySpeed || {}).sort(
+                    (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
+                  )
+                );
+              }
+            }
+          }
+        }
       } catch {
         setError("Network error. Please try again.");
       } finally {
@@ -329,6 +376,7 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
   return {
     profile,
     basicData,
+    partialData,
     filteredData,
     filteredPrepTips,
     selectedSpeeds,
