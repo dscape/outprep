@@ -180,7 +180,13 @@ export default function ErrorProfileCard({
         >
           {upgradeComplete && totalGames
             ? `${totalGames} games analyzed`
-            : `${errorProfile.gamesAnalyzed} games analyzed`}
+            : isUpgrading && upgradeProgress
+              ? `${upgradeProgress.gamesComplete}/${upgradeProgress.totalGames} games`
+              : errorProfile.gamesAnalyzed > 0
+                ? `${errorProfile.gamesAnalyzed} games analyzed`
+                : totalGames
+                  ? `${totalGames} games`
+                  : null}
         </span>
       </div>
 

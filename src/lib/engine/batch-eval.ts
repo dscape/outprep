@@ -94,6 +94,8 @@ function countTotalEvals(
 
 /** Default batch size for onBatchComplete callback */
 const BATCH_COMPLETE_SIZE = 50;
+/** Smaller first batch for faster initial error profile display */
+const FIRST_BATCH_SIZE = 5;
 
 /**
  * Batch evaluate positions from multiple games using Stockfish.
@@ -226,17 +228,26 @@ export async function batchEvaluateGames(
       totalEvals,
     });
 
-    // Fire batch complete callback every BATCH_COMPLETE_SIZE games
-    if (onBatchComplete && gamesComplete % BATCH_COMPLETE_SIZE === 0) {
-      const batchStart = gamesComplete - BATCH_COMPLETE_SIZE;
+    // Fire batch complete callback: first batch is small for quick initial display
+    const isFirstBatch = gamesComplete === FIRST_BATCH_SIZE;
+    const isRegularBatch = gamesComplete > FIRST_BATCH_SIZE &&
+      (gamesComplete - FIRST_BATCH_SIZE) % BATCH_COMPLETE_SIZE === 0;
+    if (onBatchComplete && (isFirstBatch || isRegularBatch)) {
+      const batchStart = isFirstBatch
+        ? 0
+        : gamesComplete - BATCH_COMPLETE_SIZE;
       onBatchComplete(results.slice(batchStart), results);
     }
   }
 
   // Fire final batch for remaining games
-  if (onBatchComplete && gamesComplete % BATCH_COMPLETE_SIZE !== 0) {
-    const batchStart = Math.floor(gamesComplete / BATCH_COMPLETE_SIZE) * BATCH_COMPLETE_SIZE;
-    onBatchComplete(results.slice(batchStart), results);
+  if (onBatchComplete && gamesComplete > 0) {
+    const lastFired = gamesComplete <= FIRST_BATCH_SIZE
+      ? 0
+      : FIRST_BATCH_SIZE + Math.floor((gamesComplete - FIRST_BATCH_SIZE) / BATCH_COMPLETE_SIZE) * BATCH_COMPLETE_SIZE;
+    if (lastFired < gamesComplete) {
+      onBatchComplete(results.slice(lastFired), results);
+    }
   }
 
   return results;

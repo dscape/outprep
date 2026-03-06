@@ -58,6 +58,8 @@ export default function RootLayout({
         <link rel="dns-prefetch" href="https://lichess.org" />
         <link rel="dns-prefetch" href="https://api.chess.com" />
         <link rel="preconnect" href="https://lichess.org" crossOrigin="anonymous" />
+        <link rel="prefetch" href="/stockfish.js" as="script" />
+        <link rel="prefetch" href="/stockfish.wasm" as="fetch" crossOrigin="anonymous" />
       </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-zinc-950 text-zinc-100`}
