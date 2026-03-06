@@ -34,6 +34,8 @@ export function buildPlayerUrl(
   username: string,
 ): string {
   const p = platform || "lichess";
+  // FIDE slugs use bare paths (no prefix) — e.g. /player/magnus-carlsen-1503014
+  if (p === "fide") return `/player/${encodeURIComponent(username)}`;
   return `/player/${p}:${encodeURIComponent(username)}`;
 }
 

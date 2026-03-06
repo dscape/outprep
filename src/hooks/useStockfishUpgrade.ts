@@ -30,6 +30,9 @@ interface UseStockfishUpgradeOptions {
   timeRange: string;
   isPGNMode: boolean;
   isChesscomMode: boolean;
+  /** OTB/FIDE games with moves — used for local Stockfish analysis when bot-data API isn't available */
+  localGames?: Array<{ white: string; black: string; moves: string; date?: string; result: string }>;
+  localPlayerName?: string;
 }
 
 export function useStockfishUpgrade({
@@ -40,6 +43,8 @@ export function useStockfishUpgrade({
   timeRange,
   isPGNMode,
   isChesscomMode,
+  localGames,
+  localPlayerName,
 }: UseStockfishUpgradeOptions) {
   const [isUpgrading, setIsUpgrading] = useState(false);
   const [upgradeProgress, setUpgradeProgress] = useState<{
@@ -131,29 +136,49 @@ export function useStockfishUpgrade({
       computedEvalsRef.current = [];
 
       try {
-        const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
-        const sinceVal = sinceMs ? Date.now() - sinceMs : undefined;
-        let query =
-          selectedSpeeds.length > 0
-            ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
-            : "";
-        if (sinceVal) query += `${query ? "&" : "?"}since=${sinceVal}`;
-        if (isChesscomMode) query += `${query ? "&" : "?"}platform=chesscom`;
-        const res = await fetch(
-          `/api/bot-data/${encodeURIComponent(username)}${query}`
-        );
-        if (!res.ok || abort.signal.aborted) {
-          setIsUpgrading(false);
-          return;
-        }
-
-        const botData = await res.json();
-        const allGameMoves: Array<{
+        let allGameMoves: Array<{
           id: string;
           moves: string;
           playerColor: "white" | "black";
           hasEvals: boolean;
-        }> = botData.gameMoves || [];
+        }>;
+
+        if (isPGNMode && localGames && localGames.length > 0 && localPlayerName) {
+          // FIDE/PGN: build gameMoves from local profile games
+          allGameMoves = localGames
+            .filter((g) => g.moves && g.moves.trim().length > 0)
+            .map((g, i) => {
+              const nameLower = localPlayerName.toLowerCase();
+              const isWhite = g.white.toLowerCase().includes(nameLower) ||
+                nameLower.includes(g.white.toLowerCase());
+              return {
+                id: `local-${i}-${g.date || ""}`,
+                moves: g.moves,
+                playerColor: (isWhite ? "white" : "black") as "white" | "black",
+                hasEvals: false,
+              };
+            });
+        } else {
+          // Online: fetch from bot-data API
+          const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+          const sinceVal = sinceMs ? Date.now() - sinceMs : undefined;
+          let query =
+            selectedSpeeds.length > 0
+              ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
+              : "";
+          if (sinceVal) query += `${query ? "&" : "?"}since=${sinceVal}`;
+          if (isChesscomMode) query += `${query ? "&" : "?"}platform=chesscom`;
+          const res = await fetch(
+            `/api/bot-data/${encodeURIComponent(username)}${query}`
+          );
+          if (!res.ok || abort.signal.aborted) {
+            setIsUpgrading(false);
+            return;
+          }
+
+          const botData = await res.json();
+          allGameMoves = botData.gameMoves || [];
+        }
 
         setTotalGameCount(allGameMoves.length);
 
@@ -296,7 +321,7 @@ export function useStockfishUpgrade({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [username, platform, selectedSpeeds, timeRange, updateWeaknessesAndTips]
+    [username, platform, selectedSpeeds, timeRange, isPGNMode, localGames, localPlayerName, isChesscomMode, updateWeaknessesAndTips]
   );
 
   const handleCancelUpgrade = useCallback(() => {
@@ -312,14 +337,15 @@ export function useStockfishUpgrade({
       !enhancedErrorProfile &&
       !isUpgrading &&
       !upgradeComplete &&
-      !isPGNMode &&
       !autoScanTriggeredRef.current &&
       filteredData.games > 0
     ) {
+      // For FIDE/PGN, wait until localGames are available
+      if (isPGNMode && (!localGames || localGames.length === 0)) return;
       autoScanTriggeredRef.current = true;
       handleUpgrade("sampling");
     }
-  }, [filteredData, enhancedErrorProfile, isUpgrading, upgradeComplete, isPGNMode, handleUpgrade]);
+  }, [filteredData, enhancedErrorProfile, isUpgrading, upgradeComplete, isPGNMode, localGames, handleUpgrade]);
 
   const displayedErrorProfile =
     enhancedErrorProfile || filteredData?.errorProfile;
