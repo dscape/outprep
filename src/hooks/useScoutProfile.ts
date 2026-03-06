@@ -227,7 +227,9 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
             for (const line of lines) {
               if (!line.trim()) continue;
               const chunk = JSON.parse(line);
-              if (chunk.type === "openings") {
+              if (chunk.type === "error") {
+                setError(chunk.error || "Failed to load profile");
+              } else if (chunk.type === "openings") {
                 setPartialData(chunk);
                 setBasicData({
                   username: chunk.username,
@@ -284,10 +286,11 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
     const since = sinceMs ? Date.now() - sinceMs : undefined;
     let query = `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`;
     if (since) query += `&since=${since}`;
+    if (isChesscomMode) query += `&platform=chesscom`;
     fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`).catch(
       () => {}
     );
-  }, [profile, selectedSpeeds, username, timeRange, isPGNMode]);
+  }, [profile, selectedSpeeds, username, timeRange, isPGNMode, isChesscomMode]);
 
   const toggleSpeed = useCallback((speed: string) => {
     setSelectedSpeeds((prev) => {
