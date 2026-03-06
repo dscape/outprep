@@ -279,18 +279,6 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
     }
   }, [profile, username, isPGNMode]);
 
-  // Pre-warm bot-data cache
-  useEffect(() => {
-    if (!profile || selectedSpeeds.length === 0 || isPGNMode) return;
-    const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
-    const since = sinceMs ? Date.now() - sinceMs : undefined;
-    let query = `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`;
-    if (since) query += `&since=${since}`;
-    if (isChesscomMode) query += `&platform=chesscom`;
-    fetch(`/api/bot-data/${encodeURIComponent(username)}${query}`).catch(
-      () => {}
-    );
-  }, [profile, selectedSpeeds, username, timeRange, isPGNMode, isChesscomMode]);
 
   const toggleSpeed = useCallback((speed: string) => {
     setSelectedSpeeds((prev) => {
