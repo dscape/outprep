@@ -112,6 +112,9 @@ async function handleLichess(
         fideEstimate: fideEst,
       }) + "\n"));
 
+      // Yield so the runtime flushes line 1 before the expensive computation
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
       // Line 2: full profile (includes expensive analyzeStyle)
       const profile = buildProfile(capturedUser, normalized);
       setCache(profileCacheKey, profile);
@@ -205,6 +208,9 @@ async function handleChesscom(
         gameCount: standardGames.length,
         fideEstimate: fideEst,
       }) + "\n"));
+
+      // Yield so the runtime flushes line 1 before the expensive computation
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       // Line 2: full profile (includes expensive analyzeStyle)
       const profile = buildProfile(capturedUser, normalized);
