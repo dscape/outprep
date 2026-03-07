@@ -112,8 +112,8 @@ export default function OTBAnalysisTab({ profile }: OTBAnalysisTabProps) {
 
   const openings =
     openingColor === "white"
-      ? profile.openings.white
-      : profile.openings.black;
+      ? (profile.openings?.white ?? [])
+      : (profile.openings?.black ?? []);
 
   return (
     <div className="space-y-8">

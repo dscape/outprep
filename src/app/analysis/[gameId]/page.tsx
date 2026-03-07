@@ -20,6 +20,7 @@ interface StoredGame {
   result: string;
   playerColor: "white" | "black";
   opponentUsername: string;
+  opponentDisplayName?: string;
   opponentFideEstimate?: number;
   precomputedMoves?: MoveEval[];
   precomputedSummary?: AnalysisSummary;
@@ -107,7 +108,7 @@ export default function AnalysisPage() {
 
         // Step 4: Opponent context overlay
         setStage("Cross-referencing opponent patterns...");
-        const scoutedLabel = gd.scoutedDisplayName || gd.scoutedUsername;
+        const scoutedLabel = gd.scoutedDisplayName || undefined;
         let keyMoments = profile
           ? tagMoments(moves, contexts, profile, gd.playerColor, scoutedLabel)
           : [];
@@ -150,6 +151,7 @@ export default function AnalysisPage() {
           totalMoves,
           playerColor: gd.playerColor,
           opponentUsername: gd.opponentUsername,
+          opponentDisplayName: gd.opponentDisplayName,
           summary,
           moves,
           keyMoments,
@@ -189,7 +191,7 @@ export default function AnalysisPage() {
 
   // Progressive loading: show board and context while analysis runs
   if (!analysis && gameData) {
-    const playerLabel = gameData.scoutedDisplayName || gameData.scoutedUsername || "You";
+    const playerLabel = gameData.scoutedDisplayName || "You";
     const resultLabel = gameData.result === "1-0"
       ? (gameData.playerColor === "white" ? `${playerLabel} won` : `${playerLabel} lost`)
       : gameData.result === "0-1"
@@ -206,7 +208,7 @@ export default function AnalysisPage() {
               }
               className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
             >
-              &larr; Back to {gameData.scoutedDisplayName || gameData.scoutedUsername || gameData.opponentUsername}
+              &larr; Back to {gameData.scoutedDisplayName || gameData.opponentDisplayName || gameData.scoutedUsername || gameData.opponentUsername}
             </button>
           </div>
 
@@ -214,7 +216,7 @@ export default function AnalysisPage() {
           <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-4 mb-6">
             <div className="flex items-center gap-3 text-sm">
               <span className="text-zinc-300 font-medium">
-                vs {gameData.opponentUsername}
+                vs {gameData.opponentDisplayName || gameData.opponentUsername}
               </span>
               <span className="text-zinc-500">{gameData.result}</span>
               <span className={`font-medium ${
@@ -277,16 +279,19 @@ export default function AnalysisPage() {
             }
             className="text-sm text-zinc-500 hover:text-zinc-300 transition-colors"
           >
-            &larr; Back to {analysis.scoutedDisplayName || analysis.scoutedUsername || analysis.opponentUsername}
+            &larr; Back to {analysis.scoutedDisplayName || analysis.opponentDisplayName || analysis.scoutedUsername || analysis.opponentUsername}
           </button>
           <button
             onClick={() => {
               const prefix = analysis.scoutedPlatform && analysis.scoutedPlatform !== "lichess" ? `${analysis.scoutedPlatform}:` : "";
               router.push(`/play/${prefix}${encodeURIComponent(analysis.scoutedUsername || analysis.opponentUsername)}`);
             }}
-            className="rounded-md bg-green-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-green-500 transition-colors"
+            className="rounded-lg px-5 py-2 text-sm font-semibold text-white transition-all duration-300 hover:brightness-110 hover:shadow-lg hover:shadow-purple-500/25 active:scale-[0.97]"
+            style={{
+              backgroundImage: "linear-gradient(to right, #6366f1, #a855f7, #d946ef)",
+            }}
           >
-            Practice against {analysis.scoutedDisplayName || analysis.scoutedUsername || analysis.opponentUsername}
+            Try again
           </button>
         </div>
 

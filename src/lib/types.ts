@@ -235,6 +235,7 @@ export interface GameAnalysis {
   totalMoves: number;
   playerColor: "white" | "black";
   opponentUsername: string;
+  opponentDisplayName?: string; // Formatted opponent name (e.g. "Carlsen, Magnus") for display
   summary: AnalysisSummary;
   moves: MoveEval[];
   keyMoments: KeyMoment[];

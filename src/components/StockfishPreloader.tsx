@@ -3,14 +3,20 @@
 import { useEffect } from "react";
 
 /**
- * Eagerly fetches stockfish.js and stockfish.wasm into the browser cache
- * as soon as the app loads. Uses fetch() so the downloads actually happen
- * (unlike <link rel="prefetch"> which browsers can ignore). Runs once and
- * persists across client-side navigations since the root layout never unmounts.
+ * Registers the Stockfish Service Worker for persistent WASM caching,
+ * and eagerly fetches stockfish assets into the browser cache as a fallback.
+ * Runs once and persists across client-side navigations since the root
+ * layout never unmounts.
  */
 export function StockfishPreloader() {
   useEffect(() => {
-    // Small delay so we don't compete with critical page resources
+    // Register Service Worker — it pre-caches stockfish assets on install
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+
+    // Fallback: eagerly fetch into browser HTTP cache (covers browsers
+    // where SW registration fails or hasn't activated yet)
     const id = setTimeout(() => {
       fetch("/stockfish.js").catch(() => {});
       fetch("/stockfish.wasm").catch(() => {});

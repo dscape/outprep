@@ -157,7 +157,10 @@ export default function PlayPage() {
         result,
         playerColor,
         opponentUsername: username,
+        opponentDisplayName: profile?.username || username,
         opponentFideEstimate: profile?.fideEstimate?.rating,
+        scoutedUsername: username,
+        scoutedPlatform: platform,
         ...(precomputedAnalysis ? {
           precomputedMoves: precomputedAnalysis.moves,
           precomputedSummary: precomputedAnalysis.summary,
@@ -166,7 +169,7 @@ export default function PlayPage() {
     );
 
     router.push(`/analysis/${gameId}`);
-  }, [playerColor, username, profile, router]);
+  }, [playerColor, username, profile, platform, router]);
 
   // Use enhanced profile if available, otherwise fall back to bot-data profile
   const activeErrorProfile = enhancedErrorProfile || botData?.errorProfile || null;

@@ -138,15 +138,15 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
   selectedPlyRef.current = selectedPly;
 
   // Player label: use scouted player's name when reviewing their game, otherwise "You"
-  const playerLabel = analysis.scoutedDisplayName || analysis.scoutedUsername || "You";
+  const playerLabel = analysis.scoutedDisplayName || "You";
 
   // Extract player names and Elo from PGN headers
   const pgnInfo = useMemo(() => {
     const h = parsePgnHeaders(analysis.pgn);
 
     const validHeader = (v: string | undefined) => v && v !== "?" ? v : undefined;
-    const whiteName = validHeader(h["White"]) || (analysis.playerColor === "white" ? playerLabel : analysis.opponentUsername);
-    const blackName = validHeader(h["Black"]) || (analysis.playerColor === "black" ? playerLabel : analysis.opponentUsername);
+    const whiteName = validHeader(h["White"]) || (analysis.playerColor === "white" ? playerLabel : (analysis.opponentDisplayName || analysis.opponentUsername));
+    const blackName = validHeader(h["Black"]) || (analysis.playerColor === "black" ? playerLabel : (analysis.opponentDisplayName || analysis.opponentUsername));
 
     // Opponent Elo: prefer PGN header, fallback to opponentFideEstimate
     const opponentEloField = analysis.playerColor === "white" ? "BlackElo" : "WhiteElo";

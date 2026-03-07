@@ -22,8 +22,8 @@ export function generateNarrative(input: NarrativeInput): string {
 
   // Opening sentence
   const opponentOpenings = playerColor === "white"
-    ? profile.openings.black
-    : profile.openings.white;
+    ? (profile.openings?.black ?? [])
+    : (profile.openings?.white ?? []);
   const matchingOpening = opponentOpenings.find(
     (o) => opening.toLowerCase().includes(o.name.toLowerCase().split(":")[0].trim())
   );
@@ -66,7 +66,7 @@ export function generateNarrative(input: NarrativeInput): string {
   }
 
   if (predicted.length > 0) {
-    const weakMatch = profile.weaknesses[0];
+    const weakMatch = profile.weaknesses?.[0];
     if (weakMatch) {
       sentences.push(
         `As expected, they showed vulnerability in their ${weakMatch.area.toLowerCase()} — this is a documented tendency (${weakMatch.stat}).`

@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
+import { execSync } from "child_process";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const src = join(root, "node_modules", "stockfish", "bin");
@@ -21,4 +22,19 @@ for (const [from, to] of files) {
   }
   copyFileSync(source, target);
   console.log(`stockfish: copied ${from} → public/${to}`);
+}
+
+// Optional: optimize WASM with wasm-opt if available (install via: brew install binaryen)
+const wasmFile = join(dest, "stockfish.wasm");
+if (existsSync(wasmFile)) {
+  try {
+    execSync("wasm-opt --version", { stdio: "ignore" });
+    console.log("stockfish: running wasm-opt -Os (this may take a minute)...");
+    execSync(`wasm-opt -Os "${wasmFile}" -o "${wasmFile}"`, {
+      stdio: "inherit",
+    });
+    console.log("stockfish: wasm-opt optimization complete");
+  } catch {
+    // wasm-opt not installed — skip silently
+  }
 }

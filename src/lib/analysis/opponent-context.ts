@@ -15,11 +15,11 @@ export function tagMoments(
 
   // Get opponent's known openings
   const opponentOpenings = playerColor === "white"
-    ? profile.openings.black
-    : profile.openings.white;
+    ? (profile.openings?.black ?? [])
+    : (profile.openings?.white ?? []);
 
   // Get opponent's weaknesses as a Set for fast lookup
-  const weaknessAreas = new Set(profile.weaknesses.map((w) => w.area.toLowerCase()));
+  const weaknessAreas = new Set((profile.weaknesses ?? []).map((w) => w.area.toLowerCase()));
 
   for (const move of moves) {
     // Only look at critical moments (eval swing > 50cp)
@@ -136,7 +136,7 @@ function matchWeakness(
   }
 
   // Fall through to check opening-specific weaknesses
-  for (const weakness of profile.weaknesses) {
+  for (const weakness of (profile.weaknesses ?? [])) {
     const area = weakness.area.toLowerCase();
     if (context.phase === "endgame" && area.includes("endgame")) {
       return weakness.area;
@@ -164,7 +164,7 @@ function exploitsWeakness(
   if (context.tacticalMotifs.length > 0 && weaknessAreas.has("tactical vulnerability")) return true;
 
   // Check all weaknesses for opening-specific ones
-  for (const weakness of profile.weaknesses) {
+  for (const weakness of (profile.weaknesses ?? [])) {
     const area = weakness.area.toLowerCase();
     if (context.phase === "endgame" && area.includes("endgame")) return true;
     if (area.includes("tactical") && context.tacticalMotifs.length > 0) return true;
