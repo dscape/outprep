@@ -4,6 +4,18 @@ import { detectPhaseFromBoard } from "./phase-detector";
 import { DEFAULT_CONFIG } from "./config";
 
 /**
+ * Cap centipawn value to ±EVAL_CAP before computing CPL differences.
+ *
+ * Matches Lichess ACPL methodology: "values are capped at 1000 and mates
+ * are also counted like that." Once a position is decisively won/lost,
+ * further eval swings are noise, not meaningful inaccuracy.
+ */
+const EVAL_CAP = 1000;
+function capEval(cp: number): number {
+  return Math.max(-EVAL_CAP, Math.min(EVAL_CAP, cp));
+}
+
+/**
  * Build an error profile from generic eval data (source-agnostic).
  *
  * Works with evals from batch-eval (client-side Stockfish), Lichess annotations,
@@ -69,10 +81,14 @@ export function buildErrorProfileFromEvals(
       // Detect phase BEFORE the move
       const phase = detectPhaseFromBoard(chess, config);
 
-      // CPL from the perspective of the moving side
+      // CPL from the perspective of the moving side.
+      // Cap evals at ±1000cp (Lichess methodology) so that
+      // already-decided positions don't inflate the average.
+      const cappedBefore = capEval(cpBefore);
+      const cappedAfter = capEval(cpAfter);
       const cpLoss = isWhiteMove
-        ? Math.max(0, cpBefore - cpAfter)
-        : Math.max(0, cpAfter - cpBefore);
+        ? Math.max(0, cappedBefore - cappedAfter)
+        : Math.max(0, cappedAfter - cappedBefore);
 
       addMove(accumulators[phase], cpLoss, config);
       addMove(accumulators.overall, cpLoss, config);
