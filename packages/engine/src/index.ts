@@ -22,6 +22,7 @@ export {
   classifyMove,
   applyStyleBonus,
   analyzeStyleFromRecords,
+  type MoveType,
 } from "./move-style";
 export { complexityDepthAdjust } from "./complexity";
 

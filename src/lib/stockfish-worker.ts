@@ -90,7 +90,7 @@ export class StockfishEngine {
         if (msg.startsWith("info") && msg.includes("score")) {
           const depthMatch = msg.match(/depth (\d+)/);
           const scoreMatch = msg.match(/score (cp|mate) (-?\d+)/);
-          const pvMatch = msg.match(/pv (.+)/);
+          const pvMatch = msg.match(/ pv (.+)/);
 
           if (depthMatch) bestDepth = parseInt(depthMatch[1]);
           if (scoreMatch) {
@@ -160,7 +160,7 @@ export class StockfishEngine {
           const depthMatch = msg.match(/depth (\d+)/);
           const multipvMatch = msg.match(/multipv (\d+)/);
           const scoreMatch = msg.match(/score (cp|mate) (-?\d+)/);
-          const pvMatch = msg.match(/pv (.+)/);
+          const pvMatch = msg.match(/ pv (.+)/);
 
           if (!depthMatch || !scoreMatch || !pvMatch) return;
 

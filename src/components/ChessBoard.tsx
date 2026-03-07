@@ -5,9 +5,12 @@ import { Chessboard } from "react-chessboard";
 import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { WasmStockfishAdapter } from "@/lib/stockfish-adapter";
-import type { ErrorProfile, OpeningTrie, BotMoveResult } from "@outprep/engine";
+import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics } from "@outprep/engine";
 import { BotController, createBot } from "@outprep/engine";
 import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
+import { useDebugPanel } from "@/hooks/useDebugPanel";
+import { buildDebugEntry, type DebugMoveEntry } from "@/lib/debug-reasoning";
+import DebugPanel from "@/components/DebugPanel";
 
 interface ChessBoardProps {
   playerColor: "white" | "black";
@@ -21,6 +24,7 @@ interface ChessBoardProps {
   }) => void;
   startingMoves?: string[];
   botDataLabel?: string;
+  styleMetrics?: StyleMetrics | null;
 }
 
 export default function ChessBoard({
@@ -32,6 +36,7 @@ export default function ChessBoard({
   onGameEnd,
   startingMoves,
   botDataLabel,
+  styleMetrics,
 }: ChessBoardProps) {
   const gameRef = useRef(new Chess());
   const [fen, setFen] = useState(gameRef.current.fen());
@@ -49,6 +54,8 @@ export default function ChessBoard({
     evaluated: number;
     total: number;
   } | null>(null);
+  const [debugHistory, setDebugHistory] = useState<DebugMoveEntry[]>([]);
+  const { isOpen: debugOpen, close: closeDebug } = useDebugPanel();
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
@@ -147,6 +154,7 @@ export default function ChessBoard({
           errorProfile,
           openingTrie,
           botColor,
+          styleMetrics,
         });
         botRef.current = bot;
         setEngineReady(true);
@@ -161,6 +169,7 @@ export default function ChessBoard({
             errorProfile,
             openingTrie,
             botColor,
+            styleMetrics,
           });
           botRef.current = bot;
           setEngineReady(true);
@@ -191,7 +200,8 @@ export default function ChessBoard({
     setThinking(true);
 
     try {
-      const result: BotMoveResult = await bot.getMove(game.fen());
+      const fenBeforeMove = game.fen(); // Capture FEN before bot moves
+      const result: BotMoveResult = await bot.getMove(fenBeforeMove);
       if (gameEndedRef.current) return;
 
       // Validate UCI before proceeding
@@ -222,6 +232,13 @@ export default function ChessBoard({
         // Record position for live analysis
         analyzerRef.current?.recordPosition(plyRef.current, game.fen());
 
+        // Debug: accumulate full bot reasoning with Stockfish comparison
+        // evalBefore = position before bot moved (ply N-1), evalAfter = position after (ply N)
+        const evalBefore = analyzerRef.current?.getPositionEval(plyRef.current - 1) ?? null;
+        const evalAfter = analyzerRef.current?.getPositionEval(plyRef.current) ?? null;
+        const entry = buildDebugEntry(plyRef.current, result, fenBeforeMove, evalBefore, evalAfter);
+        setDebugHistory(prev => [...prev, entry]);
+
         checkGameEnd(game);
       }
     } catch (err) {
@@ -246,6 +263,35 @@ export default function ChessBoard({
       return () => clearTimeout(timeout);
     }
   }, [fen, playerColor, engineReady, makeBotMove]);
+
+  // Lazy-update: back-fill Stockfish data on debug entries when LiveAnalyzer catches up
+  useEffect(() => {
+    if (!debugOpen || !analyzerRef.current) return;
+    const interval = setInterval(() => {
+      setDebugHistory((prev) => {
+        let changed = false;
+        const updated = prev.map((entry) => {
+          // Skip entries that already have Stockfish data
+          if (entry.stockfishEval !== null) return entry;
+          const evalBefore =
+            analyzerRef.current?.getPositionEval(entry.ply - 1) ?? null;
+          const evalAfter =
+            analyzerRef.current?.getPositionEval(entry.ply) ?? null;
+          if (!evalBefore) return entry; // Not ready yet
+          changed = true;
+          return buildDebugEntry(
+            entry.ply,
+            entry.result,
+            entry.fen,
+            evalBefore,
+            evalAfter
+          );
+        });
+        return changed ? updated : prev;
+      });
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [debugOpen]);
 
   // ── Shared helper: highlight legal moves for a given square ──
 
@@ -421,6 +467,14 @@ export default function ChessBoard({
 
   return (
     <div className="flex flex-col items-center gap-4">
+      {debugOpen && (
+        <DebugPanel
+          entries={debugHistory}
+          onClose={closeDebug}
+          errorProfile={errorProfile}
+          styleMetrics={styleMetrics}
+        />
+      )}
       {/* Status bar */}
       <div className="flex items-center gap-3 text-sm flex-wrap justify-center">
         {moveSource === "book" && (

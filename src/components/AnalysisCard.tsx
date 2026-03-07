@@ -367,10 +367,12 @@ export default function AnalysisCard({ analysis }: AnalysisCardProps) {
 
           {/* Right: quality label + perf rating */}
           <div className="text-right flex-shrink-0">
-            <div className={`text-xl font-bold ${quality.color}`}>
+            <div className={`text-xl font-bold ${isPlayerLoss ? "text-red-400" : quality.color}`}>
               {resultText}
               {" · "}
-              <span className={quality.color}>{quality.label}</span>
+              <span className={isPlayerLoss ? "text-zinc-400" : quality.color}>
+                {isPlayerLoss ? `${analysis.summary.accuracy}% accuracy` : quality.label}
+              </span>
             </div>
             {perfRating !== null && (
               <p className="text-sm text-zinc-500 mt-0.5">
