@@ -80,7 +80,15 @@ export const DEFAULT_CONFIG: BotConfig = {
     multiPvCount: 6,
     temperatureFloor: 0.1,
     temperatureScale: 15,
-    temperatureBySkill: []
+    temperatureBySkill: [
+      [3, 130],   // skill 0-3  (~1100-1400): high randomness, frequent errors
+      [6, 70],    // skill 4-6  (~1400-1600): moderate randomness
+      [9, 38],    // skill 7-9  (~1600-1800): picks best ~40-50%
+      [12, 20],   // skill 10-12 (~1800-2000): picks best ~55-65%
+      [15, 10],   // skill 13-15 (~2000-2200): picks best ~75%
+      [18, 4],    // skill 16-18 (~2200-2500): picks best ~85-90%
+      [20, 1],    // skill 19-20 (~2500-2800): near-deterministic
+    ]
   },
   depthBySkill: [
     [
