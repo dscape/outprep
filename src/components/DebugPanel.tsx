@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import type { ErrorProfile, StyleMetrics, MoveType } from "@outprep/engine";
 import type { DebugMoveEntry } from "@/lib/debug-reasoning";
 import { classifyMove } from "@/lib/debug-reasoning";
@@ -33,11 +33,24 @@ function Badge({ label, color }: { label: string; color: string }) {
 
 /* ── Move notation helpers ─────────────────────────────────── */
 
-function movePrefix(ply: number): string {
-  const moveNumber = Math.ceil(ply / 2);
-  const isWhite = ply % 2 === 1;
+function movePrefix(entry: DebugMoveEntry): string {
+  const moveNumber = Math.ceil(entry.ply / 2);
+  const isWhite = entry.ply % 2 === 1; // Odd ply = white's move
+  // Bot plays black (even ply): show "1. e4" (player's move) before
+  // Bot plays white (odd ply): just show "1."
+  if (!isWhite && entry.playerMoveSan) {
+    return `${moveNumber}. ${entry.playerMoveSan}`;
+  }
   return isWhite ? `${moveNumber}.` : `${moveNumber}...`;
 }
+
+const DIFFICULTY_COLORS: Record<string, string> = {
+  instant: "text-zinc-600",
+  quick: "text-zinc-500",
+  moderate: "text-zinc-400",
+  deep: "text-amber-500",
+  critical: "text-red-400",
+};
 
 function moveTypeLabel(type: MoveType): { icon: string; label: string; color: string } {
   switch (type) {
@@ -344,11 +357,19 @@ function LatestMoveCard({ entry }: { entry: DebugMoveEntry }) {
       {/* Move + badges row */}
       <div className="flex items-center gap-2 mb-2 flex-wrap">
         <span className="text-xs font-mono text-zinc-500">
-          {movePrefix(entry.ply)}
+          {movePrefix(entry)}
         </span>
         <span className="text-sm font-mono text-white">
           {entry.moveSan}
         </span>
+        {entry.humanThinkTimeLabel && (
+          <span
+            className={`text-[10px] font-mono ${DIFFICULTY_COLORS[entry.humanDifficulty ?? "moderate"] || "text-zinc-500"}`}
+            title={`Estimated human think time (${entry.humanDifficulty})`}
+          >
+            {entry.humanThinkTimeLabel}
+          </span>
+        )}
         {sourceBadge}
         <Badge label={entry.result.phase.toUpperCase()} color="zinc" />
         <Badge label={label} color={color} />
@@ -388,12 +409,20 @@ function MoveHistoryRow({ entry }: { entry: DebugMoveEntry }) {
         onClick={() => setExpanded((v) => !v)}
         className="w-full flex items-center gap-2 py-1.5 text-xs hover:bg-zinc-800/30 transition-colors"
       >
-        <span className="text-zinc-600 w-10 text-right shrink-0 font-mono">
-          {movePrefix(entry.ply)}
+        <span className="text-zinc-600 w-14 text-right shrink-0 font-mono">
+          {movePrefix(entry)}
         </span>
         <span className="font-mono text-zinc-300">
           {entry.moveSan}
         </span>
+        {entry.humanThinkTimeLabel && (
+          <span
+            className={`text-[10px] font-mono ${DIFFICULTY_COLORS[entry.humanDifficulty ?? "moderate"] || "text-zinc-500"}`}
+            title={`${entry.humanDifficulty}`}
+          >
+            {entry.humanThinkTimeLabel}
+          </span>
+        )}
         <Badge label={label} color={color} />
         {entry.trueCpLoss !== null && entry.trueCpLoss > 0 && (
           <span className="text-[10px] font-mono text-zinc-600">
@@ -426,12 +455,51 @@ export default function DebugPanel({
   const latest = entries[entries.length - 1] ?? null;
   const history = entries.slice(0, -1).reverse();
 
+  // Resizable width
+  const [width, setWidth] = useState(() => {
+    if (typeof window === "undefined") return 320;
+    return parseInt(localStorage.getItem("debug-panel-width") || "320", 10);
+  });
+  const widthRef = useRef(width);
+  useEffect(() => {
+    widthRef.current = width;
+  }, [width]);
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = widthRef.current;
+
+    const onMouseMove = (e: MouseEvent) => {
+      const newWidth = Math.max(280, Math.min(600, startWidth + (startX - e.clientX)));
+      setWidth(newWidth);
+    };
+
+    const onMouseUp = () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      localStorage.setItem("debug-panel-width", String(widthRef.current));
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+  }, []);
+
   return (
-    <div className="fixed inset-y-0 right-0 w-80 z-50 flex flex-col bg-zinc-900 border-l border-zinc-700 shadow-2xl">
+    <div
+      className="fixed inset-y-0 right-0 z-50 flex flex-col bg-zinc-900 border-l border-zinc-700 shadow-2xl"
+      style={{ width: `${width}px` }}
+    >
+      {/* Resize handle */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-purple-500/50 active:bg-purple-500/70 z-50"
+        onMouseDown={startResize}
+      />
+
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-700 shrink-0">
         <span className="text-[10px] font-mono text-zinc-500 tracking-widest">
-          DEBUG PANEL
+          BOT THINKING
         </span>
         <button
           onClick={onClose}

@@ -25,6 +25,11 @@ export {
   type MoveType,
 } from "./move-style";
 export { complexityDepthAdjust } from "./complexity";
+export {
+  estimateHumanThinkTime,
+  type HumanThinkEstimate,
+  type ThinkDifficulty,
+} from "./human-think-time";
 
 // --- Configuration ---
 export { DEFAULT_CONFIG, mergeConfig } from "./config";

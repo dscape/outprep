@@ -1,6 +1,6 @@
 import { Chess } from "chess.js";
-import type { BotMoveResult, CandidateMove, MoveType } from "@outprep/engine";
-import { temperatureFromSkill, classifyMove as classifyMoveType } from "@outprep/engine";
+import type { BotMoveResult, CandidateMove, MoveType, ThinkDifficulty } from "@outprep/engine";
+import { temperatureFromSkill, classifyMove as classifyMoveType, estimateHumanThinkTime } from "@outprep/engine";
 
 // Same thresholds as LiveGameAnalyzer
 const INACCURACY_THRESHOLD = 50;
@@ -33,6 +33,12 @@ export interface DebugMoveEntry {
   evalAfter: number | null; // eval after bot moved (cp, side-to-move perspective)
   trueCpLoss: number | null; // eval delta = how much the bot's move cost
   trueClassification: TrueClassification | null;
+  // Player context
+  playerMoveSan: string | null; // Player's preceding move (SAN), for "1. e4 e5" display
+  // Human think time estimation
+  humanThinkTimeMs: number | null; // Estimated human thinking time in ms
+  humanThinkTimeLabel: string | null; // "~3s", "~12s"
+  humanDifficulty: ThinkDifficulty | null; // "instant" | "quick" | "moderate" | "deep" | "critical"
 }
 
 /**
@@ -49,7 +55,8 @@ export function buildDebugEntry(
   result: BotMoveResult,
   fen: string,
   stockfishBefore?: { eval: number; bestMove: string; fen: string } | null,
-  stockfishAfter?: { eval: number } | null
+  stockfishAfter?: { eval: number } | null,
+  playerMoveSan?: string | null
 ): DebugMoveEntry {
   const temperature = temperatureFromSkill(result.dynamicSkill);
   const candidates = result.candidates || [];
@@ -136,6 +143,10 @@ export function buildDebugEntry(
       evalAfter,
       trueCpLoss,
       trueClassification,
+      playerMoveSan: playerMoveSan ?? null,
+      humanThinkTimeMs: null,
+      humanThinkTimeLabel: null,
+      humanDifficulty: null,
     };
   }
 
@@ -180,6 +191,19 @@ export function buildDebugEntry(
 
   reasoning += `\nThink time: ${result.thinkTimeMs}ms`;
 
+  // Estimate human think time for engine moves with candidates
+  let humanThinkTimeMs: number | null = null;
+  let humanThinkTimeLabel: string | null = null;
+  let humanDifficulty: ThinkDifficulty | null = null;
+
+  if (candidates.length > 0) {
+    const estimate = estimateHumanThinkTime(fen, result.uci, candidates);
+    humanThinkTimeMs = estimate.thinkTimeMs;
+    humanThinkTimeLabel = estimate.thinkTimeLabel;
+    humanDifficulty = estimate.difficulty;
+    reasoning += `\nHuman think: ${estimate.thinkTimeLabel} (${estimate.difficulty})`;
+  }
+
   return {
     ply,
     result,
@@ -197,6 +221,10 @@ export function buildDebugEntry(
     evalAfter,
     trueCpLoss,
     trueClassification,
+    playerMoveSan: playerMoveSan ?? null,
+    humanThinkTimeMs,
+    humanThinkTimeLabel,
+    humanDifficulty,
   };
 }
 

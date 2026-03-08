@@ -58,12 +58,13 @@ export default function ChessBoard({
   const [boardArrows, setBoardArrows] = useState<
     { startSquare: string; endSquare: string; color: string }[]
   >([]);
-  const { isOpen: debugOpen, close: closeDebug } = useDebugPanel();
+  const { isOpen: debugOpen, toggle: toggleDebug, close: closeDebug } = useDebugPanel();
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
   const gameEndedRef = useRef(false);
   const plyRef = useRef(0);
+  const lastPlayerMoveSanRef = useRef<string | null>(null);
 
   const botColor = playerColor === "white" ? "black" : "white";
 
@@ -202,10 +203,14 @@ export default function ChessBoard({
     const totalWeight = weights.reduce((a, b) => a + b, 0);
     const probs = weights.map((w) => w / totalWeight);
 
+    // Scale probabilities to visible opacity range [0.3, 1.0]
+    // react-chessboard applies its own 0.65 opacity multiplier on arrows
+    const maxProb = Math.max(...probs);
     return candidates.map((c, i) => {
       const from = c.uci.substring(0, 2);
       const to = c.uci.substring(2, 4);
-      const opacity = Math.max(0.15, probs[i]);
+      const normalizedProb = maxProb > 0 ? probs[i] / maxProb : 0.5;
+      const opacity = 0.3 + normalizedProb * 0.7; // range [0.3, 1.0]
 
       // Green (best) → yellow (2nd) → orange (rest)
       const color =
@@ -266,8 +271,6 @@ export default function ChessBoard({
         result.candidates &&
         result.candidates.length > 1;
 
-      console.log("[Arrows] debugOpen:", debugOpen, "source:", result.source, "candidates:", result.candidates?.length, "showArrows:", showArrows);
-
       if (showArrows) {
         // Phase 1: Show all candidate arrows (replaces think time delay)
         setBoardArrows(
@@ -315,7 +318,8 @@ export default function ChessBoard({
         // evalBefore = position before bot moved (ply N-1), evalAfter = position after (ply N)
         const evalBefore = analyzerRef.current?.getPositionEval(plyRef.current - 1) ?? null;
         const evalAfter = analyzerRef.current?.getPositionEval(plyRef.current) ?? null;
-        const entry = buildDebugEntry(plyRef.current, result, fenBeforeMove, evalBefore, evalAfter);
+        const entry = buildDebugEntry(plyRef.current, result, fenBeforeMove, evalBefore, evalAfter, lastPlayerMoveSanRef.current);
+        lastPlayerMoveSanRef.current = null; // Reset after use
         setDebugHistory(prev => [...prev, entry]);
 
         checkGameEnd(game);
@@ -364,7 +368,8 @@ export default function ChessBoard({
             entry.result,
             entry.fen,
             evalBefore,
-            evalAfter
+            evalAfter,
+            entry.playerMoveSan
           );
         });
         return changed ? updated : prev;
@@ -447,6 +452,7 @@ export default function ChessBoard({
 
       if (!move) return false;
 
+      lastPlayerMoveSanRef.current = move.san;
       plyRef.current++;
       setFen(game.fen());
 
@@ -480,6 +486,7 @@ export default function ChessBoard({
         });
 
         if (move) {
+          lastPlayerMoveSanRef.current = move.san;
           plyRef.current++;
           setFen(game.fen());
           setSelectedSquare(null);
@@ -623,6 +630,28 @@ export default function ChessBoard({
               </span>
             )}
           </div>
+          <button
+            onClick={toggleDebug}
+            className={`rounded-md border px-3 py-1.5 text-sm transition-colors flex items-center gap-1.5 ${
+              debugOpen
+                ? "bg-purple-600/20 border-purple-500/30 text-purple-400"
+                : "bg-zinc-700/30 border-zinc-600/30 text-zinc-400 hover:text-zinc-300 hover:bg-zinc-700/50"
+            }`}
+            title="Show bot thinking"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z" />
+              <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z" />
+              <path d="M15 13a4.5 4.5 0 0 1-3-4 4.5 4.5 0 0 1-3 4" />
+              <path d="M17.599 6.5a3 3 0 0 0 .399-1.375" />
+              <path d="M6.003 5.125A3 3 0 0 0 6.401 6.5" />
+              <path d="M3.477 10.896a4 4 0 0 1 .585-.396" />
+              <path d="M19.938 10.5a4 4 0 0 1 .585.396" />
+              <path d="M6 18a4 4 0 0 1-1.967-.516" />
+              <path d="M19.967 17.484A4 4 0 0 1 18 18" />
+            </svg>
+            Thinking
+          </button>
           <button
             onClick={handleResign}
             className="rounded-md bg-red-600/20 border border-red-500/30 px-3 py-1.5 text-sm text-red-400 transition-colors hover:bg-red-600/30"
