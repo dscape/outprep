@@ -48,6 +48,12 @@ packages/tuner/proposals/
 packages/tuner/experiments/
 packages/tuner/tuner-state.json
 
+# forge data (created at runtime)
+packages/forge/data/
+packages/forge/sessions/
+packages/forge/logs/
+packages/forge/forge-state.json
+
 # TWIC data archives (multi-GB, created by scripts/create-twic-archive.sh)
 twic-archive-*.zip
 
