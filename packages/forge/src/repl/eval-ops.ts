@@ -17,6 +17,8 @@ import type { TestResult, Metrics } from "@outprep/harness";
 import type { LichessGame } from "@outprep/harness";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
+const tsxBin = join(REPO_ROOT, "node_modules", ".bin", "tsx");
 
 /* ── Worker protocol types (must match _eval-worker.ts) ───── */
 
@@ -40,6 +42,8 @@ interface EvalWorkerInput {
     skipTopN?: boolean;
     phaseBalanced?: boolean;
   };
+  /** Train games for profile building (train/test separation). */
+  trainGames?: LichessGame[];
 }
 
 interface EvalWorkerOutput {
@@ -57,6 +61,13 @@ export interface EvalOptions {
   skipTopN?: boolean;
   phaseBalanced?: boolean;
   timeoutMs?: number;
+  /**
+   * Train games for profile building (train/test separation).
+   * When provided, profiles (error profile, opening trie, style metrics)
+   * are built from these games instead of from the evaluation dataset.
+   * This prevents data leakage, especially through the opening trie.
+   */
+  trainGames?: LichessGame[];
 }
 
 /* ── Comparison table ──────────────────────────────────────── */
@@ -90,7 +101,7 @@ async function runWorker(
   const workerScript = join(__dirname, "_eval-worker.ts");
 
   return new Promise<TestResult>((resolve, reject) => {
-    const child = spawn("npx", ["tsx", workerScript], {
+    const child = spawn(tsxBin, [workerScript], {
       cwd: sandbox.worktreePath,
       stdio: ["pipe", "pipe", "pipe"],
       env: {
@@ -220,9 +231,25 @@ function buildDataset(
 /* ── Public API ────────────────────────────────────────────── */
 
 export interface EvalOps {
+  /**
+   * Run a full evaluation on testGames.
+   * @param testGames Games to evaluate accuracy on.
+   * @param opts Options including trainGames for proper train/test separation.
+   */
   run(testGames: LichessGame[], opts?: EvalOptions): Promise<TestResult>;
-  runQuick(testGames: LichessGame[], n?: number): Promise<TestResult>;
-  baseline(testGames: LichessGame[]): Promise<TestResult>;
+  /**
+   * Quick triage evaluation (50 positions by default, skipTopN).
+   * @param testGames Games to evaluate.
+   * @param trainGames Optional train games for profile building.
+   * @param n Max positions (default 50).
+   */
+  runQuick(testGames: LichessGame[], trainGames?: LichessGame[], n?: number): Promise<TestResult>;
+  /**
+   * Run baseline evaluation (no config overrides).
+   * @param testGames Games to evaluate.
+   * @param trainGames Optional train games for profile building.
+   */
+  baseline(testGames: LichessGame[], trainGames?: LichessGame[]): Promise<TestResult>;
   compare(a: TestResult, b: TestResult): ComparisonTable;
 }
 
@@ -239,6 +266,7 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
         skipTopN = false,
         phaseBalanced = true,
         timeoutMs = 5 * 60 * 1000, // 5 minutes default
+        trainGames,
       } = opts;
 
       const dataset = buildDataset(testGames, label);
@@ -251,6 +279,7 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
           skipTopN,
           phaseBalanced,
         },
+        trainGames,
       };
 
       return runWorker(sandbox, input, timeoutMs);
@@ -258,6 +287,7 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
 
     async runQuick(
       testGames: LichessGame[],
+      trainGames?: LichessGame[],
       n: number = 50
     ): Promise<TestResult> {
       return this.run(testGames, {
@@ -266,10 +296,14 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
         skipTopN: true,
         phaseBalanced: true,
         timeoutMs: 3 * 60 * 1000, // 3 minutes for quick runs
+        trainGames,
       });
     },
 
-    async baseline(testGames: LichessGame[]): Promise<TestResult> {
+    async baseline(
+      testGames: LichessGame[],
+      trainGames?: LichessGame[]
+    ): Promise<TestResult> {
       // Baseline runs without any config overrides, using the
       // sandbox's current engine code. For a true baseline, the
       // caller should ensure no code changes are applied yet.
@@ -277,6 +311,7 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
         label: "baseline",
         phaseBalanced: true,
         timeoutMs: 10 * 60 * 1000, // 10 minutes for baseline
+        trainGames,
       });
     },
 

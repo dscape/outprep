@@ -4,21 +4,44 @@
  * Markdown files with YAML frontmatter organized by topic.
  * The agent consults these before formulating hypotheses.
  * Experiment results are appended as institutional memory.
+ *
+ * Also provides:
+ * - Topic creation and compaction/archiving
+ * - Inter-agent notes (shared scratchpad across sessions)
  */
 
-import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import matter from "gray-matter";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TOPICS_DIR = join(__dirname, "topics");
+const ARCHIVES_DIR = join(__dirname, "archives");
+const NOTES_DIR = join(__dirname, "notes");
+
+/* ── Types ────────────────────────────────────────────────── */
 
 export interface Topic {
   id: string; // filename without extension
   title: string;
   relevance: string[];
   updated: string;
+  content: string;
+}
+
+export interface TopicArchive {
+  topicId: string;
+  archivedAt: string;
+  content: string;
+}
+
+export interface AgentNote {
+  id: number;
+  sessionId: string;
+  sessionName: string;
+  date: string;
+  tags: string[];
   content: string;
 }
 
@@ -124,17 +147,17 @@ export function appendToTopic(
  */
 export function buildKnowledgeContext(
   query: string,
-  maxTopics = 3
+  maxTopics = 1
 ): string {
   const topics = searchTopics(query).slice(0, maxTopics);
 
   if (topics.length === 0) {
-    return "(No relevant knowledge topics found)";
+    return "";
   }
 
   const sections = topics.map(
     (t) =>
-      `### ${t.title}\n${t.content.slice(0, 2000)}${t.content.length > 2000 ? "\n..." : ""}`
+      `### ${t.title}\n${t.content.slice(0, 800)}${t.content.length > 800 ? "\n..." : ""}`
   );
 
   return `## Domain Knowledge\n\n${sections.join("\n\n")}`;

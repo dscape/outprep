@@ -129,7 +129,7 @@ function wrapInAsyncIIFE(code: string): string {
     lastLine.startsWith("//") ||
     lastLine.startsWith("/*") ||
     lastLine === "" ||
-    lastLine === "}";
+    lastLine.startsWith("}");
 
   if (isDeclaration) {
     // The last line is a declaration/statement, don't try to return it
@@ -183,6 +183,12 @@ export function createReplServer(globals?: Record<string, unknown>): ReplServer 
     parseFloat,
     isNaN,
     isFinite,
+    // Stub require to give a helpful error instead of "require is not defined"
+    require: () => {
+      throw new Error(
+        "require() is not available in the forge REPL. Use the pre-injected `forge` and `playerData` globals instead."
+      );
+    },
     // Inject any provided globals (the forge object goes here)
     ...globals,
   };

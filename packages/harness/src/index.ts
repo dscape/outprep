@@ -8,6 +8,7 @@
 export { runAccuracyTest } from "./runner";
 export type { RunCallbacks } from "./runner";
 export { fetchLichessGames, fetchLichessUser } from "./lichess-fetch";
+export { lichessGameToGameRecord, lichessGameToEvalData } from "./lichess-adapters";
 export { computeMetrics } from "./metrics";
 export { NodeStockfishAdapter } from "./node-stockfish";
 export { captureVersionInfo, resolveFullConfig } from "./version";

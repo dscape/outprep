@@ -40,15 +40,46 @@ program
   .option("--seed <n>", "Random seed", "42")
   .option("--quick", "Use triage-size evaluations (50 positions)")
   .action(async (opts) => {
-    const { runResearchSession } = await import("./agent/agent-loop");
-
     const players = opts.players
       ? opts.players.split(",").map((s: string) => s.trim())
       : undefined;
 
+    if (!players || players.length === 0) {
+      console.error("  ✗ Specify at least one player with --players");
+      process.exit(1);
+    }
+
+    // Pre-download all player data before starting the agent
+    const { fetchPlayer, getGames } = await import("./data/game-store");
+    console.log(`\n  Downloading data for ${players.length} player(s)...\n`);
+    const validPlayers: string[] = [];
+    for (const username of players) {
+      try {
+        console.log(`  [${username}] Fetching...`);
+        const data = await fetchPlayer(username);
+        const games = getGames(username);
+        if (games.length === 0) {
+          console.log(`  [${username}] ✗ 0 games found, skipping.`);
+        } else {
+          console.log(`  [${username}] ✓ ${games.length} games (Elo: ${data.estimatedElo})`);
+          validPlayers.push(username);
+        }
+      } catch (err) {
+        console.error(`  [${username}] ✗ Failed: ${err}`);
+      }
+    }
+
+    if (validPlayers.length === 0) {
+      console.error("\n  ✗ No valid players with games. Aborting.");
+      process.exit(1);
+    }
+
+    console.log(`\n  Starting research with ${validPlayers.length} player(s): ${validPlayers.join(", ")}\n`);
+
+    const { runResearchSession } = await import("./agent/agent-loop");
     await runResearchSession({
       name: opts.name,
-      players,
+      players: validPlayers,
       focus: opts.focus,
       maxExperiments: parseInt(opts.maxExperiments, 10),
       seed: parseInt(opts.seed, 10),

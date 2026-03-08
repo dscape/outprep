@@ -2,7 +2,14 @@
  * Harness-specific type definitions.
  */
 
-import type { BotConfig, GamePhase, MoveSource } from "@outprep/engine";
+import type {
+  BotConfig,
+  GamePhase,
+  MoveSource,
+  ErrorProfile,
+  StyleMetrics,
+  OpeningTrie,
+} from "@outprep/engine";
 import type { LichessGame } from "./lichess-types";
 import type { VersionInfo } from "./version";
 
@@ -35,6 +42,18 @@ export interface RunConfig {
    * Guarantees minimum representation of middlegame and endgame positions.
    */
   phaseBalanced?: boolean;
+
+  /**
+   * Pre-built player profiles to use instead of computing from dataset.games.
+   * Enables proper train/test separation: build profiles from train games,
+   * evaluate on test games, without data leakage through the opening trie.
+   */
+  profileOverrides?: {
+    errorProfile?: ErrorProfile;
+    styleMetrics?: StyleMetrics;
+    whiteTrie?: OpeningTrie;
+    blackTrie?: OpeningTrie;
+  };
 }
 
 // ── Position-level result ───────────────────────────────────────────

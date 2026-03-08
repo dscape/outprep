@@ -59,17 +59,15 @@ export async function handleReplTool(
     resultStr = String(result.result);
   }
 
-  // Truncate very long outputs to stay within context limits
-  const maxOutputLen = 8000;
-  const output =
-    result.output.length > maxOutputLen
-      ? result.output.slice(0, maxOutputLen) + "\n... (truncated)"
-      : result.output;
-
-  const resultTruncated =
-    resultStr.length > maxOutputLen
-      ? resultStr.slice(0, maxOutputLen) + "\n... (truncated)"
-      : resultStr;
+  // Truncate very long outputs to stay within context limits (10k token budget)
+  const maxOutputLen = 3000;
+  const truncate = (s: string, max: number): string => {
+    if (s.length <= max) return s;
+    const half = Math.floor(max / 2);
+    return s.slice(0, half) + "\n... (truncated) ...\n" + s.slice(-half);
+  };
+  const output = truncate(result.output, maxOutputLen);
+  const resultTruncated = truncate(resultStr, maxOutputLen);
 
   return {
     output,

@@ -84,31 +84,60 @@ export async function computeBaseline(
   // Lazy import to avoid circular dependency and loading heavy modules at startup
   const { fetchPlayer, getGames } = await import("../data/game-store");
   const { createSplit } = await import("../data/splits");
-  const { NodeStockfishAdapter, runAccuracyTest, computeMetrics } = await import("@outprep/harness");
-  const { DEFAULT_CONFIG } = await import("@outprep/engine");
+  const {
+    NodeStockfishAdapter, runAccuracyTest, computeMetrics,
+    lichessGameToGameRecord, lichessGameToEvalData,
+  } = await import("@outprep/harness");
+  const {
+    DEFAULT_CONFIG,
+    buildErrorProfileFromEvals,
+    analyzeStyleFromRecords,
+    buildOpeningTrie,
+  } = await import("@outprep/engine");
 
+  console.log("  Initializing Stockfish engine...");
   const engine = new NodeStockfishAdapter();
   await engine.init();
+  console.log("  Engine ready.");
 
   const playerMetrics: PlayerMetricSnapshot[] = [];
   const splitHashes: Record<string, string> = {};
 
   try {
     for (const username of players) {
-      console.log(`  Evaluating baseline for ${username}...`);
+      console.log(`\n  [${username}] Fetching player data...`);
 
       // Load player data (download if not cached)
       const playerData = await fetchPlayer(username);
+      console.log(`  [${username}] Loaded (Elo: ${playerData.estimatedElo}, ${playerData.gameCount} games).`);
+
       const games = getGames(username);
+      console.log(`  [${username}] ${games.length} games in memory.`);
 
       // Split into train/test
-      const { testGames, split } = createSplit(games, {
+      const { trainGames, testGames, split } = createSplit(games, {
         seed: opts.seed ?? 42,
         trainRatio: 0.8,
       });
       splitHashes[username] = split.splitHash;
+      console.log(`  [${username}] Split: ${trainGames.length} train / ${testGames.length} test games.`);
 
-      // Run harness evaluation on test set
+      // Build profiles from TRAIN games only (prevent data leakage)
+      console.log(`  [${username}] Building profiles from train set...`);
+      const trainRecords = trainGames
+        .filter((g) => g.variant === "standard" && g.moves)
+        .map((g) => lichessGameToGameRecord(g, username));
+      const trainEvalData = trainGames
+        .map((g) => lichessGameToEvalData(g, username))
+        .filter((d): d is NonNullable<typeof d> => d !== null);
+
+      const errorProfile = buildErrorProfileFromEvals(trainEvalData);
+      const styleMetrics = analyzeStyleFromRecords(trainRecords);
+      const whiteTrie = buildOpeningTrie(trainRecords, "white");
+      const blackTrie = buildOpeningTrie(trainRecords, "black");
+      console.log(`  [${username}] Profiles built (${trainRecords.length} records, ${trainEvalData.length} eval data).`);
+
+      // Run harness evaluation on TEST set with TRAIN profiles
       const dataset = {
         name: username,
         username,
@@ -120,19 +149,36 @@ export async function computeBaseline(
         games: testGames,
       };
 
+      console.log(`  [${username}] Running accuracy test (max ${opts.maxPositions ?? 200} positions)...`);
       const result = await runAccuracyTest(engine, dataset, {
         seed: opts.seed ?? 42,
         label: "baseline",
         maxPositions: opts.maxPositions ?? 200,
         phaseBalanced: true,
-        skipTopN: false,
+        skipTopN: true,
+        profileOverrides: {
+          errorProfile,
+          styleMetrics,
+          whiteTrie,
+          blackTrie,
+        },
+      }, {
+        onProgress: (evaluated, total, stats) => {
+          const pct = ((evaluated / total) * 100).toFixed(0);
+          const timeStr = stats ? ` (${(stats.elapsedMs / 1000).toFixed(1)}s ${stats.phase} ${stats.source})` : "";
+          process.stdout.write(`\r  [${username}] ${evaluated}/${total} [${pct}%]${timeStr}    `);
+          if (evaluated === total) process.stdout.write("\n");
+        },
       });
+
+      console.log(`  [${username}] Accuracy test done: ${result.positions.length} positions evaluated.`);
 
       const maiaMetrics = computeMaiaMetrics(
         result.positions,
         result.metrics,
         opts
       );
+      console.log(`  [${username}] Accuracy: ${(maiaMetrics.moveAccuracy * 100).toFixed(1)}% | Composite: ${(maiaMetrics.compositeScore * 100).toFixed(1)}%`);
 
       playerMetrics.push({
         username,

@@ -28,7 +28,7 @@ import type { Dataset, RunConfig, TestResult, PositionResult } from "./types";
 import type { LichessGame } from "./lichess-types";
 
 export interface RunCallbacks {
-  onProgress?: (evaluated: number, total: number) => void;
+  onProgress?: (evaluated: number, total: number, stats?: { elapsedMs: number; phase: string; source: string }) => void;
 }
 
 /* ── Phase-balanced position sampling ─────────────────────── */
@@ -194,14 +194,21 @@ export async function runAccuracyTest(
 
     // Profile building uses DEFAULT_CONFIG (not overrides).
     // Config overrides only affect bot behavior via createBot().
-    const errorProfile: ErrorProfile = buildErrorProfileFromEvals(evalData);
-    const styleMetrics: StyleMetrics = analyzeStyleFromRecords(gameRecords);
+    // When profileOverrides are provided (train/test split), use those
+    // instead of computing from dataset.games to prevent data leakage.
+    const overrides = runConfig.profileOverrides;
+    const errorProfile: ErrorProfile = overrides?.errorProfile
+      ?? buildErrorProfileFromEvals(evalData);
+    const styleMetrics: StyleMetrics = overrides?.styleMetrics
+      ?? analyzeStyleFromRecords(gameRecords);
 
     const elo = runConfig.eloOverride ?? dataset.estimatedElo;
 
     // Build opening tries for both colors
-    const whiteTrie: OpeningTrie = buildOpeningTrie(gameRecords, "white");
-    const blackTrie: OpeningTrie = buildOpeningTrie(gameRecords, "black");
+    const whiteTrie: OpeningTrie = overrides?.whiteTrie
+      ?? buildOpeningTrie(gameRecords, "white");
+    const blackTrie: OpeningTrie = overrides?.blackTrie
+      ?? buildOpeningTrie(gameRecords, "black");
 
     // 2. Phase-balanced sampling (when enabled)
     //    Pre-scan all positions, group by phase, sample with quotas.
@@ -298,7 +305,9 @@ export async function runAccuracyTest(
             moveObj.from + moveObj.to + (moveObj.promotion || "");
 
           // Get bot's move
+          const t0 = performance.now();
           const botResult = await bot.getMove(fen);
+          const posElapsedMs = performance.now() - t0;
 
           // Get MultiPV candidates for top-N accuracy and botCPL
           let isInTopN = false;
@@ -375,7 +384,11 @@ export async function runAccuracyTest(
 
           evaluated++;
           if (callbacks?.onProgress) {
-            callbacks.onProgress(evaluated, totalPositions);
+            callbacks.onProgress(evaluated, totalPositions, {
+              elapsedMs: posElapsedMs,
+              phase: botResult.phase,
+              source: botResult.source,
+            });
           }
 
           // In phase-balanced mode, stop when all selected positions are evaluated.

@@ -16,7 +16,6 @@
  */
 
 import {
-  createBot,
   buildErrorProfileFromEvals,
   buildOpeningTrie,
   analyzeStyleFromRecords,
@@ -25,14 +24,16 @@ import {
   type ErrorProfile,
   type OpeningTrie,
   type StyleMetrics,
-  type BotConfig,
 } from "@outprep/engine";
 import {
   runAccuracyTest,
   NodeStockfishAdapter,
+  lichessGameToGameRecord,
+  lichessGameToEvalData,
   type Dataset,
   type RunConfig,
   type TestResult,
+  type LichessGame,
 } from "@outprep/harness";
 
 /* ── Worker protocol types ─────────────────────────────────── */
@@ -40,6 +41,8 @@ import {
 interface EvalWorkerInput {
   dataset: Dataset;
   runConfig: RunConfig;
+  /** Train games for profile building (train/test separation). */
+  trainGames?: LichessGame[];
 }
 
 interface EvalWorkerOutput {
@@ -81,11 +84,39 @@ async function main(): Promise<void> {
       },
     };
 
+    // Build profile overrides from train games if provided (train/test separation)
+    const runConfig = { ...input.runConfig };
+    if (input.trainGames && input.trainGames.length > 0) {
+      process.stderr.write(
+        `\n  train/test split: profiles from ${input.trainGames.length} train games, eval on ${input.dataset.games.length} test games\n`
+      );
+
+      const trainRecords: GameRecord[] = input.trainGames
+        .filter((g) => g.variant === "standard" && g.moves)
+        .map((g) => lichessGameToGameRecord(g, input.dataset.username));
+
+      const trainEvalData: GameEvalData[] = input.trainGames
+        .map((g) => lichessGameToEvalData(g, input.dataset.username))
+        .filter((d): d is GameEvalData => d !== null);
+
+      const errorProfile: ErrorProfile = buildErrorProfileFromEvals(trainEvalData);
+      const styleMetrics: StyleMetrics = analyzeStyleFromRecords(trainRecords);
+      const whiteTrie: OpeningTrie = buildOpeningTrie(trainRecords, "white");
+      const blackTrie: OpeningTrie = buildOpeningTrie(trainRecords, "black");
+
+      runConfig.profileOverrides = {
+        errorProfile,
+        styleMetrics,
+        whiteTrie,
+        blackTrie,
+      };
+    }
+
     // Run the harness evaluation
     const result = await runAccuracyTest(
       engine,
       input.dataset,
-      input.runConfig,
+      runConfig,
       callbacks
     );
 
@@ -107,4 +138,8 @@ async function main(): Promise<void> {
   }
 }
 
-main().then(() => process.exit(0));
+main().then(() => {
+  // Don't use process.exit(0) — it kills the process before stdout drains,
+  // truncating large JSON output (e.g., at 8192 bytes).
+  process.exitCode = 0;
+});

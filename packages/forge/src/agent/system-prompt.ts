@@ -84,92 +84,23 @@ ${focusDetail[focus] ?? focusDetail.accuracy}
 - **Reproducibility**: Same seed = same results. Record split hashes in experiment logs.`;
 }
 
-const API_DOCS = `## Forge REPL API
+const API_DOCS = `## Forge API
 
-All methods are available on the \`forge\` object. Variables persist across REPL calls.
+Globals: \`forge\`, \`playerData\`. No \`require\`/\`import\`. Use \`await\` for async calls. Vars persist across REPL calls.
 
-### forge.code — Engine Code Operations
-\`\`\`typescript
-forge.code.read(file: string): string                    // Read engine source file
-forge.code.write(file: string, content: string): void    // Replace file content
-forge.code.patch(file: string, { search, replace }): { matched: boolean }
-forge.code.diff(): string                                 // Show all changes vs baseline
-forge.code.revert(file?: string): void                    // Revert one or all files
-forge.code.listModifiable(): string[]                     // Modifiable engine files
-forge.code.typecheck(): string                            // Run tsc, return errors or ""
-\`\`\`
+\`playerData["username"]\` → { meta, games, trainGames, testGames, split } (pre-loaded, pre-split 80/20).
+Do NOT call \`forge.data.load()\` for players already in \`playerData\`.
+Always pass trainGames to eval methods to avoid data leakage.
 
-### forge.config — Config Operations
-\`\`\`typescript
-forge.config.get(): BotConfig                             // Read current DEFAULT_CONFIG
-forge.config.set(path: string, value: any): void          // e.g., set("boltzmann.temperatureScale", 20)
-forge.config.reset(): void                                // Reset to baseline
-\`\`\`
-
-### forge.data — Data Management
-\`\`\`typescript
-forge.data.load(username: string): Promise<PlayerData>    // Load/download player games
-forge.data.split(games, opts): { trainGames, testGames, split }
-forge.data.profile(games): { errorProfile, styleMetrics, openingTrie }
-forge.data.listPlayers(): PlayerData[]                    // List cached players
-\`\`\`
-
-### forge.eval — Evaluation
-\`\`\`typescript
-forge.eval.run(testGames, opts?): Promise<TestResult>     // Run harness evaluation
-forge.eval.runQuick(testGames, n?): Promise<TestResult>   // Quick triage (50 positions)
-forge.eval.baseline(testGames): Promise<TestResult>       // Run baseline (no changes)
-forge.eval.compare(a, b): ComparisonTable                 // Delta table with significance
-\`\`\`
-
-### forge.metrics — Maia-Aligned Metrics
-\`\`\`typescript
-forge.metrics.accuracy(positions): MoveAccuracyResult
-forge.metrics.cplDistribution(positions): CPLDistributionResult
-forge.metrics.blunderProfile(positions): BlunderProfileResult
-forge.metrics.composite(positions, rawMetrics): MaiaMetrics
-forge.metrics.significance(baselineValues, experimentValues): SignificanceResult
-\`\`\`
-
-### forge.knowledge — Domain Knowledge
-\`\`\`typescript
-forge.knowledge.search(query: string): Topic[]            // Find relevant topics
-forge.knowledge.read(topicId: string): Topic | null       // Read a specific topic
-forge.knowledge.append(topicId, entry): void              // Add experiment result to topic
-\`\`\`
-
-### forge.oracle — Oracle Consultation
-\`\`\`typescript
-forge.oracle.ask(question, context?): Promise<OracleResponse>  // Claude → ChatGPT → Claude
-forge.oracle.history(): OracleRecord[]                          // Past consultations
-\`\`\`
-
-### forge.log — Research Log
-\`\`\`typescript
-forge.log.record(experiment): string                      // Write experiment log, returns path
-forge.log.trend(): TrendSummary                           // Metric trends across experiments
-forge.log.summary(): string                               // Generate session summary
-\`\`\`
-
-### forge.session — Session Management
-\`\`\`typescript
-forge.session.checkpoint(): string                        // Save state, returns commit hash
-forge.session.accept(): string                            // Merge to main, returns info
-forge.session.reject(): void                              // Discard changes
-\`\`\`
-
-### Modifiable Engine Files
-\`\`\`
-src/move-selector.ts    — Boltzmann selection, temperature, skill mapping
-src/bot-controller.ts   — Move pipeline orchestration
-src/move-style.ts       — Style bonus calculation
-src/error-profile.ts    — Error profile computation
-src/phase-detector.ts   — Phase detection logic
-src/complexity.ts       — Complexity depth adjustment
-src/opening-trie.ts     — Opening book sampling
-src/config.ts           — DEFAULT_CONFIG values
-src/types.ts            — Type definitions
-\`\`\``;
+forge.code: read(file) | write(file, content) | patch(file, {search,replace}) | diff() | revert(file?) | listModifiable() | typecheck()
+forge.config: get() | set(path, value) | reset()
+forge.data: load(username) | split(games, opts) | getGames(username) | listPlayers()
+forge.eval: run(testGames, {trainGames}) | runQuick(testGames, trainGames?, n?) | baseline(testGames, trainGames?) | compare(a, b)
+forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile(positions) | composite(positions, rawMetrics) | significance(base, exp)
+forge.knowledge: search(query) | read(topicId) | append(topicId, entry)
+forge.oracle: ask(question, context?) | history()
+forge.log: record(experiment) | trend() | summary()
+forge.session: checkpoint() | accept() | reject()`;
 
 function buildSessionState(ctx: PromptContext): string {
   const { session, baseline } = ctx;
@@ -214,13 +145,14 @@ function buildSessionState(ctx: PromptContext): string {
 function buildRules(maxExperiments: number): string {
   return `## Rules
 
-1. **Always use train/test split**. Never build profiles from test data.
-2. **Check significance** before concluding an experiment worked. Use \`forge.eval.compare()\`.
-3. **Log every experiment** with \`forge.log.record()\`. Include hypothesis, changes, results, conclusion.
-4. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
-5. **Consult knowledge base** before trying a new approach. Don't repeat failed experiments.
-6. **Use oracle sparingly** — only at genuine decision points (max 5 per session).
-7. **Typecheck after code changes** with \`forge.code.typecheck()\` before running eval.
+1. **Use \`playerData\`** — player data is pre-loaded and split. Use \`playerData["username"].trainGames\` and \`.testGames\` directly. Do NOT call \`forge.data.load()\` for players already in \`playerData\`.
+2. **Always use train/test split**. Never build profiles from test data.
+3. **Check significance** before concluding an experiment worked. Use \`forge.eval.compare()\`.
+4. **Log every experiment** with \`forge.log.record()\`. Include hypothesis, changes, results, conclusion.
+5. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
+6. **Consult knowledge base** before trying a new approach. Don't repeat failed experiments.
+7. **Use oracle sparingly** — only at genuine decision points (max 5 per session).
+8. **Typecheck after code changes** with \`forge.code.typecheck()\` before running eval.
 8. **Max ${maxExperiments} experiments** per session. Prioritize high-impact changes.
 9. **Start with quick evals** (\`forge.eval.runQuick()\`) for triage, then full eval for promising changes.
 10. **Revert failed experiments** before trying the next one.`;

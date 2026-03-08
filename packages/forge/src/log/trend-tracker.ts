@@ -141,7 +141,16 @@ export function formatTrend(summary: TrendSummary): string {
     "-----|----------|---------|---------|-----------|--------"
   );
 
-  for (const p of summary.points) {
+  const maxRows = 5;
+  const recentPoints = summary.points.length > maxRows
+    ? summary.points.slice(-maxRows)
+    : summary.points;
+
+  if (summary.points.length > maxRows) {
+    lines.push(`  ... (${summary.points.length - maxRows} earlier experiments omitted)`);
+  }
+
+  for (const p of recentPoints) {
     const num = String(p.experimentNumber).padStart(3);
     const acc = `${(p.moveAccuracy * 100).toFixed(1)}%`.padStart(7);
     const kl = p.cplKLDivergence.toFixed(4).padStart(7);

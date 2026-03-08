@@ -6,10 +6,16 @@ import type { LichessUser, LichessGame } from "./lichess-types";
 
 const LICHESS_API = "https://lichess.org/api";
 
+// Save a reference to fetch at module load time.
+// The Stockfish WASM module nullifies the global `fetch` in Node.js
+// (`fetch=null` in its init code), so any calls after engine.init()
+// would fail. This preserves a working reference.
+const _fetch = globalThis.fetch;
+
 export async function fetchLichessUser(
   username: string
 ): Promise<LichessUser> {
-  const res = await fetch(`${LICHESS_API}/user/${username}`, {
+  const res = await _fetch(`${LICHESS_API}/user/${username}`, {
     headers: { Accept: "application/json" },
   });
   if (res.status === 404)
@@ -39,7 +45,7 @@ export async function fetchLichessGames(
     params.set("perfType", speeds.join(","));
   }
 
-  const res = await fetch(
+  const res = await _fetch(
     `${LICHESS_API}/games/user/${username}?${params}`,
     {
       headers: { Accept: "application/x-ndjson" },

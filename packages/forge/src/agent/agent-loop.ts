@@ -5,7 +5,7 @@
  * with the system prompt and REPL tool. The agent writes
  * TypeScript code, we execute it, return results, and iterate.
  *
- * Follows the Witanlabs pattern: one tool (REPL), composable API,
+ * Follows the pattern: one tool (REPL), composable API,
  * persistent state, open-ended iteration until convergence.
  */
 
@@ -16,7 +16,7 @@ import { loadState, saveState, updateSession } from "../state/forge-state";
 import { createSandbox, destroySandbox } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
 import { createForgeApi } from "../repl/forge-api";
-import { buildSystemPrompt } from "./system-prompt";
+import { buildSystemPrompt, type PromptContext } from "./system-prompt";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
 import { CostTracker } from "./cost-tracker";
 import { checkConvergence, DEFAULT_CONVERGENCE } from "./convergence";
@@ -87,19 +87,46 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   const forgeApi = createForgeApi(sandbox, session, state);
   repl.inject("forge", forgeApi);
 
-  // Build system prompt
-  const systemPrompt = buildSystemPrompt({
+  // Pre-inject playerData so the agent has immediate access
+  const { getGames, loadPlayer } = await import("../data/game-store");
+  const { createSplit } = await import("../data/splits");
+
+  const playerData: Record<string, {
+    meta: ReturnType<typeof loadPlayer>;
+    games: ReturnType<typeof getGames>;
+    trainGames: ReturnType<typeof getGames>;
+    testGames: ReturnType<typeof getGames>;
+    split: ReturnType<typeof createSplit>["split"];
+  }> = {};
+
+  for (const username of opts.players ?? []) {
+    const meta = loadPlayer(username);
+    const games = getGames(username);
+    if (meta && games.length > 0) {
+      const result = createSplit(games, { seed: opts.seed, trainRatio: 0.8 });
+      playerData[username] = {
+        meta,
+        games,
+        trainGames: result.trainGames,
+        testGames: result.testGames,
+        split: result.split,
+      };
+    }
+  }
+  repl.inject("playerData", playerData);
+
+  const promptCtx: PromptContext = {
     session,
     baseline: session.baseline,
     focus: opts.focus,
     maxExperiments: opts.maxExperiments,
-  });
+  };
 
   // Initial user message
-  const initialMessage = buildInitialMessage(opts);
+  const initialMessage = buildInitialMessage(opts, playerData);
 
   try {
-    await runAgentLoop(client, repl, session, state, systemPrompt, initialMessage, costTracker, opts);
+    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts);
   } catch (err) {
     console.error(`\n  ✗ Session error: ${err}`);
     updateSession(state, sessionId, (s) => {
@@ -166,13 +193,12 @@ export async function resumeSession(
   const forgeApi = createForgeApi(sandbox, session, state);
   repl.inject("forge", forgeApi);
 
-  // Rebuild system prompt with current state
-  const systemPrompt = buildSystemPrompt({
+  const promptCtx: PromptContext = {
     session,
     baseline: session.baseline,
     focus: "accuracy", // TODO: persist focus in session
     maxExperiments: 20,
-  });
+  };
 
   // Resume message
   const resumeMessage =
@@ -186,7 +212,7 @@ export async function resumeSession(
   });
 
   try {
-    await runAgentLoop(client, repl, session, state, systemPrompt, resumeMessage, costTracker, {
+    await runAgentLoop(client, repl, session, state, promptCtx, resumeMessage, costTracker, {
       name: session.name,
       focus: "accuracy",
       maxExperiments: 20,
@@ -203,6 +229,53 @@ export async function resumeSession(
   }
 }
 
+/** Rough token estimate: ~4 chars per token for English/code */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+/** Extract text content from a message for token estimation */
+function messageText(msg: Anthropic.MessageParam): string {
+  if (typeof msg.content === "string") return msg.content;
+  return msg.content
+    .map((b) => {
+      if (b.type === "text") return b.text;
+      if (b.type === "tool_use") return JSON.stringify(b.input);
+      if (b.type === "tool_result") return typeof b.content === "string" ? b.content : "";
+      return "";
+    })
+    .join("\n");
+}
+
+/**
+ * Prune conversation history to fit within a token budget.
+ * Keeps first user message + last N turn pairs that fit.
+ * Returns a pruned copy — does not mutate the original.
+ */
+function pruneMessages(
+  messages: Anthropic.MessageParam[],
+  tokenBudget: number
+): Anthropic.MessageParam[] {
+  if (messages.length <= 3) return messages;
+
+  // Always keep the first message (initial instructions)
+  const first = messages[0];
+  const firstTokens = estimateTokens(messageText(first));
+
+  // Walk backwards, keeping turn pairs that fit
+  const kept: Anthropic.MessageParam[] = [];
+  let remaining = tokenBudget - firstTokens;
+
+  for (let i = messages.length - 1; i >= 1; i--) {
+    const tokens = estimateTokens(messageText(messages[i]));
+    if (remaining - tokens < 0 && kept.length >= 2) break;
+    remaining -= tokens;
+    kept.unshift(messages[i]);
+  }
+
+  return [first, ...kept];
+}
+
 /**
  * Main agent loop — iterates between Claude and the REPL.
  */
@@ -211,7 +284,7 @@ async function runAgentLoop(
   repl: ReturnType<typeof createReplServer>,
   session: ForgeSession,
   state: ForgeState,
-  systemPrompt: string,
+  promptCtx: PromptContext,
   initialMessage: string,
   costTracker: CostTracker,
   opts: ResearchOptions
@@ -219,6 +292,8 @@ async function runAgentLoop(
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: initialMessage },
   ];
+
+  const TOKEN_LIMIT = 9000; // stay under 10k with safety margin
 
   const convergenceConfig = {
     ...DEFAULT_CONVERGENCE,
@@ -246,9 +321,22 @@ async function runAgentLoop(
       break;
     }
 
-    // Call Claude
-    console.log(`  Turn ${turnCount}...`);
+    // Rebuild system prompt each turn (session state changes)
+    promptCtx.baseline = session.baseline;
+    const systemPrompt = buildSystemPrompt(promptCtx);
 
+    // Compute token budgets
+    const systemTokens = estimateTokens(systemPrompt) + estimateTokens(JSON.stringify(REPL_TOOL_DEFINITION));
+    const messageBudget = TOKEN_LIMIT - systemTokens;
+    const prunedMessages = pruneMessages(messages, messageBudget);
+
+    console.log(`  Turn ${turnCount} [sys:${systemTokens} msg:${messages.length}→${prunedMessages.length}]`);
+
+    if (systemTokens > 4000) {
+      console.warn(`  ⚠ System prompt ${systemTokens} tokens (budget: 4000)`);
+    }
+
+    // Call Claude
     let response: Anthropic.Message;
     try {
       response = await client.messages.create({
@@ -256,7 +344,7 @@ async function runAgentLoop(
         max_tokens: 8192,
         system: systemPrompt,
         tools: [REPL_TOOL_DEFINITION as Anthropic.Tool],
-        messages,
+        messages: prunedMessages,
       });
     } catch (err) {
       console.error(`  ✗ API error: ${err}`);
@@ -268,7 +356,7 @@ async function runAgentLoop(
           max_tokens: 8192,
           system: systemPrompt,
           tools: [REPL_TOOL_DEFINITION as Anthropic.Tool],
-          messages,
+          messages: prunedMessages,
         });
       } catch (retryErr) {
         throw new Error(`API failed after retry: ${retryErr}`);
@@ -297,7 +385,7 @@ async function runAgentLoop(
       }
     }
 
-    // Add assistant message to conversation
+    // Add assistant message to full conversation history
     messages.push({ role: "assistant", content: assistantContent });
 
     // Check if we need to handle tool calls
@@ -307,18 +395,16 @@ async function runAgentLoop(
       for (const block of assistantContent) {
         if (block.type === "tool_use" && block.name === "repl") {
           const input = block.input as { code: string };
-          console.log(
-            `  REPL: ${input.code.slice(0, 100)}${input.code.length > 100 ? "..." : ""}`
-          );
+          console.log(`  $:\n${input.code}\n  ────`);
 
           const toolOutput = await handleReplTool(repl, input);
           const formatted = formatToolOutput(toolOutput);
 
           if (toolOutput.error) {
-            console.log(`  ✗ REPL error: ${toolOutput.error.slice(0, 200)}`);
+            console.log(`  $:✗ ${toolOutput.error.slice(0, 200)}`);
           } else {
             console.log(
-              `  ✓ REPL done (${toolOutput.durationMs}ms)`
+              `  $:✓ (${toolOutput.durationMs}ms)`
             );
           }
 
@@ -384,33 +470,41 @@ async function runAgentLoop(
   }
 }
 
-function buildInitialMessage(opts: ResearchOptions): string {
+function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, any>): string {
   const parts: string[] = [];
 
-  parts.push(
-    `Start a new research session named "${opts.name}" focused on ${opts.focus}.`
-  );
+  parts.push(`Start research session "${opts.name}" focused on ${opts.focus}.`);
+  parts.push(`Seed: ${opts.seed}\n`);
 
-  if (opts.players && opts.players.length > 0) {
-    parts.push(`Target players: ${opts.players.join(", ")}.`);
-  } else {
-    parts.push(
-      `No specific players provided. Start by loading a player with forge.data.load().`
-    );
+  // Show available player data
+  parts.push("## Available Players (pre-downloaded and split)\n");
+  parts.push("Data is pre-loaded in `playerData`. Each entry has: `{ meta, games, trainGames, testGames, split }`\n");
+
+  for (const username of opts.players ?? []) {
+    const pd = playerData[username];
+    if (pd) {
+      const withEvals = pd.games.filter((g: any) => g.analysis?.length > 0).length;
+      parts.push(
+        `- **${username}**: ${pd.games.length} games (${pd.trainGames.length} train / ${pd.testGames.length} test), ` +
+        `Elo ~${pd.meta?.estimatedElo ?? "?"}, ${withEvals} with evals`
+      );
+    }
   }
 
-  parts.push(
-    `\nSteps to begin:\n` +
-      `1. Load player data and create a train/test split\n` +
-      `2. Compute baseline metrics on the test set\n` +
-      `3. Read the relevant knowledge topics for ideas\n` +
-      `4. Formulate a hypothesis and make changes\n` +
-      `5. Evaluate and compare against baseline\n` +
-      `6. Log the experiment and iterate`
-  );
+  // Give the agent a concrete first step
+  const first = opts.players?.[0];
+  parts.push(`\n## First step: compute baseline\n`);
+  parts.push("```typescript");
+  if (first) {
+    parts.push(`const baseline = await forge.eval.baseline(playerData["${first}"].testGames, playerData["${first}"].trainGames);`);
+    parts.push(`console.log("Baseline match rate:", baseline.metrics.matchRate);`);
+  }
+  parts.push("```");
+
+  parts.push(`\nAfter baseline, read knowledge topics (\`forge.knowledge.search("${opts.focus}")\`) for ideas, then start experimenting.`);
 
   if (opts.quick) {
-    parts.push(`\nUse quick evaluations (forge.eval.runQuick) for faster iteration.`);
+    parts.push(`\nUse \`forge.eval.runQuick(testGames, trainGames)\` for faster triage iterations.`);
   }
 
   return parts.join("\n");

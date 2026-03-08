@@ -26,6 +26,14 @@ export interface MoveAccuracyResult {
   confidence95: [number, number];
   /** Per-phase confidence intervals */
   phaseCI95: Record<string, [number, number]>;
+  /** Accuracy on engine-sourced positions only (excludes opening trie matches) */
+  engineOnly: number;
+  /** Accuracy on book-sourced positions only */
+  bookMatchRate: number;
+  /** Fraction of positions that came from the opening trie */
+  bookFraction: number;
+  /** Number of engine-sourced positions */
+  enginePositions: number;
 }
 
 /**
@@ -45,12 +53,30 @@ export function computeMoveAccuracy(
       positionsEvaluated: 0,
       confidence95: [0, 0],
       phaseCI95: { opening: [0, 0], middlegame: [0, 0], endgame: [0, 0] },
+      engineOnly: 0,
+      bookMatchRate: 0,
+      bookFraction: 0,
+      enginePositions: 0,
     };
   }
 
   // Overall accuracy
   const matches: number[] = positions.map((p) => (p.isMatch ? 1 : 0));
   const overall = matches.reduce((s, v) => s + v, 0) / matches.length;
+
+  // Non-book accuracy (engine-sourced positions only)
+  const enginePositions = positions.filter((p) => p.botSource !== "book");
+  const bookPositions = positions.filter((p) => p.botSource === "book");
+  const engineMatches: number[] = enginePositions.map((p) => (p.isMatch ? 1 : 0));
+  const bookMatches: number[] = bookPositions.map((p) => (p.isMatch ? 1 : 0));
+
+  const engineOnly = engineMatches.length > 0
+    ? engineMatches.reduce((s, v) => s + v, 0) / engineMatches.length
+    : 0;
+  const bookMatchRate = bookMatches.length > 0
+    ? bookMatches.reduce((s, v) => s + v, 0) / bookMatches.length
+    : 0;
+  const bookFraction = bookPositions.length / positions.length;
 
   // Bootstrap CI for overall accuracy
   const confidence95 = bootstrapCI(
@@ -89,5 +115,9 @@ export function computeMoveAccuracy(
     positionsEvaluated: positions.length,
     confidence95,
     phaseCI95,
+    engineOnly,
+    bookMatchRate,
+    bookFraction,
+    enginePositions: enginePositions.length,
   };
 }

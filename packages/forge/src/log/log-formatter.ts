@@ -1,7 +1,7 @@
 /**
  * Markdown log generation for research experiments.
  *
- * Produces structured markdown files following the Witanlabs
+ * Produces structured markdown files following the
  * research-log format: hypothesis → changes → results → conclusion.
  */
 
