@@ -77,7 +77,7 @@ export const DEFAULT_CONFIG: BotConfig = {
     minPhaseMoves: 10
   },
   boltzmann: {
-    multiPvCount: 4,
+    multiPvCount: 6,
     temperatureFloor: 0.1,
     temperatureScale: 15,
     temperatureBySkill: []
@@ -117,11 +117,11 @@ export const DEFAULT_CONFIG: BotConfig = {
     ]
   ],
   moveStyle: {
-    influence: 0,
-    captureBonus: 0,
-    checkBonus: 0,
-    quietBonus: 0,
-    skillDamping: 0
+    influence: 0.3,
+    captureBonus: 30,
+    checkBonus: 25,
+    quietBonus: 20,
+    skillDamping: 0.5
   },
   complexityDepth: {
     enabled: true,

@@ -16,7 +16,7 @@ const INACCURACY_THRESHOLD = 50;
 const MISTAKE_THRESHOLD = 100;
 const BLUNDER_THRESHOLD = 200;
 
-interface PositionEval {
+export interface PositionEval {
   fen: string;
   eval: number; // centipawns from side-to-move's perspective
   bestMove: string; // UCI notation
@@ -187,6 +187,14 @@ export class LiveGameAnalyzer {
       await new Promise((r) => setTimeout(r, 200));
     }
     return this.isComplete(totalPlies);
+  }
+
+  /**
+   * Get the evaluation for a specific ply (if available).
+   * Returns null if the position hasn't been evaluated yet.
+   */
+  getPositionEval(ply: number): PositionEval | null {
+    return this.positionEvals.get(ply) ?? null;
   }
 
   quit(): void {

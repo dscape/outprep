@@ -4,8 +4,8 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { v4 as uuidv4 } from "uuid";
 import { MoveEval, AnalysisSummary, OTBProfile } from "@/lib/types";
-import type { ErrorProfile, OpeningTrie, GameRecord } from "@outprep/engine";
-import { buildOpeningTrie } from "@outprep/engine";
+import type { ErrorProfile, OpeningTrie, GameRecord, StyleMetrics } from "@outprep/engine";
+import { buildOpeningTrie, analyzeStyleFromRecords } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
@@ -14,7 +14,7 @@ interface BotData {
   errorProfile: ErrorProfile;
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
-  gameMoves: Array<{ moves: string; playerColor: "white" | "black"; hasEvals: boolean }>;
+  gameMoves: Array<{ moves: string; playerColor: "white" | "black"; result: "white" | "black" | "draw"; hasEvals: boolean }>;
 }
 
 /** Minimal profile info needed for the play page */
@@ -174,6 +174,20 @@ export default function PlayPage() {
   // Use enhanced profile if available, otherwise fall back to bot-data profile
   const activeErrorProfile = enhancedErrorProfile || botData?.errorProfile || null;
 
+  // Compute style metrics from game history for debug panel
+  const styleMetrics = useMemo<StyleMetrics | null>(() => {
+    if (!botData?.gameMoves) return null;
+    const records: GameRecord[] = botData.gameMoves
+      .filter((g) => g.moves)
+      .map((g) => ({
+        moves: g.moves,
+        playerColor: g.playerColor,
+        result: g.result || ("draw" as const),
+      }));
+    if (records.length === 0) return null;
+    return analyzeStyleFromRecords(records);
+  }, [botData]);
+
   // Bot data label for display
   const botDataLabel = enhancedErrorProfile
     ? `Bot enhanced with Stockfish analysis`
@@ -308,6 +322,7 @@ export default function PlayPage() {
           onGameEnd={handleGameEnd}
           startingMoves={startingMoves || undefined}
           botDataLabel={botDataLabel}
+          styleMetrics={styleMetrics}
         />
       </div>
     </div>
@@ -356,6 +371,7 @@ function buildBotDataFromPGN(username: string): BotData | null {
     const gameMoves = gameRecords.map((g) => ({
       moves: g.moves,
       playerColor: g.playerColor,
+      result: g.result || ("draw" as const),
       hasEvals: false,
     }));
 

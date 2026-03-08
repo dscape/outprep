@@ -18,7 +18,7 @@ interface BotData {
   errorProfile: ErrorProfile;
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
-  gameMoves: Array<{ id: string; moves: string; playerColor: "white" | "black"; hasEvals: boolean }>;
+  gameMoves: Array<{ id: string; moves: string; playerColor: "white" | "black"; result: "white" | "black" | "draw"; hasEvals: boolean }>;
 }
 
 const cache = new Map<string, { data: BotData; expires: number }>();
@@ -91,7 +91,7 @@ export async function GET(
     let errorProfile: ErrorProfile;
     let whiteTrie: OpeningTrie;
     let blackTrie: OpeningTrie;
-    let gameMoves: Array<{ id: string; moves: string; playerColor: "white" | "black"; hasEvals: boolean }>;
+    let gameMoves: Array<{ id: string; moves: string; playerColor: "white" | "black"; result: "white" | "black" | "draw"; hasEvals: boolean }>;
 
     if (fideGameRecords) {
       // FIDE path: build from parsed game records (no eval data from PGN)
@@ -109,6 +109,7 @@ export async function GET(
         id: `fide-${i}`,
         moves: g.moves,
         playerColor: g.playerColor,
+        result: g.result || ("draw" as const),
         hasEvals: false,
       }));
     } else {
@@ -129,6 +130,7 @@ export async function GET(
           id: g.id,
           moves: g.moves,
           playerColor: g.playerColor,
+          result: g.result || "draw" as const,
           hasEvals: !!g.evals && g.evals.length > 0,
         }));
     }

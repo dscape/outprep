@@ -109,29 +109,33 @@ export class BotController {
       ? dynamicSkillLevel(this.baseSkill, this.errorProfile, phase, this.config)
       : this.baseSkill;
 
-    // 4. Run engine MultiPV (pass skill level so Stockfish weakens internally)
+    // 4. Run engine MultiPV at FULL STRENGTH (Skill Level 20)
+    //    At low Skill Level, Stockfish WASM corrupts PV output → no valid candidates.
+    //    Instead, always get clean candidates at full strength and let the Boltzmann
+    //    temperature (based on dynamic skill) handle weakening.
     const baseDepth = depthForSkill(skill, this.config);
     const depthAdj = complexityDepthAdjust(fen, this.config.complexityDepth);
     const depth = Math.max(this.config.complexityDepth.minDepth, baseDepth + depthAdj);
     const multiPVResults = await this.engine.evaluateMultiPV(
       fen,
       depth,
-      this.config.boltzmann.multiPvCount,
-      skill
+      this.config.boltzmann.multiPvCount
+      // No skillLevel → defaults to 20 (full strength)
     );
 
     // Filter to valid UCI moves only
     const validResults = multiPVResults.filter((r) => isValidUCI(r.uci));
 
     if (validResults.length === 0) {
-      // Fallback: single best move
+      // Fallback: single best move (should rarely happen with full-strength MultiPV)
       const fallback = await this.engine.evaluate(fen, depth);
       return {
         uci: fallback.uci,
         source: "engine",
-        thinkTimeMs: this.computeEngineThinkTime(phase, []),
+        thinkTimeMs: this.computeEngineThinkTime(phase, [fallback]),
         phase,
         dynamicSkill: skill,
+        candidates: [fallback],
       };
     }
 
