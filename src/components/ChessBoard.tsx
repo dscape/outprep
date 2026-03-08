@@ -5,8 +5,8 @@ import { Chessboard } from "react-chessboard";
 import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { WasmStockfishAdapter } from "@/lib/stockfish-adapter";
-import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics } from "@outprep/engine";
-import { BotController, createBot } from "@outprep/engine";
+import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics, CandidateMove } from "@outprep/engine";
+import { BotController, createBot, temperatureFromSkill } from "@outprep/engine";
 import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
 import { useDebugPanel } from "@/hooks/useDebugPanel";
 import { buildDebugEntry, type DebugMoveEntry } from "@/lib/debug-reasoning";
@@ -55,6 +55,9 @@ export default function ChessBoard({
     total: number;
   } | null>(null);
   const [debugHistory, setDebugHistory] = useState<DebugMoveEntry[]>([]);
+  const [boardArrows, setBoardArrows] = useState<
+    { startSquare: string; endSquare: string; color: string }[]
+  >([]);
   const { isOpen: debugOpen, close: closeDebug } = useDebugPanel();
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
@@ -182,6 +185,52 @@ export default function ChessBoard({
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /* ── Debug arrows: show candidate moves on the board ──────── */
+
+  function buildCandidateArrows(
+    candidates: CandidateMove[],
+    dynamicSkill: number,
+  ): { startSquare: string; endSquare: string; color: string }[] {
+    if (candidates.length === 0) return [];
+
+    // Boltzmann probabilities (same softmax as move-selector.ts)
+    const temperature = temperatureFromSkill(dynamicSkill);
+    const maxScore = Math.max(...candidates.map((c) => c.score));
+    const weights = candidates.map((c) =>
+      Math.exp((c.score - maxScore) / temperature)
+    );
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    const probs = weights.map((w) => w / totalWeight);
+
+    return candidates.map((c, i) => {
+      const from = c.uci.substring(0, 2);
+      const to = c.uci.substring(2, 4);
+      const opacity = Math.max(0.15, probs[i]);
+
+      // Green (best) → yellow (2nd) → orange (rest)
+      const color =
+        i === 0
+          ? `rgba(0, 200, 0, ${opacity.toFixed(2)})`
+          : i === 1
+            ? `rgba(255, 200, 0, ${opacity.toFixed(2)})`
+            : `rgba(255, 120, 0, ${opacity.toFixed(2)})`;
+
+      return { startSquare: from, endSquare: to, color };
+    });
+  }
+
+  function buildSelectedArrow(
+    uci: string,
+  ): { startSquare: string; endSquare: string; color: string }[] {
+    return [
+      {
+        startSquare: uci.substring(0, 2),
+        endSquare: uci.substring(2, 4),
+        color: "rgba(0, 120, 255, 0.85)",
+      },
+    ];
+  }
+
   // Bot move using BotController
   const makeBotMove = useCallback(async () => {
     const game = gameRef.current;
@@ -210,9 +259,39 @@ export default function ChessBoard({
         return;
       }
 
-      // Apply think time delay
-      await new Promise((resolve) => setTimeout(resolve, result.thinkTimeMs));
-      if (gameEndedRef.current) return;
+      // Arrow preview when debug panel is open + engine move with candidates
+      const showArrows =
+        debugOpen &&
+        result.source === "engine" &&
+        result.candidates &&
+        result.candidates.length > 1;
+
+      console.log("[Arrows] debugOpen:", debugOpen, "source:", result.source, "candidates:", result.candidates?.length, "showArrows:", showArrows);
+
+      if (showArrows) {
+        // Phase 1: Show all candidate arrows (replaces think time delay)
+        setBoardArrows(
+          buildCandidateArrows(result.candidates!, result.dynamicSkill)
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.max(1200, result.thinkTimeMs))
+        );
+        if (gameEndedRef.current) return;
+
+        // Phase 2: Highlight just the selected move
+        setBoardArrows(buildSelectedArrow(result.uci));
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (gameEndedRef.current) return;
+
+        // Phase 3: Clear arrows before playing the move
+        setBoardArrows([]);
+      } else {
+        // Normal flow: just apply think time delay
+        await new Promise((resolve) =>
+          setTimeout(resolve, result.thinkTimeMs)
+        );
+        if (gameEndedRef.current) return;
+      }
 
       // Apply the move
       const from = result.uci.substring(0, 2) as Square;
@@ -245,8 +324,9 @@ export default function ChessBoard({
       console.error("Bot move error:", err);
     } finally {
       setThinking(false);
+      setBoardArrows([]); // Safety: always clear arrows when done
     }
-  }, [playerColor, checkGameEnd]);
+  }, [playerColor, checkGameEnd, debugOpen]);
 
   // Trigger bot move when it's their turn
   useEffect(() => {
@@ -508,6 +588,7 @@ export default function ChessBoard({
             onSquareClick: onSquareClick,
             boardOrientation: playerColor,
             squareStyles: legalMoveSquares,
+            arrows: boardArrows,
             boardStyle: {
               borderRadius: "8px",
               boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
