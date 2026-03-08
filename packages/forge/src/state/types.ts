@@ -20,6 +20,9 @@ export interface ForgeSession {
   /** Git worktree branch name */
   worktreeBranch: string;
 
+  /** Research focus area */
+  focus: string;
+
   /** Players evaluated in this session */
   players: string[];
 

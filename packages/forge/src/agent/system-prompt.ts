@@ -9,12 +9,13 @@
  * 5. Convergence/stopping rules
  */
 
-import type { ForgeSession, BaselineSnapshot } from "../state/types";
-import { buildKnowledgeContext } from "../knowledge/index";
+import type { ForgeSession, ForgeState, BaselineSnapshot } from "../state/types";
+import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { formatTrend, computeTrend } from "../log/trend-tracker";
 
 export interface PromptContext {
   session: ForgeSession;
+  state: ForgeState;
   baseline: BaselineSnapshot | null;
   focus: string;
   maxExperiments: number;
@@ -38,6 +39,14 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // Domain knowledge (relevant to focus area)
   const knowledge = buildKnowledgeContext(ctx.focus);
   if (knowledge) sections.push(knowledge);
+
+  // Inter-agent notes from previous sessions
+  const notes = buildNotesContext(5);
+  if (notes) sections.push(notes);
+
+  // Past sessions summary
+  const pastSessions = buildPastSessionsSummary(ctx.state, ctx.session.id);
+  if (pastSessions) sections.push(pastSessions);
 
   // Session state
   sections.push(buildSessionState(ctx));
@@ -97,7 +106,9 @@ forge.config: get() | set(path, value) | reset()
 forge.data: load(username) | split(games, opts) | getGames(username) | listPlayers()
 forge.eval: run(testGames, {trainGames}) | runQuick(testGames, trainGames?, n?) | baseline(testGames, trainGames?) | compare(a, b)
 forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile(positions) | composite(positions, rawMetrics) | significance(base, exp)
-forge.knowledge: search(query) | read(topicId) | append(topicId, entry)
+forge.knowledge: search(query) | read(topicId) | append(topicId, entry) | create({id, title, relevance, content}) | compact(topicId, keepRecent?) | archives(topicId)
+forge.knowledge (notes): note(content, tags?) | notes({limit?, tags?}) | searchNotes(query)
+forge.history: sessions({status?, player?}) | searchExperiments(query) | experiment(id)
 forge.oracle: ask(question, context?) | history()
 forge.log: record(experiment) | trend() | summary()
 forge.session: checkpoint() | accept() | reject()`;
@@ -142,6 +153,25 @@ function buildSessionState(ctx: PromptContext): string {
   return lines.join("\n");
 }
 
+function buildPastSessionsSummary(state: ForgeState, currentSessionId: string): string {
+  const past = state.sessions.filter((s) => s.id !== currentSessionId);
+  if (past.length === 0) return "";
+
+  const lines: string[] = ["## Past Research Sessions"];
+  for (const s of past.slice(-10)) { // last 10 sessions
+    const best = s.bestResult
+      ? `best composite: ${s.bestResult.compositeScore.toFixed(4)}`
+      : "no results";
+    lines.push(
+      `- **${s.name}** (${s.status}) — ${s.experiments.length} experiments, ${best}, focus: ${s.focus ?? "accuracy"}`
+    );
+  }
+  lines.push(
+    `\nUse \`forge.history.sessions()\` and \`forge.history.searchExperiments(query)\` for details.`
+  );
+  return lines.join("\n");
+}
+
 function buildRules(maxExperiments: number): string {
   return `## Rules
 
@@ -150,10 +180,12 @@ function buildRules(maxExperiments: number): string {
 3. **Check significance** before concluding an experiment worked. Use \`forge.eval.compare()\`.
 4. **Log every experiment** with \`forge.log.record()\`. Include hypothesis, changes, results, conclusion.
 5. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
-6. **Consult knowledge base** before trying a new approach. Don't repeat failed experiments.
+6. **Consult knowledge, notes, AND history** before trying a new approach. Run \`forge.knowledge.search(topic)\`, \`forge.knowledge.notes({ tags: [topic] })\`, and \`forge.history.searchExperiments(topic)\` to check what previous sessions discovered. Don't repeat failed experiments.
 7. **Use oracle sparingly** — only at genuine decision points (max 5 per session).
 8. **Typecheck after code changes** with \`forge.code.typecheck()\` before running eval.
-8. **Max ${maxExperiments} experiments** per session. Prioritize high-impact changes.
-9. **Start with quick evals** (\`forge.eval.runQuick()\`) for triage, then full eval for promising changes.
-10. **Revert failed experiments** before trying the next one.`;
+9. **Max ${maxExperiments} experiments** per session. Prioritize high-impact changes.
+10. **Start with quick evals** (\`forge.eval.runQuick()\`) for triage, then full eval for promising changes.
+11. **Revert failed experiments** before trying the next one.
+12. **Leave notes** for future sessions. After each experiment, use \`forge.knowledge.note(summary, [tags])\` to record key findings, especially failures and dead ends. Create new topics with \`forge.knowledge.create()\` when you discover novel knowledge.
+13. **Keep knowledge lean**. If a topic's experiment history grows beyond 10 entries, compact it with \`forge.knowledge.compact(topicId)\`.`;
 }

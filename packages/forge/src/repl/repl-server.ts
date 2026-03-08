@@ -225,15 +225,19 @@ export function createReplServer(globals?: Record<string, unknown>): ReplServer 
         let result: unknown;
         if (promise && typeof promise === "object" && "then" in promise) {
           // It's a Promise — await with timeout
+          // Use unref() so the timer doesn't keep the process alive
+          let timer: ReturnType<typeof setTimeout>;
           result = await Promise.race([
             promise,
-            new Promise((_, reject) =>
-              setTimeout(
+            new Promise((_, reject) => {
+              timer = setTimeout(
                 () => reject(new Error(`Execution timed out after ${timeoutMs}ms`)),
                 timeoutMs
-              )
-            ),
+              );
+              timer.unref();
+            }),
           ]);
+          clearTimeout(timer!);
         } else {
           result = promise;
         }

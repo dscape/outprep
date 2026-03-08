@@ -259,4 +259,87 @@ program
     console.log();
   });
 
+/* ── clean ───────────────────────────────────────────────── */
+
+program
+  .command("clean")
+  .description("Remove sessions and their sandboxes")
+  .option("--all", "Remove all sessions without prompting")
+  .option("--id <session-id>", "Remove a specific session by ID prefix")
+  .action(async (opts) => {
+    const state = loadState();
+
+    if (state.sessions.length === 0) {
+      console.log("\n  No sessions to clean.\n");
+      return;
+    }
+
+    const { destroySandbox, listSandboxes } = await import("./repl/sandbox");
+    const sandboxes = listSandboxes();
+
+    let toRemove: typeof state.sessions;
+
+    if (opts.id) {
+      // Remove a specific session by ID prefix
+      toRemove = state.sessions.filter((s) => s.id.startsWith(opts.id));
+      if (toRemove.length === 0) {
+        console.error(`  ✗ No session matching "${opts.id}"`);
+        process.exit(1);
+      }
+    } else if (opts.all) {
+      toRemove = [...state.sessions];
+    } else {
+      // Show sessions and let user confirm
+      console.log("\n  Sessions:");
+      for (const s of state.sessions) {
+        const exps = s.experiments.length;
+        const best = s.bestResult
+          ? `best: ${(s.bestResult.moveAccuracy * 100).toFixed(1)}%`
+          : "no results";
+        console.log(
+          `  ${s.id.slice(0, 8)}  ${s.name.padEnd(25)} ${s.status.padEnd(10)} ${exps} exps  ${best}`
+        );
+      }
+
+      // Use readline for confirmation
+      const readline = await import("node:readline");
+      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const answer = await new Promise<string>((resolve) => {
+        rl.question("\n  Remove all sessions? (y/N): ", resolve);
+      });
+      rl.close();
+
+      if (answer.toLowerCase() !== "y") {
+        console.log("  Cancelled.\n");
+        return;
+      }
+      toRemove = [...state.sessions];
+    }
+
+    // Remove sandboxes (worktrees + branches)
+    let cleaned = 0;
+    for (const session of toRemove) {
+      const sandbox = sandboxes.find((s) => s.sessionId === session.id);
+      if (sandbox) {
+        try {
+          destroySandbox(sandbox);
+          console.log(`  ✓ Removed sandbox for ${session.name} (${session.id.slice(0, 8)})`);
+        } catch (err) {
+          console.error(`  ✗ Failed to remove sandbox for ${session.id.slice(0, 8)}: ${err}`);
+        }
+      }
+      cleaned++;
+    }
+
+    // Remove from state
+    const removeIds = new Set(toRemove.map((s) => s.id));
+    state.sessions = state.sessions.filter((s) => !removeIds.has(s.id));
+    if (removeIds.has(state.activeSessionId ?? "")) {
+      state.activeSessionId = null;
+    }
+    saveState(state);
+
+    console.log(`\n  Cleaned ${cleaned} session(s).\n`);
+  });
+
 program.parse();

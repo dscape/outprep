@@ -65,6 +65,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     updatedAt: new Date().toISOString(),
     status: "active",
     worktreeBranch: sandbox.branchName,
+    focus: opts.focus,
     players: opts.players ?? [],
     baseline: null,
     experiments: [],
@@ -117,6 +118,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
 
   const promptCtx: PromptContext = {
     session,
+    state,
     baseline: session.baseline,
     focus: opts.focus,
     maxExperiments: opts.maxExperiments,
@@ -155,6 +157,12 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     console.log(
       `  Best composite: ${session.bestResult.compositeScore.toFixed(4)}`
     );
+  } else if (session.experiments.length === 0) {
+    console.log(`  No experiments were recorded.`);
+  }
+
+  if (session.status === "paused") {
+    console.log(`\n  Resume with: forge resume ${session.id.slice(0, 8)}`);
   }
   console.log();
 }
