@@ -5,9 +5,12 @@ import { Chessboard } from "react-chessboard";
 import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { WasmStockfishAdapter } from "@/lib/stockfish-adapter";
-import type { ErrorProfile, OpeningTrie, BotMoveResult } from "@outprep/engine";
-import { BotController, createBot } from "@outprep/engine";
+import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics, CandidateMove } from "@outprep/engine";
+import { BotController, createBot, temperatureFromSkill } from "@outprep/engine";
 import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
+import { useDebugPanel } from "@/hooks/useDebugPanel";
+import { buildDebugEntry, type DebugMoveEntry } from "@/lib/debug-reasoning";
+import DebugPanel from "@/components/DebugPanel";
 
 interface ChessBoardProps {
   playerColor: "white" | "black";
@@ -21,6 +24,7 @@ interface ChessBoardProps {
   }) => void;
   startingMoves?: string[];
   botDataLabel?: string;
+  styleMetrics?: StyleMetrics | null;
 }
 
 export default function ChessBoard({
@@ -32,6 +36,7 @@ export default function ChessBoard({
   onGameEnd,
   startingMoves,
   botDataLabel,
+  styleMetrics,
 }: ChessBoardProps) {
   const gameRef = useRef(new Chess());
   const [fen, setFen] = useState(gameRef.current.fen());
@@ -49,6 +54,11 @@ export default function ChessBoard({
     evaluated: number;
     total: number;
   } | null>(null);
+  const [debugHistory, setDebugHistory] = useState<DebugMoveEntry[]>([]);
+  const [boardArrows, setBoardArrows] = useState<
+    { startSquare: string; endSquare: string; color: string }[]
+  >([]);
+  const { isOpen: debugOpen, close: closeDebug } = useDebugPanel();
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
@@ -147,6 +157,7 @@ export default function ChessBoard({
           errorProfile,
           openingTrie,
           botColor,
+          styleMetrics,
         });
         botRef.current = bot;
         setEngineReady(true);
@@ -161,6 +172,7 @@ export default function ChessBoard({
             errorProfile,
             openingTrie,
             botColor,
+            styleMetrics,
           });
           botRef.current = bot;
           setEngineReady(true);
@@ -172,6 +184,52 @@ export default function ChessBoard({
       analyzer.quit();
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* ── Debug arrows: show candidate moves on the board ──────── */
+
+  function buildCandidateArrows(
+    candidates: CandidateMove[],
+    dynamicSkill: number,
+  ): { startSquare: string; endSquare: string; color: string }[] {
+    if (candidates.length === 0) return [];
+
+    // Boltzmann probabilities (same softmax as move-selector.ts)
+    const temperature = temperatureFromSkill(dynamicSkill);
+    const maxScore = Math.max(...candidates.map((c) => c.score));
+    const weights = candidates.map((c) =>
+      Math.exp((c.score - maxScore) / temperature)
+    );
+    const totalWeight = weights.reduce((a, b) => a + b, 0);
+    const probs = weights.map((w) => w / totalWeight);
+
+    return candidates.map((c, i) => {
+      const from = c.uci.substring(0, 2);
+      const to = c.uci.substring(2, 4);
+      const opacity = Math.max(0.15, probs[i]);
+
+      // Green (best) → yellow (2nd) → orange (rest)
+      const color =
+        i === 0
+          ? `rgba(0, 200, 0, ${opacity.toFixed(2)})`
+          : i === 1
+            ? `rgba(255, 200, 0, ${opacity.toFixed(2)})`
+            : `rgba(255, 120, 0, ${opacity.toFixed(2)})`;
+
+      return { startSquare: from, endSquare: to, color };
+    });
+  }
+
+  function buildSelectedArrow(
+    uci: string,
+  ): { startSquare: string; endSquare: string; color: string }[] {
+    return [
+      {
+        startSquare: uci.substring(0, 2),
+        endSquare: uci.substring(2, 4),
+        color: "rgba(0, 120, 255, 0.85)",
+      },
+    ];
+  }
 
   // Bot move using BotController
   const makeBotMove = useCallback(async () => {
@@ -191,7 +249,8 @@ export default function ChessBoard({
     setThinking(true);
 
     try {
-      const result: BotMoveResult = await bot.getMove(game.fen());
+      const fenBeforeMove = game.fen(); // Capture FEN before bot moves
+      const result: BotMoveResult = await bot.getMove(fenBeforeMove);
       if (gameEndedRef.current) return;
 
       // Validate UCI before proceeding
@@ -200,9 +259,39 @@ export default function ChessBoard({
         return;
       }
 
-      // Apply think time delay
-      await new Promise((resolve) => setTimeout(resolve, result.thinkTimeMs));
-      if (gameEndedRef.current) return;
+      // Arrow preview when debug panel is open + engine move with candidates
+      const showArrows =
+        debugOpen &&
+        result.source === "engine" &&
+        result.candidates &&
+        result.candidates.length > 1;
+
+      console.log("[Arrows] debugOpen:", debugOpen, "source:", result.source, "candidates:", result.candidates?.length, "showArrows:", showArrows);
+
+      if (showArrows) {
+        // Phase 1: Show all candidate arrows (replaces think time delay)
+        setBoardArrows(
+          buildCandidateArrows(result.candidates!, result.dynamicSkill)
+        );
+        await new Promise((resolve) =>
+          setTimeout(resolve, Math.max(1200, result.thinkTimeMs))
+        );
+        if (gameEndedRef.current) return;
+
+        // Phase 2: Highlight just the selected move
+        setBoardArrows(buildSelectedArrow(result.uci));
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        if (gameEndedRef.current) return;
+
+        // Phase 3: Clear arrows before playing the move
+        setBoardArrows([]);
+      } else {
+        // Normal flow: just apply think time delay
+        await new Promise((resolve) =>
+          setTimeout(resolve, result.thinkTimeMs)
+        );
+        if (gameEndedRef.current) return;
+      }
 
       // Apply the move
       const from = result.uci.substring(0, 2) as Square;
@@ -222,14 +311,22 @@ export default function ChessBoard({
         // Record position for live analysis
         analyzerRef.current?.recordPosition(plyRef.current, game.fen());
 
+        // Debug: accumulate full bot reasoning with Stockfish comparison
+        // evalBefore = position before bot moved (ply N-1), evalAfter = position after (ply N)
+        const evalBefore = analyzerRef.current?.getPositionEval(plyRef.current - 1) ?? null;
+        const evalAfter = analyzerRef.current?.getPositionEval(plyRef.current) ?? null;
+        const entry = buildDebugEntry(plyRef.current, result, fenBeforeMove, evalBefore, evalAfter);
+        setDebugHistory(prev => [...prev, entry]);
+
         checkGameEnd(game);
       }
     } catch (err) {
       console.error("Bot move error:", err);
     } finally {
       setThinking(false);
+      setBoardArrows([]); // Safety: always clear arrows when done
     }
-  }, [playerColor, checkGameEnd]);
+  }, [playerColor, checkGameEnd, debugOpen]);
 
   // Trigger bot move when it's their turn
   useEffect(() => {
@@ -246,6 +343,35 @@ export default function ChessBoard({
       return () => clearTimeout(timeout);
     }
   }, [fen, playerColor, engineReady, makeBotMove]);
+
+  // Lazy-update: back-fill Stockfish data on debug entries when LiveAnalyzer catches up
+  useEffect(() => {
+    if (!debugOpen || !analyzerRef.current) return;
+    const interval = setInterval(() => {
+      setDebugHistory((prev) => {
+        let changed = false;
+        const updated = prev.map((entry) => {
+          // Skip entries that already have Stockfish data
+          if (entry.stockfishEval !== null) return entry;
+          const evalBefore =
+            analyzerRef.current?.getPositionEval(entry.ply - 1) ?? null;
+          const evalAfter =
+            analyzerRef.current?.getPositionEval(entry.ply) ?? null;
+          if (!evalBefore) return entry; // Not ready yet
+          changed = true;
+          return buildDebugEntry(
+            entry.ply,
+            entry.result,
+            entry.fen,
+            evalBefore,
+            evalAfter
+          );
+        });
+        return changed ? updated : prev;
+      });
+    }, 2000);
+    return () => clearInterval(interval);
+  }, [debugOpen]);
 
   // ── Shared helper: highlight legal moves for a given square ──
 
@@ -421,6 +547,14 @@ export default function ChessBoard({
 
   return (
     <div className="flex flex-col items-center gap-4">
+      {debugOpen && (
+        <DebugPanel
+          entries={debugHistory}
+          onClose={closeDebug}
+          errorProfile={errorProfile}
+          styleMetrics={styleMetrics}
+        />
+      )}
       {/* Status bar */}
       <div className="flex items-center gap-3 text-sm flex-wrap justify-center">
         {moveSource === "book" && (
@@ -454,6 +588,7 @@ export default function ChessBoard({
             onSquareClick: onSquareClick,
             boardOrientation: playerColor,
             squareStyles: legalMoveSquares,
+            arrows: boardArrows,
             boardStyle: {
               borderRadius: "8px",
               boxShadow: "0 4px 20px rgba(0,0,0,0.4)",
