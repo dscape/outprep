@@ -101,11 +101,16 @@ program
       process.exit(1);
     }
 
-    const session = state.sessions.find((s) => s.id === id);
-    if (!session) {
-      console.error(`  ✗ Session ${id} not found.`);
+    const matches = state.sessions.filter((s) => s.id.startsWith(id));
+    if (matches.length === 0) {
+      console.error(`  ✗ No session matching "${id}".`);
       process.exit(1);
     }
+    if (matches.length > 1) {
+      console.error(`  ✗ Ambiguous ID "${id}" matches ${matches.length} sessions. Be more specific.`);
+      process.exit(1);
+    }
+    const session = matches[0];
 
     if (session.status !== "paused" && session.status !== "active") {
       console.error(
@@ -257,6 +262,160 @@ program
     console.log(`  CPL KL Div:     ${baseline.aggregate.cplKLDivergence.toFixed(4)}`);
     console.log(`  Composite:      ${baseline.aggregate.compositeScore.toFixed(4)}`);
     console.log();
+  });
+
+/* ── repl ────────────────────────────────────────────────── */
+
+program
+  .command("repl [players...]")
+  .description("Interactive REPL with the forge API")
+  .option("--players <list>", "Comma-separated Lichess usernames to pre-load")
+  .option("--seed <n>", "Random seed", "42")
+  .option("--session <id>", "Attach to an existing session (by ID prefix)")
+  .action(async (positionalPlayers: string[], opts) => {
+    const { createReplServer } = await import("./repl/repl-server");
+    const { createSandbox, listSandboxes } = await import("./repl/sandbox");
+    const { createForgeApi } = await import("./repl/forge-api");
+    const { randomUUID } = await import("node:crypto");
+    const readline = await import("node:readline");
+
+    const state = loadState();
+    let session: any;
+    let sandbox: any;
+
+    if (opts.session) {
+      // Attach to existing session
+      const matches = state.sessions.filter((s: any) => s.id.startsWith(opts.session));
+      if (matches.length === 0) {
+        console.error(`  ✗ No session matching "${opts.session}"`);
+        process.exit(1);
+      }
+      session = matches[0];
+      const sandboxes = listSandboxes();
+      sandbox = sandboxes.find((s: any) => s.sessionId === session.id);
+      if (!sandbox) {
+        console.error(`  ✗ No sandbox for session ${session.id.slice(0, 8)}`);
+        process.exit(1);
+      }
+      console.log(`\n  Attached to session: ${session.name} (${session.id.slice(0, 8)})`);
+    } else {
+      // Create a temporary session
+      const sessionId = randomUUID();
+      sandbox = createSandbox(sessionId);
+      session = {
+        id: sessionId,
+        name: "repl-interactive",
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        status: "active",
+        worktreeBranch: sandbox.branchName,
+        focus: "accuracy",
+        players: [],
+        baseline: null,
+        experiments: [],
+        bestResult: null,
+        bestExperimentId: null,
+        activeChanges: [],
+        conversationHistory: [],
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCostUsd: 0,
+        oracleConsultations: [],
+      };
+      console.log(`\n  Forge REPL (temp session ${sessionId.slice(0, 8)})`);
+    }
+
+    const repl = createReplServer();
+    const forgeApi = createForgeApi(sandbox, session, state);
+    repl.inject("forge", forgeApi);
+
+    // Pre-load player data if requested (accept --players flag OR positional args)
+    const playerList = opts.players
+      ? opts.players.split(",").map((s: string) => s.trim())
+      : positionalPlayers.flatMap((s: string) => s.split(",").map((p) => p.trim()));
+
+    if (playerList.length > 0) {
+      const players = playerList;
+      const { fetchPlayer, getGames, loadPlayer } = await import("./data/game-store");
+      const { createSplit } = await import("./data/splits");
+      const seed = parseInt(opts.seed, 10);
+
+      const playerData: Record<string, any> = {};
+      for (const username of players) {
+        try {
+          console.log(`  Loading ${username}...`);
+          await fetchPlayer(username);
+          const meta = loadPlayer(username);
+          const games = getGames(username);
+          if (games.length > 0) {
+            const result = createSplit(games, { seed, trainRatio: 0.8 });
+            playerData[username] = { meta, games, ...result };
+            console.log(`  ✓ ${username}: ${games.length} games`);
+          }
+        } catch (err) {
+          console.error(`  ✗ ${username}: ${err}`);
+        }
+      }
+      repl.inject("playerData", playerData);
+    }
+
+    console.log("  Type TypeScript code. Use `forge.*` and `playerData`. Ctrl+D to exit.\n");
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      prompt: "forge> ",
+      completer: (line: string) => repl.complete(line),
+    });
+
+    rl.prompt();
+
+    let buffer = "";
+
+    rl.on("line", async (line: string) => {
+      // Support multi-line input with trailing backslash
+      if (line.endsWith("\\")) {
+        buffer += line.slice(0, -1) + "\n";
+        process.stdout.write("  ... ");
+        return;
+      }
+
+      const code = buffer + line;
+      buffer = "";
+
+      if (!code.trim()) {
+        rl.prompt();
+        return;
+      }
+
+      const result = await repl.execute(code);
+
+      if (result.output) {
+        console.log(result.output);
+      }
+      if (result.error) {
+        console.error(`  ✗ ${result.error}`);
+      } else if (result.result !== undefined) {
+        try {
+          const display = typeof result.result === "string"
+            ? result.result
+            : JSON.stringify(result.result, null, 2);
+          if (display && display !== "undefined") {
+            console.log(display);
+          }
+        } catch {
+          console.log(String(result.result));
+        }
+      }
+      console.log(`  (${result.durationMs}ms)`);
+      rl.prompt();
+    });
+
+    rl.on("close", () => {
+      console.log("\n  Bye.\n");
+      repl.dispose();
+      process.exit(0);
+    });
   });
 
 /* ── clean ───────────────────────────────────────────────── */

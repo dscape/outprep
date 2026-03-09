@@ -33,6 +33,8 @@ export interface ReplServer {
   execute(code: string, timeoutMs?: number): Promise<ReplResult>;
   /** Inject a value into the REPL context (available as a global). */
   inject(name: string, value: unknown): void;
+  /** Get tab-completion candidates for a dotted expression (e.g. "forge.co"). */
+  complete(line: string): [string[], string];
   /** Reset the REPL context (clear all variables). */
   reset(): void;
   /** Destroy the REPL server and release resources. */
@@ -261,6 +263,32 @@ export function createReplServer(globals?: Record<string, unknown>): ReplServer 
           durationMs,
         };
       }
+    },
+
+    complete(line: string): [string[], string] {
+      // Extract the dotted expression being typed (e.g. "forge.co" from "const x = forge.co")
+      const match = line.match(/([\w.]+)$/);
+      if (!match) return [[], line];
+      const expr = match[1];
+
+      const parts = expr.split(".");
+      // Walk the context object along the dot-path
+      let obj: unknown = contextObj;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (obj == null || typeof obj !== "object") return [[], expr];
+        obj = (obj as Record<string, unknown>)[parts[i]];
+      }
+
+      if (obj == null || typeof obj !== "object") return [[], expr];
+
+      const prefix = parts.slice(0, -1).join(".");
+      const partial = parts[parts.length - 1];
+      const keys = Object.keys(obj as Record<string, unknown>);
+      const hits = keys
+        .filter((k) => k.startsWith(partial))
+        .map((k) => (prefix ? `${prefix}.${k}` : k));
+
+      return [hits, expr];
     },
 
     inject(name: string, value: unknown): void {

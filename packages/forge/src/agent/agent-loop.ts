@@ -17,6 +17,7 @@ import { createSandbox, destroySandbox } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
 import { createForgeApi } from "../repl/forge-api";
 import { buildSystemPrompt, type PromptContext } from "./system-prompt";
+import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
 import { CostTracker } from "./cost-tracker";
 import { checkConvergence, DEFAULT_CONVERGENCE } from "./convergence";
@@ -201,10 +202,12 @@ export async function resumeSession(
   const forgeApi = createForgeApi(sandbox, session, state);
   repl.inject("forge", forgeApi);
 
+  const focus = session.focus ?? "accuracy";
   const promptCtx: PromptContext = {
     session,
+    state,
     baseline: session.baseline,
-    focus: "accuracy", // TODO: persist focus in session
+    focus,
     maxExperiments: 20,
   };
 
@@ -222,7 +225,7 @@ export async function resumeSession(
   try {
     await runAgentLoop(client, repl, session, state, promptCtx, resumeMessage, costTracker, {
       name: session.name,
-      focus: "accuracy",
+      focus,
       maxExperiments: 20,
       seed: 42,
       quick: false,
@@ -310,6 +313,7 @@ async function runAgentLoop(
 
   let turnCount = 0;
   const maxTurns = opts.maxExperiments * 10; // ~10 API calls per experiment
+  let knowledgeSummarized = false;
 
   while (turnCount < maxTurns) {
     turnCount++;
@@ -449,23 +453,45 @@ async function runAgentLoop(
         .join("\n")
         .toLowerCase();
 
-      if (
+      const wantsDone =
         lastText.includes("session complete") ||
         lastText.includes("research complete") ||
         lastText.includes("stopping") ||
-        lastText.includes("no further improvements")
-      ) {
+        lastText.includes("no further improvements");
+
+      if (wantsDone && !knowledgeSummarized) {
+        // Ask agent to summarize findings before closing
+        knowledgeSummarized = true;
+        messages.push({
+          role: "user",
+          content: [
+            "Before closing, please:",
+            "1. Leave a note with `forge.knowledge.note(summary, [tags])` summarizing your key findings and recommendations for future sessions.",
+            "2. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
+            "3. Create new topics with `forge.knowledge.create()` for any novel knowledge areas you discovered.",
+          ].join("\n"),
+        });
+        continue;
+      }
+
+      if (wantsDone) {
         updateSession(state, session.id, (s) => {
           s.status = "completed";
         });
         break;
       }
 
-      // Otherwise, prompt the agent to continue
+      // Otherwise, prompt the agent to continue with refreshed knowledge context
+      const freshKnowledge = buildKnowledgeContext(opts.focus, 2);
+      const freshNotes = buildNotesContext(3);
+      const contextRefresh = [freshKnowledge, freshNotes].filter(Boolean).join("\n\n");
+
       messages.push({
         role: "user",
-        content:
+        content: [
           "Continue with the next experiment. Use the REPL tool to make changes and evaluate.",
+          contextRefresh ? `\n## Updated Knowledge Context\n\n${contextRefresh}` : "",
+        ].join("\n"),
       });
     }
   }
@@ -509,7 +535,18 @@ function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, a
   }
   parts.push("```");
 
-  parts.push(`\nAfter baseline, read knowledge topics (\`forge.knowledge.search("${opts.focus}")\`) for ideas, then start experimenting.`);
+  parts.push(`\nAfter baseline, consult previous work before experimenting:`);
+  parts.push("```typescript");
+  parts.push(`// 1. Domain knowledge topics`);
+  parts.push(`forge.knowledge.search("${opts.focus}")`);
+  parts.push(`// 2. Notes from previous sessions`);
+  parts.push(`forge.knowledge.notes({ limit: 5 })`);
+  parts.push(`// 3. Past experiments on this topic`);
+  parts.push(`forge.history.searchExperiments("${opts.focus}")`);
+  parts.push(`// 4. Overview of all past sessions`);
+  parts.push(`forge.history.sessions()`);
+  parts.push("```");
+  parts.push(`\nUse these to avoid repeating failed experiments and build on previous findings.`);
 
   if (opts.quick) {
     parts.push(`\nUse \`forge.eval.runQuick(testGames, trainGames)\` for faster triage iterations.`);
