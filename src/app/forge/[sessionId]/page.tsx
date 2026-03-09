@@ -40,7 +40,7 @@ export default async function SessionDetailPage({
         </p>
       </div>
 
-      <SessionTabs session={session} logs={logs} />
+      <SessionTabs session={session} logs={logs} isDev={process.env.NODE_ENV === "development"} />
     </div>
   );
 }

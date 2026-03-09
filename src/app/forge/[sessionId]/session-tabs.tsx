@@ -8,15 +8,21 @@ import { OracleCard } from "@/components/forge/OracleCard";
 import { MarkdownContent } from "@/components/forge/MarkdownContent";
 import { AccuracyTrendChart } from "@/components/forge/charts/AccuracyTrendChart";
 import { CostChart } from "@/components/forge/charts/CostChart";
+import { AccuracyToHumanChart } from "@/components/forge/charts/AccuracyToHumanChart";
+import { CplAccuracyChart } from "@/components/forge/charts/CplAccuracyChart";
+import { ErrorRateByPhaseChart } from "@/components/forge/charts/ErrorRateByPhaseChart";
+import { ConsoleLogViewer } from "@/components/forge/ConsoleLogViewer";
 
-type Tab = "overview" | "experiments" | "oracle" | "logs";
+type Tab = "overview" | "experiments" | "oracle" | "logs" | "console";
 
 export function SessionTabs({
   session,
   logs,
+  isDev,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
   logs: { filename: string; content: string }[];
+  isDev?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
 
@@ -25,6 +31,7 @@ export function SessionTabs({
     { key: "experiments", label: "Experiments", count: session.experiments.length },
     { key: "oracle", label: "Oracle", count: session.oracleConsultations.length },
     { key: "logs", label: "Logs", count: logs.length },
+    ...(isDev ? [{ key: "console" as Tab, label: "Console" }] : []),
   ];
 
   return (
@@ -54,6 +61,9 @@ export function SessionTabs({
       )}
       {tab === "oracle" && <OracleTab session={session} />}
       {tab === "logs" && <LogsTab logs={logs} />}
+      {tab === "console" && (
+        <ConsoleLogViewer sessionId={session.id} sessionStatus={session.status} />
+      )}
     </div>
   );
 }
@@ -126,6 +136,21 @@ function OverviewTab({
             experiments={session.experiments}
             oracleConsultations={session.oracleConsultations}
           />
+        </div>
+      )}
+
+      {/* Improvement vector charts */}
+      {session.experiments.length > 0 && (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <AccuracyToHumanChart
+            experiments={session.experiments}
+            baselineAccuracy={session.baseline?.aggregate.moveAccuracy}
+          />
+          <CplAccuracyChart
+            experiments={session.experiments}
+            baselineCplKL={session.baseline?.aggregate.cplKLDivergence}
+          />
+          <ErrorRateByPhaseChart experiments={session.experiments} />
         </div>
       )}
 

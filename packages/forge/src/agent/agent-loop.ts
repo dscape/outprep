@@ -21,6 +21,7 @@ import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
 import { CostTracker } from "./cost-tracker";
 import { checkConvergence, DEFAULT_CONVERGENCE } from "./convergence";
+import { createLogWriter, type LogWriter } from "./log-writer";
 import type { ForgeSession, ForgeState, ConversationMessage } from "../state/types";
 
 export interface ResearchOptions {
@@ -46,17 +47,24 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   const state = loadState();
   const costTracker = new CostTracker();
   const sessionId = randomUUID();
+  const logWriter = createLogWriter(opts.name);
+  const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
+    if (level === "error") console.error(msg);
+    else if (level === "warn") console.warn(msg);
+    else console.log(msg);
+    logWriter.log(msg, level);
+  };
 
-  console.log(`\n  Forge Research Session: ${opts.name}`);
-  console.log(`  Session ID: ${sessionId.slice(0, 8)}`);
-  console.log(`  Focus: ${opts.focus}`);
-  console.log(`  Max experiments: ${opts.maxExperiments}`);
-  console.log();
+  log(`\n  Forge Research Session: ${opts.name}`);
+  log(`  Session ID: ${sessionId.slice(0, 8)}`);
+  log(`  Focus: ${opts.focus}`);
+  log(`  Max experiments: ${opts.maxExperiments}`);
+  log(``);
 
   // Create sandbox (git worktree)
-  console.log("  Creating sandbox...");
+  log("  Creating sandbox...");
   const sandbox = createSandbox(sessionId);
-  console.log(`  Sandbox: ${sandbox.worktreePath}`);
+  log(`  Sandbox: ${sandbox.worktreePath}`);
 
   // Create session record
   const session: ForgeSession = {
@@ -131,9 +139,9 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   const initialMessage = buildInitialMessage(opts, playerData);
 
   try {
-    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts);
+    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts, logWriter);
   } catch (err) {
-    console.error(`\n  ✗ Session error: ${err}`);
+    log(`\n  ✗ Session error: ${err}`, "error");
     updateSession(state, sessionId, (s) => {
       s.status = "paused";
     });
@@ -147,27 +155,28 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
 
   // Final summary
   const cost = costTracker.getSnapshot();
-  console.log("\n  Session Complete");
-  console.log("  ════════════════════════════════════════");
-  console.log(`  Status: ${session.status}`);
-  console.log(`  Experiments: ${session.experiments.length}`);
-  console.log(`  Cost: ${costTracker.format()}`);
+  log("\n  Session Complete");
+  log("  ════════════════════════════════════════");
+  log(`  Status: ${session.status}`);
+  log(`  Experiments: ${session.experiments.length}`);
+  log(`  Cost: ${costTracker.format()}`);
 
   if (session.bestResult) {
-    console.log(
+    log(
       `  Best accuracy: ${(session.bestResult.moveAccuracy * 100).toFixed(1)}%`
     );
-    console.log(
+    log(
       `  Best composite: ${session.bestResult.compositeScore.toFixed(4)}`
     );
   } else if (session.experiments.length === 0) {
-    console.log(`  No experiments were recorded.`);
+    log(`  No experiments were recorded.`);
   }
 
   if (session.status === "paused") {
-    console.log(`\n  Resume with: forge resume ${session.id.slice(0, 8)}`);
+    log(`\n  Resume with: forge resume ${session.id.slice(0, 8)}`);
   }
-  console.log();
+  log(``);
+  logWriter.close();
 }
 
 /**
@@ -185,6 +194,13 @@ export async function resumeSession(
 
   const client = new Anthropic({ apiKey });
   const costTracker = new CostTracker();
+  const logWriter = createLogWriter(session.name);
+  const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
+    if (level === "error") console.error(msg);
+    else if (level === "warn") console.warn(msg);
+    else console.log(msg);
+    logWriter.log(msg, level);
+  };
 
   // Find the sandbox
   const { listSandboxes } = await import("../repl/sandbox");
@@ -192,12 +208,12 @@ export async function resumeSession(
   const sandbox = sandboxes.find((s) => s.sessionId === session.id);
 
   if (!sandbox) {
-    console.error(`  ✗ Sandbox not found for session ${session.id.slice(0, 8)}`);
+    log(`  ✗ Sandbox not found for session ${session.id.slice(0, 8)}`, "error");
     process.exit(1);
   }
 
-  console.log(`\n  Resuming session: ${session.name}`);
-  console.log(`  Experiments so far: ${session.experiments.length}`);
+  log(`\n  Resuming session: ${session.name}`);
+  log(`  Experiments so far: ${session.experiments.length}`);
 
   // Recreate REPL, rebuild playerData, and inject forge API
   const repl = createReplServer();
@@ -246,14 +262,15 @@ export async function resumeSession(
       maxExperiments: 20,
       seed: 42,
       quick: false,
-    });
+    }, logWriter);
   } catch (err) {
-    console.error(`\n  ✗ Session error: ${err}`);
+    log(`\n  ✗ Session error: ${err}`, "error");
     updateSession(state, session.id, (s) => {
       s.status = "paused";
     });
   } finally {
     repl.dispose();
+    logWriter.close();
   }
 }
 
@@ -315,8 +332,15 @@ async function runAgentLoop(
   promptCtx: PromptContext,
   initialMessage: string,
   costTracker: CostTracker,
-  opts: ResearchOptions
+  opts: ResearchOptions,
+  logWriter?: LogWriter
 ): Promise<void> {
+  const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
+    if (level === "error") console.error(msg);
+    else if (level === "warn") console.warn(msg);
+    else console.log(msg);
+    logWriter?.log(msg, level);
+  };
   const messages: Anthropic.MessageParam[] = [
     { role: "user", content: initialMessage },
   ];
@@ -343,7 +367,7 @@ async function runAgentLoop(
     );
 
     if (convergence.shouldStop) {
-      console.log(`\n  ⏹ Stopping: ${convergence.reason}`);
+      log(`\n  ⏹ Stopping: ${convergence.reason}`);
       updateSession(state, session.id, (s) => {
         s.status = "completed";
       });
@@ -359,10 +383,10 @@ async function runAgentLoop(
     const messageBudget = TOKEN_LIMIT - systemTokens;
     const prunedMessages = pruneMessages(messages, messageBudget);
 
-    console.log(`  Turn ${turnCount} [sys:${systemTokens} msg:${messages.length}→${prunedMessages.length}]`);
+    log(`  Turn ${turnCount} [sys:${systemTokens} msg:${messages.length}→${prunedMessages.length}]`);
 
     if (systemTokens > 4000) {
-      console.warn(`  ⚠ System prompt ${systemTokens} tokens (budget: 4000)`);
+      log(`  ⚠ System prompt ${systemTokens} tokens (budget: 4000)`, "warn");
     }
 
     // Call Claude
@@ -376,7 +400,7 @@ async function runAgentLoop(
         messages: prunedMessages,
       });
     } catch (err) {
-      console.error(`  ✗ API error: ${err}`);
+      log(`  ✗ API error: ${err}`, "error");
       // Wait and retry once
       await new Promise((r) => setTimeout(r, 5000));
       try {
@@ -410,7 +434,7 @@ async function runAgentLoop(
     // Log text blocks
     for (const block of assistantContent) {
       if (block.type === "text") {
-        console.log(`  Agent: ${block.text.slice(0, 200)}${block.text.length > 200 ? "..." : ""}`);
+        log(`  Agent: ${block.text.slice(0, 200)}${block.text.length > 200 ? "..." : ""}`);
       }
     }
 
@@ -424,17 +448,15 @@ async function runAgentLoop(
       for (const block of assistantContent) {
         if (block.type === "tool_use" && block.name === "repl") {
           const input = block.input as { code: string };
-          console.log(`  $:\n${input.code}\n  ────`);
+          log(`  $:\n${input.code}\n  ────`);
 
           const toolOutput = await handleReplTool(repl, input);
           const formatted = formatToolOutput(toolOutput);
 
           if (toolOutput.error) {
-            console.log(`  $:✗ ${toolOutput.error.slice(0, 200)}`);
+            log(`  $:✗ ${toolOutput.error.slice(0, 200)}`, "error");
           } else {
-            console.log(
-              `  $:✓ (${toolOutput.durationMs}ms)`
-            );
+            log(`  $:✓ (${toolOutput.durationMs}ms)`);
           }
 
           toolResults.push({
@@ -449,7 +471,7 @@ async function runAgentLoop(
       messages.push({ role: "user", content: toolResults });
     } else if (response.stop_reason === "end_turn") {
       // Agent chose to stop (no more tool calls)
-      console.log("  Agent ended turn without tool call");
+      log("  Agent ended turn without tool call");
 
       // Save conversation history
       updateSession(state, session.id, (s) => {
@@ -517,7 +539,7 @@ async function runAgentLoop(
   }
 
   if (turnCount >= maxTurns) {
-    console.log(`\n  ⏹ Max turns reached (${maxTurns})`);
+    log(`\n  ⏹ Max turns reached (${maxTurns})`);
     updateSession(state, session.id, (s) => {
       s.status = "paused";
     });

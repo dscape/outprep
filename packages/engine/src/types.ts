@@ -196,7 +196,7 @@ export interface BotConfig {
     /**
      * Per-band temperature table (same pattern as depthBySkill).
      * Array of [maxSkill, temperature] pairs, checked in order.
-     * Gives the tuner independent control over temperature at each skill tier.
+     * Gives independent control over temperature at each skill tier.
      */
     temperatureBySkill: [number, number][];
   };

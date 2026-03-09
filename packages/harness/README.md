@@ -23,9 +23,6 @@ npm run harness:run -- -d DrNykterstein --label high-temp \
 # 4. Compare results side-by-side
 npm run harness:compare -- baseline high-temp
 
-# 5. Visualize in the dashboard
-npm run dashboard
-# Then drag result JSON files onto the page
 ```
 
 ## Commands
@@ -134,24 +131,6 @@ npm run harness:run -- -d <dataset> --seed <seed> --label repro \
 
 With the same seed and config, the seeded PRNG produces identical bot behavior.
 
-## Dashboard
-
-The companion dashboard (`packages/dashboard`) visualizes results across iterations:
-
-```bash
-npm run dashboard
-```
-
-Open http://localhost:5180 and drag result JSON files onto the page. The dashboard shows:
-
-- **Overview** — Summary cards, comparison table, config diff
-- **Phase Breakdown** — Match rate by opening/middlegame/endgame
-- **CPL Analysis** — Actual vs bot CPL, delta comparison
-- **Accuracy** — Stacked breakdown: exact match / top-4 / miss
-- **Trends** — Metrics over time across multiple runs
-
-Each card displays the engine version and git commit for traceability.
-
 ## Workflow: Iterating on the Engine
 
 1. Create a dataset once: `npm run harness:create -- -u <player> -n 200`
@@ -159,8 +138,7 @@ Each card displays the engine version and git commit for traceability.
 3. Make a code change in `packages/engine/`
 4. Run again: `npm run harness:run -- -d <player> --label <descriptive-name>`
 5. Compare: `npm run harness:compare -- baseline <descriptive-name>`
-6. Load both in the dashboard for visual comparison
-7. The git commit in each result tells you exactly which code version produced it
+6. The git commit in each result tells you exactly which code version produced it
 
 ## Performance
 

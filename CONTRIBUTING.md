@@ -34,11 +34,10 @@ packages/
   engine/               Core bot logic (pure TypeScript, no framework deps)
   fide-pipeline/        TWIC/FIDE data pipeline (download, parse, seed Postgres)
   harness/              CLI for accuracy testing against real games
-  tuner/                Autonomous parameter optimizer (needs Claude API key)
-  dashboard/            Vite + React results visualizer
+  forge/                Autonomous research agent (uses Claude API)
 ```
 
-The `engine` package is the foundation — it has no dependencies on Next.js or the UI. The `harness` and `tuner` build on top of it. The main app in `src/` ties everything together.
+The `engine` package is the foundation — it has no dependencies on Next.js or the UI. The `harness` and `forge` build on top of it. The main app in `src/` ties everything together.
 
 ## Working with the database
 
@@ -125,17 +124,6 @@ npm run harness:run -- --dataset datasets/SomePlayer.json
 ```
 
 This gives you match rate, top-4 rate, and CPL delta metrics to measure the impact of your changes.
-
-## Working with the tuner
-
-The tuner requires an Anthropic API key:
-
-```bash
-cp packages/tuner/.env.example packages/tuner/.env
-# Edit .env and add your key
-```
-
-Never commit `.env` files. The `.gitignore` already excludes them.
 
 ## Questions?
 

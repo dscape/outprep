@@ -75,6 +75,13 @@ export function getSessionLogs(
   }
 }
 
+/* ── Console Logs ──────────────────────────────────────── */
+
+export function getConsoleLogPath(sessionName: string): string | null {
+  const p = path.join(LOGS_DIR, sessionName, "console.jsonl");
+  return fs.existsSync(p) ? p : null;
+}
+
 /* ── Knowledge ──────────────────────────────────────────── */
 
 function parseFrontmatter(raw: string): {

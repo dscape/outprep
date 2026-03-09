@@ -15,8 +15,7 @@
     "harness:create": "npm run harness -- create-dataset",
     "harness:run": "npm run harness -- run",
     "harness:compare": "npm run harness -- compare",
-    "dashboard": "npm run --workspace=packages/dashboard dev",
-    "tuner": "npm run --workspace=packages/tuner tuner --",
+    "forge-dashboard": "next dev --port 3001",
     "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --",
     "forge": "npm run --workspace=packages/forge forge --",
     "twic-archive": "bash scripts/create-twic-archive.sh"

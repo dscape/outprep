@@ -1,8 +1,7 @@
 /**
  * Persistent state management for forge sessions.
  *
- * Saves/loads forge-state.json at the package root, following
- * the same pattern as the tuner's tuner-state.json.
+ * Saves/loads forge-state.json at the package root.
  */
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";

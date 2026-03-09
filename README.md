@@ -66,13 +66,12 @@ The bot uses Boltzmann move selection over Stockfish MultiPV lines, with per-pha
 This is an npm workspaces monorepo:
 
 ```
-src/                    Next.js app (frontend + API routes)
+src/                    Next.js app (frontend + API routes + forge dashboard)
 packages/
   engine/               Core bot logic (move selection, config, types)
   fide-pipeline/        TWIC/FIDE data pipeline (download, parse, seed Postgres)
   harness/              CLI to replay positions and measure bot accuracy
-  tuner/                Autonomous parameter optimizer (uses Claude API)
-  dashboard/            Vite + React app to visualize harness results
+  forge/                Autonomous research agent (iterative bot accuracy improvement)
 ```
 
 ### `@outprep/engine`
@@ -112,36 +111,45 @@ npm run harness:run -- --dataset datasets/DrNykterstein.json
 npm run harness:compare -- results/a.json results/b.json
 ```
 
-### `@outprep/tuner`
+### `@outprep/forge`
 
-Autonomous agent that sweeps engine parameters, measures accuracy with the harness, and sends results to Claude for analysis. Produces human-readable proposals with suggested config changes.
-
-```bash
-# Copy the env template and add your Anthropic API key
-cp packages/tuner/.env.example packages/tuner/.env
-
-# Run a full tuning cycle
-npm run tuner -- start
-```
-
-The tuner follows a state machine: **gather** datasets, **sweep** parameters, **analyze** with Claude, generate a **proposal**, then wait for human review (`accept` / `reject`).
+Autonomous research agent that iteratively improves bot accuracy. Forge uses Claude to propose code/config changes, evaluates them against held-out test games, and keeps what works. Each research session runs in an isolated git worktree.
 
 ```bash
-npm run tuner -- status      # Check current state
-npm run tuner -- history     # View past proposals
-npm run tuner -- accept      # Apply the latest proposal to DEFAULT_CONFIG
-npm run tuner -- reject      # Archive and skip
+# Copy the env template and add your Anthropic API key (+ optional OpenAI key for oracle)
+cp packages/forge/.env.example packages/forge/.env
+
+# Start a research session targeting a player's accuracy
+npm run forge -- research --players "username" --focus accuracy
+
+# Resume a paused session
+npm run forge -- resume --session "session-name"
+
+# Check session status
+npm run forge -- status
+
+# View session history
+npm run forge -- history
 ```
 
-### `@outprep/dashboard`
+Key concepts:
+- **Sessions** — isolated research runs, each in their own git worktree branch (`forge/<uuid>`)
+- **Experiments** — individual code/config changes with measured metric deltas and statistical significance
+- **Oracle** — multi-model consultation pipeline (Claude → ChatGPT → Claude synthesis) for strategic decisions
+- **Knowledge base** — persistent domain knowledge in `packages/forge/src/knowledge/topics/`
 
-Drag-and-drop harness result JSON files to visualize accuracy trends, phase breakdowns, CPL analysis, and config diffs.
+#### Forge Dashboard
+
+A built-in web dashboard for tracking experiments, viewing costs, browsing knowledge, and reading oracle consultations. Runs on a separate port so it doesn't conflict with the main app.
 
 ```bash
-npm run dashboard
+npm run forge-dashboard
 ```
 
-Opens at [http://localhost:5180](http://localhost:5180).
+Opens at [http://localhost:3001/forge](http://localhost:3001/forge). Shows:
+- **Sessions overview** — all research sessions with status, cost, experiment count
+- **Session detail** — tabbed view with overview/metrics, experiment timeline, oracle consultations, and logs
+- **Knowledge browser** — topics and agent notes from the knowledge base
 
 ## Database
 
@@ -175,9 +183,9 @@ Schema migrations are applied automatically by `npm run fide-pipeline -- seed-db
 | `npm run harness:create` | Create a test dataset from Lichess |
 | `npm run harness:run` | Run accuracy test |
 | `npm run harness:compare` | Compare two result sets |
-| `npm run tuner -- start` | Run a full tuning cycle |
-| `npm run tuner -- status` | Check tuner state |
-| `npm run dashboard` | Open the results dashboard |
+| `npm run forge -- research` | Start a forge research session |
+| `npm run forge -- status` | Check forge session status |
+| `npm run forge-dashboard` | Open the forge dashboard (port 3001) |
 
 ## Tech stack
 
@@ -187,7 +195,7 @@ Schema migrations are applied automatically by `npm run fide-pipeline -- seed-db
 - [Stockfish](https://stockfishchess.org) 18 WASM for evaluation
 - [react-chessboard](https://github.com/Clariity/react-chessboard) for board UI
 - [Lichess API](https://lichess.org/api) for player data
-- [Claude API](https://docs.anthropic.com) for tuner analysis
+- [Claude API](https://docs.anthropic.com) for forge research agent
 
 ## Contributing
 
