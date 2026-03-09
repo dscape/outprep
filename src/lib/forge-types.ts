@@ -186,4 +186,6 @@ export interface SessionSummary {
   totalOutputTokens: number;
   bestCompositeScore: number | null;
   worktreeBranch: string;
+  /** True when the agent process is actually running (PID alive) */
+  isRunning: boolean;
 }

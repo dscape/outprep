@@ -7,10 +7,12 @@ import type { SessionStatus } from "@/lib/forge-types";
 export function SessionControls({
   sessionId,
   status,
+  isRunning = false,
   onTabChange,
 }: {
   sessionId: string;
   status: SessionStatus;
+  isRunning?: boolean;
   onTabChange?: (tab: string) => void;
 }) {
   const router = useRouter();
@@ -58,7 +60,7 @@ export function SessionControls({
 
   return (
     <div className="flex items-center gap-2">
-      {(status === "paused" || status === "abandoned") && (
+      {!isRunning && (status === "paused" || status === "abandoned") && (
         <button
           onClick={handleResume}
           disabled={loading}
@@ -68,7 +70,7 @@ export function SessionControls({
         </button>
       )}
 
-      {status === "active" && (
+      {isRunning && (
         <>
           <button
             onClick={() => onTabChange?.("console")}

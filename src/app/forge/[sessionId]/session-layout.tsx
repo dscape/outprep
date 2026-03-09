@@ -13,7 +13,7 @@ export function SessionLayout({
   isDev,
   created,
 }: {
-  session: Omit<ForgeSession, "conversationHistory">;
+  session: Omit<ForgeSession, "conversationHistory"> & { isRunning?: boolean };
   logs: { filename: string; content: string }[];
   activity: ActivityEvent[];
   isDev: boolean;
@@ -33,6 +33,7 @@ export function SessionLayout({
           <SessionControls
             sessionId={session.id}
             status={session.status}
+            isRunning={session.isRunning}
             onTabChange={(t) => setTab(t as Tab)}
           />
         </div>

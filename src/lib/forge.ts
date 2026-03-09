@@ -9,6 +9,7 @@ import type {
 
 const FORGE_ROOT = process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
 const STATE_PATH = path.join(FORGE_ROOT, "forge-state.json");
+const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
 const TOPICS_DIR = path.join(FORGE_ROOT, "src", "knowledge", "topics");
 const NOTES_DIR = path.join(FORGE_ROOT, "src", "knowledge", "notes");
 const LOGS_DIR = path.join(FORGE_ROOT, "logs");
@@ -32,38 +33,62 @@ export function loadForgeState(): ForgeState | null {
   }
 }
 
+/**
+ * Check if a forge agent process is actually running via PID file.
+ */
+function isAgentRunning(sessionId: string): boolean {
+  try {
+    const raw = fs.readFileSync(path.join(PIDS_DIR, `${sessionId}.pid`), "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (!Number.isFinite(pid)) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getSessionSummaries(): SessionSummary[] {
   const state = loadForgeState();
   if (!state) return [];
 
-  return state.sessions.map((s) => ({
-    id: s.id,
-    name: s.name,
-    status: s.status,
-    createdAt: s.createdAt,
-    updatedAt: s.updatedAt,
-    focus: s.focus,
-    players: s.players,
-    experimentCount: s.experiments.length,
-    oracleCount: s.oracleConsultations.length,
-    totalCostUsd: s.totalCostUsd,
-    totalInputTokens: s.totalInputTokens,
-    totalOutputTokens: s.totalOutputTokens,
-    bestCompositeScore: s.bestResult?.compositeScore ?? null,
-    worktreeBranch: s.worktreeBranch,
-  }));
+  return state.sessions.map((s) => {
+    const running = isAgentRunning(s.id);
+    // If state says "active" but no process is alive, it's actually paused
+    const status = s.status === "active" && !running ? "paused" : s.status;
+    return {
+      id: s.id,
+      name: s.name,
+      status,
+      createdAt: s.createdAt,
+      updatedAt: s.updatedAt,
+      focus: s.focus,
+      players: s.players,
+      experimentCount: s.experiments.length,
+      oracleCount: s.oracleConsultations.length,
+      totalCostUsd: s.totalCostUsd,
+      totalInputTokens: s.totalInputTokens,
+      totalOutputTokens: s.totalOutputTokens,
+      bestCompositeScore: s.bestResult?.compositeScore ?? null,
+      worktreeBranch: s.worktreeBranch,
+      isRunning: running,
+    };
+  });
 }
 
-export function getSession(id: string): Omit<ForgeSession, "conversationHistory"> | null {
+export function getSession(id: string): (Omit<ForgeSession, "conversationHistory"> & { isRunning: boolean }) | null {
   const state = loadForgeState();
   if (!state) return null;
 
   const session = state.sessions.find((s) => s.id === id);
   if (!session) return null;
 
+  const running = isAgentRunning(session.id);
+  const status = session.status === "active" && !running ? "paused" : session.status;
+
   // Strip conversationHistory (large, only needed for agent resume)
   const { conversationHistory: _, ...rest } = session;
-  return rest;
+  return { ...rest, status, isRunning: running };
 }
 
 /**
