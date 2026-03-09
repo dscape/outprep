@@ -135,12 +135,37 @@ export interface ForgeApi {
 export function createForgeApi(
   sandbox: SandboxInfo,
   session: ForgeSession,
-  state: ForgeState
+  state: ForgeState,
+  playerDataRef?: Record<string, { trainGames: LichessGame[]; testGames: LichessGame[] }>
 ): ForgeApi {
   const codeOps = createCodeOps(sandbox);
   const configOps = createConfigOps(sandbox);
-  const evalOps = createEvalOps(sandbox);
+  const rawEvalOps = createEvalOps(sandbox);
   const sessionOps = createSessionOps(sandbox, session, state, codeOps, configOps);
+
+  // Infer trainGames from playerData when not explicitly provided
+  function inferTrainGames(testGames: LichessGame[]): LichessGame[] | undefined {
+    if (!playerDataRef) return undefined;
+    for (const pd of Object.values(playerDataRef)) {
+      if (pd.testGames === testGames) return pd.trainGames;
+    }
+    return undefined;
+  }
+
+  // Wrap eval ops to auto-inject trainGames from playerData
+  const evalOps: EvalOps = {
+    async run(testGames, opts = {}) {
+      if (!opts.trainGames) opts.trainGames = inferTrainGames(testGames);
+      return rawEvalOps.run(testGames, opts);
+    },
+    async runQuick(testGames, trainGames?, n?) {
+      return rawEvalOps.runQuick(testGames, trainGames ?? inferTrainGames(testGames), n);
+    },
+    async baseline(testGames, trainGames?) {
+      return rawEvalOps.baseline(testGames, trainGames ?? inferTrainGames(testGames));
+    },
+    compare: rawEvalOps.compare.bind(rawEvalOps),
+  };
 
   // ── Data namespace ──
   const data: DataOps = {

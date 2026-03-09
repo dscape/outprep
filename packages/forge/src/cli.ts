@@ -325,23 +325,18 @@ program
       console.log(`\n  Forge REPL (temp session ${sessionId.slice(0, 8)})`);
     }
 
-    const repl = createReplServer();
-    const forgeApi = createForgeApi(sandbox, session, state);
-    repl.inject("forge", forgeApi);
-
     // Pre-load player data if requested (accept --players flag OR positional args)
     const playerList = opts.players
       ? opts.players.split(",").map((s: string) => s.trim())
       : positionalPlayers.flatMap((s: string) => s.split(",").map((p) => p.trim()));
 
+    const playerData: Record<string, any> = {};
     if (playerList.length > 0) {
-      const players = playerList;
       const { fetchPlayer, getGames, loadPlayer } = await import("./data/game-store");
       const { createSplit } = await import("./data/splits");
       const seed = parseInt(opts.seed, 10);
 
-      const playerData: Record<string, any> = {};
-      for (const username of players) {
+      for (const username of playerList) {
         try {
           console.log(`  Loading ${username}...`);
           await fetchPlayer(username);
@@ -356,8 +351,12 @@ program
           console.error(`  ✗ ${username}: ${err}`);
         }
       }
-      repl.inject("playerData", playerData);
     }
+
+    const repl = createReplServer();
+    const forgeApi = createForgeApi(sandbox, session, state, playerData);
+    repl.inject("forge", forgeApi);
+    repl.inject("playerData", playerData);
 
     console.log("  Type TypeScript code. Use `forge.*` and `playerData`. Ctrl+D to exit.\n");
 

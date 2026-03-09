@@ -86,11 +86,11 @@ ${focusDetail[focus] ?? focusDetail.accuracy}
 2. **CPL Distribution Match** (20% weight) — KL divergence between bot and player CPL histograms. Lower = better.
 3. **Blunder Rate Profile** (15% weight) — Per-phase |bot blunder rate - player blunder rate|. Lower = better.
 
-### Critical Methodology Requirements
-- **Train/test split**: Profile (error profile, opening trie, style) built from TRAIN games only. Accuracy measured on TEST games only. Never evaluate on training data.
-- **Phase-balanced sampling**: 40% opening, 40% middlegame, 20% endgame positions.
-- **Statistical significance**: Use \`forge.eval.compare(a, b)\` to check significance before concluding.
-- **Reproducibility**: Same seed = same results. Record split hashes in experiment logs.`;
+### Methodology
+- **Train/test separation is automatic** — just pass \`playerData[username].testGames\` to eval methods.
+- **Phase-balanced sampling**: 40% opening, 40% middlegame, 20% endgame.
+- **Statistical significance**: Use \`forge.eval.compare(a, b)\` before concluding.
+- **Reproducibility**: Same seed = same results.`;
 }
 
 const API_DOCS = `## Forge API
@@ -99,12 +99,12 @@ Globals: \`forge\`, \`playerData\`. No \`require\`/\`import\`. Use \`await\` for
 
 \`playerData["username"]\` → { meta, games, trainGames, testGames, split } (pre-loaded, pre-split 80/20).
 Do NOT call \`forge.data.load()\` for players already in \`playerData\`.
-Always pass trainGames to eval methods to avoid data leakage.
+Train/test separation is automatic: eval methods auto-detect trainGames from playerData when you pass playerData[username].testGames.
 
 forge.code: read(file) | write(file, content) | patch(file, {search,replace}) | diff() | revert(file?) | listModifiable() | typecheck()
 forge.config: get() | set(path, value) | reset()
 forge.data: load(username) | split(games, opts) | getGames(username) | listPlayers()
-forge.eval: run(testGames, {trainGames}) | runQuick(testGames, trainGames?, n?) | baseline(testGames, trainGames?) | compare(a, b)
+forge.eval: run(testGames, opts?) | runQuick(testGames, trainGames?, n?) | baseline(testGames, trainGames?) | compare(a, b)
 forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile(positions) | composite(positions, rawMetrics) | significance(base, exp)
 forge.knowledge: search(query) | read(topicId) | append(topicId, entry) | create({id, title, relevance, content}) | compact(topicId, keepRecent?) | archives(topicId)
 forge.knowledge (notes): note(content, tags?) | notes({limit?, tags?}) | searchNotes(query)
@@ -175,17 +175,30 @@ function buildPastSessionsSummary(state: ForgeState, currentSessionId: string): 
 function buildRules(maxExperiments: number): string {
   return `## Rules
 
-1. **Use \`playerData\`** — player data is pre-loaded and split. Use \`playerData["username"].trainGames\` and \`.testGames\` directly. Do NOT call \`forge.data.load()\` for players already in \`playerData\`.
-2. **Always use train/test split**. Never build profiles from test data.
-3. **Check significance** before concluding an experiment worked. Use \`forge.eval.compare()\`.
-4. **Log every experiment** with \`forge.log.record()\`. Include hypothesis, changes, results, conclusion.
-5. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
-6. **Consult knowledge, notes, AND history** before trying a new approach. Run \`forge.knowledge.search(topic)\`, \`forge.knowledge.notes({ tags: [topic] })\`, and \`forge.history.searchExperiments(topic)\` to check what previous sessions discovered. Don't repeat failed experiments.
-7. **Use oracle sparingly** — only at genuine decision points (max 5 per session).
-8. **Typecheck after code changes** with \`forge.code.typecheck()\` before running eval.
-9. **Max ${maxExperiments} experiments** per session. Prioritize high-impact changes.
-10. **Start with quick evals** (\`forge.eval.runQuick()\`) for triage, then full eval for promising changes.
-11. **Revert failed experiments** before trying the next one.
-12. **Leave notes** for future sessions. After each experiment, use \`forge.knowledge.note(summary, [tags])\` to record key findings, especially failures and dead ends. Create new topics with \`forge.knowledge.create()\` when you discover novel knowledge.
-13. **Keep knowledge lean**. If a topic's experiment history grows beyond 10 entries, compact it with \`forge.knowledge.compact(topicId)\`.`;
+1. **Use \`playerData\`** — data is pre-loaded and split. Use \`playerData["username"].testGames\` for eval. Train/test separation is automatic.
+2. **Check significance** before concluding an experiment worked. Use \`forge.eval.compare()\`.
+3. **Max ${maxExperiments} experiments** per session. Start with quick evals (\`forge.eval.runQuick()\`) for triage, full eval for promising changes.
+4. **Typecheck after code changes** with \`forge.code.typecheck()\` before running eval.
+5. **Revert failed experiments** before trying the next one.
+6. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
+
+### Mandatory: Notes After Every Experiment
+After EACH experiment (success or failure), you MUST call:
+\`\`\`
+forge.knowledge.note("EXP <name>: <hypothesis>. Result: <metric delta>. Conclusion: <what was learned>", ["<focus>", "<technique>"])
+\`\`\`
+Also log with \`forge.log.record()\`. If you discover a novel insight, create a topic with \`forge.knowledge.create()\`. Compact topics with 10+ entries via \`forge.knowledge.compact(topicId)\`.
+
+### Mandatory: Consult Oracle for Research Decisions
+Use \`forge.oracle.ask(question, context)\` whenever you face ambiguity:
+- **Before your first experiment**: ask the oracle what approach to try given the baseline metrics and player profile.
+- **When an experiment fails unexpectedly**: ask why and what to try next.
+- **When choosing between approaches**: ask the oracle to compare trade-offs.
+- **Before making code changes**: ask about the expected effect on metrics.
+The oracle cross-validates with multiple LLMs — use it to make better decisions. Aim for 3-5 oracle calls per session.
+
+### Mandatory: Consult History Before New Approaches
+Before trying something new, run:
+\`forge.knowledge.search(topic)\`, \`forge.knowledge.notes({ tags: [topic] })\`, \`forge.history.searchExperiments(topic)\`
+Don't repeat failed experiments.`;
 }

@@ -84,10 +84,8 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   state.activeSessionId = sessionId;
   saveState(state);
 
-  // Create REPL and inject forge API
+  // Create REPL and inject forge API (playerData passed after construction below)
   const repl = createReplServer();
-  const forgeApi = createForgeApi(sandbox, session, state);
-  repl.inject("forge", forgeApi);
 
   // Pre-inject playerData so the agent has immediate access
   const { getGames, loadPlayer } = await import("../data/game-store");
@@ -116,6 +114,10 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     }
   }
   repl.inject("playerData", playerData);
+
+  // Create forge API with playerData ref so eval auto-injects trainGames
+  const forgeApi = createForgeApi(sandbox, session, state, playerData);
+  repl.inject("forge", forgeApi);
 
   const promptCtx: PromptContext = {
     session,
@@ -197,9 +199,24 @@ export async function resumeSession(
   console.log(`\n  Resuming session: ${session.name}`);
   console.log(`  Experiments so far: ${session.experiments.length}`);
 
-  // Recreate REPL and forge API
+  // Recreate REPL, rebuild playerData, and inject forge API
   const repl = createReplServer();
-  const forgeApi = createForgeApi(sandbox, session, state);
+
+  const { getGames, loadPlayer } = await import("../data/game-store");
+  const { createSplit } = await import("../data/splits");
+
+  const playerData: Record<string, any> = {};
+  for (const username of session.players) {
+    const meta = loadPlayer(username);
+    const games = getGames(username);
+    if (meta && games.length > 0) {
+      const result = createSplit(games, { seed: 42, trainRatio: 0.8 });
+      playerData[username] = { meta, games, ...result };
+    }
+  }
+  repl.inject("playerData", playerData);
+
+  const forgeApi = createForgeApi(sandbox, session, state, playerData);
   repl.inject("forge", forgeApi);
 
   const focus = session.focus ?? "accuracy";
@@ -489,7 +506,9 @@ async function runAgentLoop(
       messages.push({
         role: "user",
         content: [
-          "Continue with the next experiment. Use the REPL tool to make changes and evaluate.",
+          "Continue with the next experiment. Remember:",
+          "- Ask the oracle (`forge.oracle.ask(question, context)`) if you're unsure what to try next.",
+          "- After each experiment, leave a note (`forge.knowledge.note(summary, [tags])`).",
           contextRefresh ? `\n## Updated Knowledge Context\n\n${contextRefresh}` : "",
         ].join("\n"),
       });
@@ -530,23 +549,27 @@ function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, a
   parts.push(`\n## First step: compute baseline\n`);
   parts.push("```typescript");
   if (first) {
-    parts.push(`const baseline = await forge.eval.baseline(playerData["${first}"].testGames, playerData["${first}"].trainGames);`);
+    parts.push(`const baseline = await forge.eval.baseline(playerData["${first}"].testGames);`);
     parts.push(`console.log("Baseline match rate:", baseline.metrics.matchRate);`);
   }
   parts.push("```");
 
-  parts.push(`\nAfter baseline, consult previous work before experimenting:`);
+  parts.push(`\n## After baseline, follow this workflow:\n`);
+  parts.push(`**Step 1: Consult history** — check what previous sessions learned:`);
   parts.push("```typescript");
-  parts.push(`// 1. Domain knowledge topics`);
-  parts.push(`forge.knowledge.search("${opts.focus}")`);
-  parts.push(`// 2. Notes from previous sessions`);
-  parts.push(`forge.knowledge.notes({ limit: 5 })`);
-  parts.push(`// 3. Past experiments on this topic`);
-  parts.push(`forge.history.searchExperiments("${opts.focus}")`);
-  parts.push(`// 4. Overview of all past sessions`);
-  parts.push(`forge.history.sessions()`);
+  parts.push(`await forge.knowledge.search("${opts.focus}")`);
+  parts.push(`await forge.knowledge.notes({ limit: 5 })`);
+  parts.push(`await forge.history.searchExperiments("${opts.focus}")`);
   parts.push("```");
-  parts.push(`\nUse these to avoid repeating failed experiments and build on previous findings.`);
+  parts.push(`\n**Step 2: Ask the oracle** — before your first experiment, consult the oracle for strategy:`);
+  parts.push("```typescript");
+  parts.push(`await forge.oracle.ask("Given baseline metrics and ${opts.focus} focus, what is the highest-impact first experiment?", JSON.stringify(baseline))`);
+  parts.push("```");
+  parts.push(`\n**Step 3: Run experiment, then ALWAYS leave a note:**`);
+  parts.push("```typescript");
+  parts.push(`forge.knowledge.note("EXP <name>: <hypothesis>. Result: <delta>. Conclusion: <learning>", ["${opts.focus}", "<technique>"])`);
+  parts.push("```");
+  parts.push(`\nRepeat steps 2-3. Use the oracle whenever you're unsure which direction to take next.`);
 
   if (opts.quick) {
     parts.push(`\nUse \`forge.eval.runQuick(testGames, trainGames)\` for faster triage iterations.`);
