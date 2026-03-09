@@ -264,6 +264,68 @@ program
     console.log();
   });
 
+/* ── push ────────────────────────────────────────────────── */
+
+program
+  .command("push [session-id]")
+  .description("Push research branch to GitHub for PR review")
+  .action(async (sessionId?: string) => {
+    const { execSync } = await import("node:child_process");
+    const { commitSandbox } = await import("./repl/sandbox");
+    const state = loadState();
+
+    const id = sessionId ?? state.activeSessionId;
+    if (!id) {
+      console.error("  ✗ No active session. Specify a session ID.");
+      process.exit(1);
+    }
+
+    const matches = state.sessions.filter((s) => s.id.startsWith(id));
+    if (matches.length === 0) {
+      console.error(`  ✗ No session matching "${id}".`);
+      process.exit(1);
+    }
+    if (matches.length > 1) {
+      console.error(`  ✗ Ambiguous ID "${id}" matches ${matches.length} sessions.`);
+      process.exit(1);
+    }
+
+    const session = matches[0];
+    const sandboxes = listSandboxes();
+    const sandbox = sandboxes.find((s) => s.sessionId === session.id);
+
+    if (!sandbox) {
+      console.error(`  ✗ No sandbox for session ${session.id.slice(0, 8)}`);
+      process.exit(1);
+    }
+
+    // Commit any uncommitted changes
+    commitSandbox(sandbox, `forge: pre-push checkpoint for ${session.name}`);
+
+    // Push
+    const branchName = sandbox.branchName;
+    console.log(`\n  Pushing ${branchName}...`);
+    execSync(`git push -u origin "${branchName}"`, {
+      cwd: sandbox.worktreePath,
+      stdio: "inherit",
+    });
+
+    // Print PR link
+    try {
+      const remoteUrl = execSync("git remote get-url origin", {
+        cwd: sandbox.worktreePath,
+        encoding: "utf-8",
+      }).trim();
+      const ghMatch = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
+      if (ghMatch) {
+        console.log(`\n  ✓ Pushed ${branchName}`);
+        console.log(`  Create PR: https://github.com/${ghMatch[1]}/compare/${branchName}?expand=1\n`);
+      }
+    } catch {
+      console.log(`\n  ✓ Pushed ${branchName}\n`);
+    }
+  });
+
 /* ── repl ────────────────────────────────────────────────── */
 
 program

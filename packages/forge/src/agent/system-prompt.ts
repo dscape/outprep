@@ -101,17 +101,23 @@ Globals: \`forge\`, \`playerData\`. No \`require\`/\`import\`. Use \`await\` for
 Do NOT call \`forge.data.load()\` for players already in \`playerData\`.
 Train/test separation is automatic: eval methods auto-detect trainGames from playerData when you pass playerData[username].testGames.
 
-forge.code: read(file) | write(file, content) | patch(file, {search,replace}) | diff() | revert(file?) | listModifiable() | typecheck()
+forge.code: read(file) | prompt(instruction) | diff() | revert(file?) | listModifiable() | typecheck()
+  prompt(instruction) invokes Claude Code CLI to make changes. Describe what you want changed in natural language.
 forge.config: get() | set(path, value) | reset()
 forge.data: load(username) | split(games, opts) | getGames(username) | listPlayers()
 forge.eval: run(testGames, opts?) | runQuick(testGames, trainGames?, n?) | baseline(testGames, trainGames?) | compare(a, b)
+  All eval methods return TestResult: { label, elo, metrics, positions, resolvedConfig }
+  metrics: { totalPositions, matchRate, topNRate, bookCoverage, avgActualCPL, avgBotCPL, cplDelta, byPhase }
+  byPhase[phase]: { matchRate, botAvgCPL, playerAvgCPL, positionCount }
+  positions[]: { isMatch, actualCPL, botCPL, phase, ... }
+  Use result.metrics.matchRate for accuracy, result.metrics.cplDelta for CPL gap, etc.
 forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile(positions) | composite(positions, rawMetrics) | significance(base, exp)
 forge.knowledge: search(query) | read(topicId) | append(topicId, entry) | create({id, title, relevance, content}) | compact(topicId, keepRecent?) | archives(topicId)
 forge.knowledge (notes): note(content, tags?) | notes({limit?, tags?}) | searchNotes(query)
 forge.history: sessions({status?, player?}) | searchExperiments(query) | experiment(id)
 forge.oracle: ask(question, context?) | history()
 forge.log: record(experiment) | trend() | summary()
-forge.session: checkpoint() | accept() | reject()`;
+forge.session: checkpoint() | accept() | reject() | push()`;
 
 function buildSessionState(ctx: PromptContext): string {
   const { session, baseline } = ctx;
@@ -200,5 +206,10 @@ The oracle cross-validates with multiple LLMs — use it to make better decision
 ### Mandatory: Consult History Before New Approaches
 Before trying something new, run:
 \`forge.knowledge.search(topic)\`, \`forge.knowledge.notes({ tags: [topic] })\`, \`forge.history.searchExperiments(topic)\`
-Don't repeat failed experiments.`;
+Don't repeat failed experiments.
+
+### Push When Ready
+When you have achieved a statistically significant improvement, push the research branch for PR review with \`forge.session.push()\`.
+Push criteria: (a) composite score improved >= 0.01 over baseline, (b) improvement is statistically significant (p < 0.05), (c) no regressions in other metrics > 0.02, (d) typecheck passes.
+You have full autonomy to decide when the research is ready to be reviewed.`;
 }

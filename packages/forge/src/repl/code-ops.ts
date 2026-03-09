@@ -1,11 +1,15 @@
 /**
- * forge.code.* — Engine source code read/write/patch with change tracking.
+ * forge.code.* — Engine source code operations with change tracking.
  *
  * All operations target the sandbox worktree's engine, so modifications
  * are isolated from the main working tree.
+ *
+ * Code modifications are delegated to Claude Code CLI (`claude -p`)
+ * via the `prompt()` method instead of direct file writes.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SandboxInfo, ModifiableFile } from "./sandbox";
@@ -58,11 +62,7 @@ function resolveEnginePath(sandbox: SandboxInfo, file: ModifiableFile): string {
 
 export interface CodeOps {
   read(file: ModifiableFile): string;
-  write(file: ModifiableFile, content: string): void;
-  patch(
-    file: ModifiableFile,
-    opts: { search: string; replace: string }
-  ): { matched: boolean };
+  prompt(instruction: string): string;
   diff(): string;
   revert(file?: ModifiableFile): void;
   typecheck(): string;
@@ -78,57 +78,44 @@ export function createCodeOps(sandbox: SandboxInfo): CodeOps {
       return readFileSync(fullPath, "utf-8");
     },
 
-    write(file: ModifiableFile, content: string): void {
-      const fullPath = resolveEnginePath(sandbox, file);
+    prompt(instruction: string): string {
+      const fileList = MODIFIABLE_ENGINE_FILES.join(", ");
+      const fullInstruction = [
+        `You are modifying a chess engine. Only modify these files: ${fileList}.`,
+        `Working directory: ${sandbox.enginePath}`,
+        ``,
+        instruction,
+      ].join("\n");
 
-      // Capture before-state for diff description
-      let before = "";
+      let output: string;
       try {
-        before = readFileSync(fullPath, "utf-8");
-      } catch {
-        // File may not exist yet (unlikely for engine files, but safe)
+        output = execSync(
+          `claude -p ${JSON.stringify(fullInstruction)}`,
+          {
+            cwd: sandbox.enginePath,
+            encoding: "utf-8",
+            timeout: 120_000,
+            maxBuffer: 10 * 1024 * 1024,
+            env: { ...process.env },
+          }
+        );
+      } catch (err: unknown) {
+        const error = err as { stdout?: string; stderr?: string; message?: string };
+        return `Error from Claude Code: ${error.stderr || error.message || "unknown error"}`;
       }
 
-      writeFileSync(fullPath, content, "utf-8");
-
-      // Compute a short diff summary
-      const beforeLines = before.split("\n").length;
-      const afterLines = content.split("\n").length;
-      const diffSummary =
-        before === content
-          ? "(no change)"
-          : `${beforeLines} -> ${afterLines} lines`;
-
-      recordChange(
-        sandbox,
-        file,
-        `write ${file} (${diffSummary})`,
-        getSandboxDiff(sandbox)
-      );
-    },
-
-    patch(
-      file: ModifiableFile,
-      opts: { search: string; replace: string }
-    ): { matched: boolean } {
-      const fullPath = resolveEnginePath(sandbox, file);
-      const content = readFileSync(fullPath, "utf-8");
-
-      if (!content.includes(opts.search)) {
-        return { matched: false };
+      // Track changes if any were made
+      const diff = getSandboxDiff(sandbox);
+      if (diff !== "(no changes)") {
+        recordChange(
+          sandbox,
+          "(claude-code)",
+          `prompt: ${instruction.slice(0, 100)}`,
+          diff
+        );
       }
 
-      const updated = content.replace(opts.search, opts.replace);
-      writeFileSync(fullPath, updated, "utf-8");
-
-      recordChange(
-        sandbox,
-        file,
-        `patch ${file}: "${opts.search.slice(0, 60)}..." -> "${opts.replace.slice(0, 60)}..."`,
-        getSandboxDiff(sandbox)
-      );
-
-      return { matched: true };
+      return output;
     },
 
     diff(): string {

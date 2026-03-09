@@ -30,7 +30,7 @@ export interface SandboxInfo {
  * The worktree gets its own branch based on the current HEAD.
  */
 export function createSandbox(sessionId: string): SandboxInfo {
-  const branchName = `forge/${sessionId}`;
+  const branchName = `research/${sessionId}`;
   const worktreePath = join(SESSIONS_DIR, sessionId);
 
   if (!existsSync(SESSIONS_DIR)) {
@@ -216,8 +216,8 @@ export function listSandboxes(): SandboxInfo[] {
         const worktreePath = pathLine.replace("worktree ", "");
         const branch = branchLine.replace("branch refs/heads/", "");
 
-        if (branch.startsWith("forge/")) {
-          const sessionId = branch.replace("forge/", "");
+        if (branch.startsWith("research/") || branch.startsWith("forge/")) {
+          const sessionId = branch.replace(/^(research|forge)\//, "");
           sandboxes.push({
             sessionId,
             worktreePath,

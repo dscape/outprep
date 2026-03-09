@@ -6,6 +6,7 @@
  * sandbox (git worktree) and the persistent state (forge-state.json).
  */
 
+import { execSync } from "node:child_process";
 import type { SandboxInfo } from "./sandbox";
 import {
   commitSandbox,
@@ -27,6 +28,8 @@ export interface SessionOps {
   accept(): string;
   /** Discard all sandbox changes, mark session abandoned. */
   reject(): void;
+  /** Push research branch to GitHub for PR review. */
+  push(): string;
 }
 
 export function createSessionOps(
@@ -101,6 +104,34 @@ export function createSessionOps(
       // Deactivate session
       state.activeSessionId = null;
       saveState(state);
+    },
+
+    push(): string {
+      // Commit any uncommitted changes
+      commitSandbox(sandbox, `forge: pre-push for ${session.name}`);
+
+      // Push the branch
+      const branchName = sandbox.branchName;
+      execSync(`git push -u origin "${branchName}"`, {
+        cwd: sandbox.worktreePath,
+        stdio: "pipe",
+      });
+
+      // Try to get PR URL
+      try {
+        const remoteUrl = execSync("git remote get-url origin", {
+          cwd: sandbox.worktreePath,
+          encoding: "utf-8",
+        }).trim();
+        const ghMatch = remoteUrl.match(/github\.com[:/](.+?)(?:\.git)?$/);
+        if (ghMatch) {
+          return `Pushed ${branchName}. Create PR: https://github.com/${ghMatch[1]}/compare/${branchName}?expand=1`;
+        }
+      } catch {
+        // Ignore — just return basic message
+      }
+
+      return `Pushed ${branchName} to origin.`;
     },
   };
 }

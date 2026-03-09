@@ -146,6 +146,16 @@ export async function consultOracle(
     confidence = "low";
   }
 
+  // Log response for human operator
+  const preview = claudeFinal.slice(0, 200).replace(/\n/g, " ");
+  console.log(`  Oracle: [${confidence}] ${preview}${claudeFinal.length > 200 ? "..." : ""}`);
+  if (actionItems.length > 0) {
+    console.log(`  Oracle: Action items:`);
+    for (const item of actionItems) {
+      console.log(`    - ${item}`);
+    }
+  }
+
   return {
     id,
     timestamp,

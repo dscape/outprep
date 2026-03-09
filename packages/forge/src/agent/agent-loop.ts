@@ -486,6 +486,7 @@ async function runAgentLoop(
             "1. Leave a note with `forge.knowledge.note(summary, [tags])` summarizing your key findings and recommendations for future sessions.",
             "2. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
             "3. Create new topics with `forge.knowledge.create()` for any novel knowledge areas you discovered.",
+            "4. If you achieved a significant improvement, push the branch with `forge.session.push()` so it can be reviewed as a PR.",
           ].join("\n"),
         });
         continue;

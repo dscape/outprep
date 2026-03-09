@@ -92,6 +92,70 @@ function serializeResult(value: unknown): string {
   }
 }
 
+/* ── Hoist declarations for persistence ────────────────────── */
+
+/**
+ * Transform top-level `const`/`let` declarations into bare assignments
+ * so they persist on the vm.Context between REPL calls.
+ *
+ * `const foo = expr` → `foo = expr`  (bare assignment → context global)
+ * `const { a, b } = expr` → `({ a, b } = expr)`
+ * `const [a, b] = expr` → `([a, b] = expr)`
+ *
+ * Only transforms at brace-depth 0 (top level). Skips declarations
+ * inside control-flow statements (for, while, if) and function bodies.
+ */
+function hoistDeclarations(code: string): string {
+  const lines = code.split("\n");
+  let braceDepth = 0;
+
+  const result = lines.map((line) => {
+    const trimmed = line.trimStart();
+    const indent = line.slice(0, line.length - trimmed.length);
+
+    // Update brace depth BEFORE processing (opening braces from previous lines)
+    // We count braces to know if we're at the top level
+    if (braceDepth === 0) {
+      // Skip control-flow declarations — these need their own scope
+      const isControlFlow =
+        /^(for|while|if|switch|try|catch)\s*[\s(]/.test(trimmed) ||
+        /^(for|while|if|switch|try|catch)\{/.test(trimmed);
+
+      if (!isControlFlow) {
+        // Match: const/let identifier = ...
+        const simpleMatch = trimmed.match(/^(const|let)\s+([\w$]+)\s*=/);
+        if (simpleMatch) {
+          line = indent + trimmed.replace(/^(const|let)\s+/, "");
+        }
+
+        // Match: const/let { ... } = ...
+        const objDestructMatch = trimmed.match(/^(const|let)\s+(\{[^}]+\})\s*=/);
+        if (objDestructMatch) {
+          const rest = trimmed.replace(/^(const|let)\s+/, "");
+          line = indent + "(" + rest.replace(/;\s*$/, "") + ");";
+        }
+
+        // Match: const/let [ ... ] = ...
+        const arrDestructMatch = trimmed.match(/^(const|let)\s+(\[[^\]]+\])\s*=/);
+        if (arrDestructMatch) {
+          const rest = trimmed.replace(/^(const|let)\s+/, "");
+          line = indent + "(" + rest.replace(/;\s*$/, "") + ");";
+        }
+      }
+    }
+
+    // Track brace depth for next iteration
+    for (const ch of trimmed) {
+      if (ch === "{") braceDepth++;
+      else if (ch === "}") braceDepth--;
+    }
+
+    return line;
+  });
+
+  return result.join("\n");
+}
+
 /* ── Wrap code for async execution ─────────────────────────── */
 
 /**
@@ -99,23 +163,19 @@ function serializeResult(value: unknown): string {
  * 1. `await` works at the top level
  * 2. The last expression's value is returned
  *
- * If the code doesn't contain await, we still wrap it to support
- * both sync and async code uniformly.
+ * Top-level const/let declarations are hoisted to bare assignments
+ * so they persist on the vm.Context between calls.
  */
 function wrapInAsyncIIFE(code: string): string {
-  // Trim trailing semicolons/whitespace from the last expression
-  // so the async IIFE returns its value
-  const trimmed = code.trimEnd();
+  // Hoist declarations so variables persist across REPL calls
+  const hoisted = hoistDeclarations(code);
+  const trimmed = hoisted.trimEnd();
 
   // Try to detect if the last statement is an expression (not a declaration)
-  // by checking if it doesn't start with certain keywords
   const lines = trimmed.split("\n");
   const lastLine = lines[lines.length - 1].trim();
 
-  const isDeclaration =
-    lastLine.startsWith("const ") ||
-    lastLine.startsWith("let ") ||
-    lastLine.startsWith("var ") ||
+  const isStatement =
     lastLine.startsWith("function ") ||
     lastLine.startsWith("class ") ||
     lastLine.startsWith("if ") ||
@@ -133,13 +193,15 @@ function wrapInAsyncIIFE(code: string): string {
     lastLine === "" ||
     lastLine.startsWith("}");
 
-  if (isDeclaration) {
-    // The last line is a declaration/statement, don't try to return it
+  // After hoisting, a bare assignment like `foo = expr` is not a "declaration"
+  // so it can potentially be returned as a value
+  const isAssignment = /^[\w$]+\s*=\s/.test(lastLine) && !lastLine.startsWith("==");
+
+  if (isStatement || isAssignment) {
     return `(async () => { ${trimmed} })()`;
   }
 
   // The last line is likely an expression — return it
-  // Replace the last line with `return lastLine`
   const prefix = lines.slice(0, -1).join("\n");
   const lastExpr = lastLine.replace(/;$/, "");
 
