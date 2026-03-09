@@ -8,6 +8,7 @@
 
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
+import { markSessionPausedIfActive } from "./forge";
 
 const PROJECT_ROOT = process.cwd();
 const FORGE_CLI = path.join(PROJECT_ROOT, "packages", "forge", "src", "cli.ts");
@@ -60,6 +61,7 @@ export function startSession(opts: StartSessionOpts): { sessionId: string } {
 
   child.on("exit", () => {
     running.delete(tempId);
+    markSessionPausedIfActive(tempId);
   });
 
   child.stderr?.on("data", (data: Buffer) => {
@@ -91,6 +93,7 @@ export function resumeSession(sessionId: string): boolean {
 
   child.on("exit", () => {
     running.delete(sessionId);
+    markSessionPausedIfActive(sessionId);
   });
 
   child.stderr?.on("data", (data: Buffer) => {

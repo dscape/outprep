@@ -19,7 +19,7 @@ import { createForgeApi } from "../repl/forge-api";
 import { buildSystemPrompt, type PromptContext } from "./system-prompt";
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
-import { CostTracker } from "./cost-tracker";
+import { CostTracker, CLAUDE_INPUT_COST_PER_1K, CLAUDE_OUTPUT_COST_PER_1K } from "./cost-tracker";
 import { checkConvergence, DEFAULT_CONVERGENCE } from "./convergence";
 import { createLogWriter, type LogWriter } from "./log-writer";
 import type { ForgeSession, ForgeState, ConversationMessage } from "../state/types";
@@ -86,6 +86,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     totalOutputTokens: 0,
     totalCostUsd: 0,
     oracleConsultations: [],
+    interactions: [],
   };
 
   state.sessions.push(session);
@@ -417,15 +418,41 @@ async function runAgentLoop(
     }
 
     // Track cost
-    costTracker.record(
-      response.usage.input_tokens,
-      response.usage.output_tokens
-    );
+    const inTok = response.usage.input_tokens;
+    const outTok = response.usage.output_tokens;
+    costTracker.record(inTok, outTok);
+
+    // Build interaction record
+    const lastUserMsg = prunedMessages[prunedMessages.length - 1];
+    const sentSummary = messageText(lastUserMsg).slice(0, 200);
+    const receivedSummary = response.content
+      .filter((b) => b.type === "text")
+      .map((b) => (b as Anthropic.TextBlock).text)
+      .join("\n")
+      .slice(0, 200);
+    const interactionCost =
+      (inTok / 1000) * CLAUDE_INPUT_COST_PER_1K +
+      (outTok / 1000) * CLAUDE_OUTPUT_COST_PER_1K;
+
     updateSession(state, session.id, (s) => {
       const snap = costTracker.getSnapshot();
       s.totalInputTokens = snap.inputTokens;
       s.totalOutputTokens = snap.outputTokens;
       s.totalCostUsd = snap.estimatedCostUsd;
+      if (!s.interactions) s.interactions = [];
+      s.interactions.push({
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+        provider: "claude",
+        model: "claude-sonnet-4-20250514",
+        inputTokens: inTok,
+        outputTokens: outTok,
+        costUsd: interactionCost,
+        purpose: "agent-turn",
+        label: `Turn ${turnCount}`,
+        sentSummary,
+        receivedSummary,
+      });
     });
 
     // Process response

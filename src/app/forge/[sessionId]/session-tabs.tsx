@@ -15,20 +15,23 @@ import { ConsoleLogViewer } from "@/components/forge/ConsoleLogViewer";
 import { ActivityTimeline } from "@/components/forge/ActivityTimeline";
 import { DiffViewer } from "@/components/forge/DiffViewer";
 
-type Tab = "overview" | "activity" | "experiments" | "oracle" | "changes" | "logs" | "console";
+export type Tab = "overview" | "activity" | "experiments" | "oracle" | "changes" | "logs" | "console";
 
 export function SessionTabs({
   session,
   logs,
   activity,
   isDev,
+  tab,
+  onTabChange,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
   logs: { filename: string; content: string }[];
   activity?: ActivityEvent[];
   isDev?: boolean;
+  tab: Tab;
+  onTabChange: (tab: Tab) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("overview");
   const [consoleHighlightTs, setConsoleHighlightTs] = useState<string | undefined>();
 
   const allCodeChanges = [
@@ -48,11 +51,11 @@ export function SessionTabs({
 
   function navigateToConsole(ts?: string) {
     setConsoleHighlightTs(ts);
-    setTab("console");
+    onTabChange("console");
   }
 
   function navigateToTab(targetTab: string) {
-    setTab(targetTab as Tab);
+    onTabChange(targetTab as Tab);
   }
 
   return (
@@ -61,7 +64,7 @@ export function SessionTabs({
         {tabs.map((t) => (
           <button
             key={t.key}
-            onClick={() => setTab(t.key)}
+            onClick={() => onTabChange(t.key)}
             className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors ${
               tab === t.key
                 ? "text-zinc-100 border-b-2 border-zinc-100"
@@ -118,6 +121,7 @@ function OverviewTab({
           costUsd={session.totalCostUsd}
           inputTokens={session.totalInputTokens}
           outputTokens={session.totalOutputTokens}
+          interactions={session.interactions ?? []}
         />
       </Card>
 

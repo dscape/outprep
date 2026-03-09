@@ -49,6 +49,9 @@ export interface ForgeSession {
 
   /** Oracle consultations */
   oracleConsultations: OracleRecord[];
+
+  /** Per-API-call interaction records */
+  interactions: InteractionRecord[];
 }
 
 /* ── Baseline ─────────────────────────────────────────────── */
@@ -195,6 +198,22 @@ export interface OracleRecord {
   claudeFinal: string;
   actionItems: string[];
   confidence: "high" | "medium" | "low";
+}
+
+/* ── Interaction Records (per-API-call tracking) ─────────── */
+
+export interface InteractionRecord {
+  id: string;
+  timestamp: string;
+  provider: "claude" | "chatgpt";
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  purpose: "agent-turn" | "oracle-initial" | "oracle-review" | "oracle-synthesis";
+  label: string;
+  sentSummary: string;
+  receivedSummary: string;
 }
 
 /* ── Conversation (for agent resume) ──────────────────────── */

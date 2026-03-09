@@ -214,7 +214,7 @@ program
   .option("--domain <domain>", "Knowledge domain", "general")
   .action(async (question: string, opts) => {
     const { consultOracle } = await import("./oracle/oracle");
-    const result = await consultOracle({
+    const { record: result } = await consultOracle({
       question,
       domain: opts.domain,
       context: "",

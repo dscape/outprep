@@ -15,7 +15,13 @@
 
 import { randomUUID } from "node:crypto";
 import { askClaude, askChatGPT, getOracleAvailability } from "./clients";
-import type { OracleRecord } from "../state/types";
+import {
+  CLAUDE_INPUT_COST_PER_1K,
+  CLAUDE_OUTPUT_COST_PER_1K,
+  CHATGPT_INPUT_COST_PER_1K,
+  CHATGPT_OUTPUT_COST_PER_1K,
+} from "../agent/cost-tracker";
+import type { OracleRecord, InteractionRecord } from "../state/types";
 
 export interface OracleQuery {
   question: string;
@@ -62,9 +68,14 @@ Output format:
 /**
  * Consult the oracle with a research question.
  */
+export interface OracleResult {
+  record: OracleRecord;
+  interactions: InteractionRecord[];
+}
+
 export async function consultOracle(
   query: OracleQuery
-): Promise<OracleRecord> {
+): Promise<OracleResult> {
   const availability = getOracleAvailability();
   const id = randomUUID();
   const timestamp = new Date().toISOString();
@@ -75,15 +86,18 @@ export async function consultOracle(
 
   if (availability.mode === "none") {
     return {
-      id,
-      timestamp,
-      question: query.question,
-      domain: query.domain,
-      claudeInitial: "[No API keys configured]",
-      chatgptResponse: "[No API keys configured]",
-      claudeFinal: "[Oracle unavailable — set ANTHROPIC_API_KEY and OPENAI_API_KEY]",
-      actionItems: [],
-      confidence: "low",
+      record: {
+        id,
+        timestamp,
+        question: query.question,
+        domain: query.domain,
+        claudeInitial: "[No API keys configured]",
+        chatgptResponse: "[No API keys configured]",
+        claudeFinal: "[Oracle unavailable — set ANTHROPIC_API_KEY and OPENAI_API_KEY]",
+        actionItems: [],
+        confidence: "low",
+      },
+      interactions: [],
     };
   }
 
@@ -97,9 +111,10 @@ export async function consultOracle(
 
   // Step 2: ChatGPT peer review
   let chatgptResponse: string;
+  let chatgptResult: { text: string; inputTokens: number; outputTokens: number } | null = null;
   if (availability.chatgpt) {
     console.log("  Oracle: Step 2/3 — ChatGPT reviewing...");
-    const chatgptResult = await askChatGPT({
+    chatgptResult = await askChatGPT({
       systemPrompt: REVIEWER_SYSTEM_PROMPT,
       userMessage:
         `A colleague analyzed this chess bot optimization question:\n\n` +
@@ -156,15 +171,72 @@ export async function consultOracle(
     }
   }
 
-  return {
-    id,
+  // Build interaction records for each API call
+  const interactions: InteractionRecord[] = [];
+
+  function claudeCost(inTok: number, outTok: number) {
+    return (inTok / 1000) * CLAUDE_INPUT_COST_PER_1K + (outTok / 1000) * CLAUDE_OUTPUT_COST_PER_1K;
+  }
+  function chatgptCost(inTok: number, outTok: number) {
+    return (inTok / 1000) * CHATGPT_INPUT_COST_PER_1K + (outTok / 1000) * CHATGPT_OUTPUT_COST_PER_1K;
+  }
+
+  interactions.push({
+    id: randomUUID(),
     timestamp,
-    question: query.question,
-    domain: query.domain,
-    claudeInitial,
-    chatgptResponse,
-    claudeFinal,
-    actionItems,
-    confidence,
+    provider: "claude",
+    model: "claude-sonnet-4-20250514",
+    inputTokens: claudeInitialResult.inputTokens,
+    outputTokens: claudeInitialResult.outputTokens,
+    costUsd: claudeCost(claudeInitialResult.inputTokens, claudeInitialResult.outputTokens),
+    purpose: "oracle-initial",
+    label: "Oracle: initial analysis",
+    sentSummary: query.question.slice(0, 200),
+    receivedSummary: claudeInitial.slice(0, 200),
+  });
+
+  if (availability.chatgpt && chatgptResult) {
+    interactions.push({
+      id: randomUUID(),
+      timestamp: new Date().toISOString(),
+      provider: "chatgpt",
+      model: "gpt-4o",
+      inputTokens: chatgptResult.inputTokens,
+      outputTokens: chatgptResult.outputTokens,
+      costUsd: chatgptCost(chatgptResult.inputTokens, chatgptResult.outputTokens),
+      purpose: "oracle-review",
+      label: "Oracle: ChatGPT review",
+      sentSummary: claudeInitial.slice(0, 200),
+      receivedSummary: chatgptResponse.slice(0, 200),
+    });
+  }
+
+  interactions.push({
+    id: randomUUID(),
+    timestamp: new Date().toISOString(),
+    provider: "claude",
+    model: "claude-sonnet-4-20250514",
+    inputTokens: claudeFinalResult.inputTokens,
+    outputTokens: claudeFinalResult.outputTokens,
+    costUsd: claudeCost(claudeFinalResult.inputTokens, claudeFinalResult.outputTokens),
+    purpose: "oracle-synthesis",
+    label: "Oracle: synthesis",
+    sentSummary: query.question.slice(0, 200),
+    receivedSummary: claudeFinal.slice(0, 200),
+  });
+
+  return {
+    record: {
+      id,
+      timestamp,
+      question: query.question,
+      domain: query.domain,
+      claudeInitial,
+      chatgptResponse,
+      claudeFinal,
+      actionItems,
+      confidence,
+    },
+    interactions,
   };
 }

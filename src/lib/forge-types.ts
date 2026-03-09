@@ -31,6 +31,7 @@ export interface ForgeSession {
   totalOutputTokens: number;
   totalCostUsd: number;
   oracleConsultations: OracleRecord[];
+  interactions?: InteractionRecord[];
 }
 
 export interface BaselineSnapshot {
@@ -135,6 +136,20 @@ export interface OracleRecord {
   claudeFinal: string;
   actionItems: string[];
   confidence: "high" | "medium" | "low";
+}
+
+export interface InteractionRecord {
+  id: string;
+  timestamp: string;
+  provider: "claude" | "chatgpt";
+  model: string;
+  inputTokens: number;
+  outputTokens: number;
+  costUsd: number;
+  purpose: "agent-turn" | "oracle-initial" | "oracle-review" | "oracle-synthesis";
+  label: string;
+  sentSummary: string;
+  receivedSummary: string;
 }
 
 export interface KnowledgeTopic {

@@ -35,6 +35,7 @@ import {
 import { consultOracle } from "../oracle/oracle";
 import { writeExperimentLog } from "../log/log-formatter";
 import { computeTrend, formatTrend } from "../log/trend-tracker";
+import { randomUUID } from "node:crypto";
 import { updateSession, saveState } from "../state/forge-state";
 
 /* ── Namespace types ──────────────────────────────────────── */
@@ -109,7 +110,7 @@ export interface OracleOps {
 }
 
 export interface LogOps {
-  record(experiment: import("../state/types").ExperimentRecord): string;
+  record(experiment: Partial<import("../state/types").ExperimentRecord> & { hypothesis: string }): string;
   trend(): ReturnType<typeof computeTrend>;
   summary(): string;
 }
@@ -310,16 +311,24 @@ export function createForgeApi(
   // ── Oracle namespace ──
   const oracle: OracleOps = {
     async ask(question: string, context?: string) {
-      const result = await consultOracle({
+      const { record, interactions } = await consultOracle({
         question,
         domain: "chess-engine-optimization",
         context: context ?? "",
       });
       // Record in session
       updateSession(state, session.id, (s) => {
-        s.oracleConsultations.push(result);
+        s.oracleConsultations.push(record);
+        if (!s.interactions) s.interactions = [];
+        s.interactions.push(...interactions);
+        // Update aggregate cost from oracle interactions
+        for (const ix of interactions) {
+          s.totalInputTokens += ix.inputTokens;
+          s.totalOutputTokens += ix.outputTokens;
+          s.totalCostUsd += ix.costUsd;
+        }
       });
-      return result;
+      return record;
     },
     history() {
       return session.oracleConsultations;
@@ -328,7 +337,52 @@ export function createForgeApi(
 
   // ── Log namespace ──
   const log: LogOps = {
-    record(experiment) {
+    record(partial) {
+      const emptyPhase = { opening: 0, middlegame: 0, endgame: 0, overall: 0 };
+      const emptyResult: import("../state/types").MaiaMetrics = {
+        moveAccuracy: 0,
+        moveAccuracyByPhase: { ...emptyPhase },
+        cplKLDivergence: 0,
+        cplKSStatistic: 0,
+        cplKSPValue: 0,
+        cplByPhase: {},
+        blunderRateDelta: { ...emptyPhase },
+        mistakeRateDelta: { ...emptyPhase },
+        compositeScore: 0,
+        rawMetrics: {
+          totalPositions: 0, matchRate: 0, topNRate: 0, bookCoverage: 0,
+          avgActualCPL: NaN, avgBotCPL: NaN, cplDelta: NaN,
+          byPhase: {
+            opening: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: NaN, botAvgCPL: NaN },
+            middlegame: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: NaN, botAvgCPL: NaN },
+            endgame: { positions: 0, matchRate: 0, topNRate: 0, avgCPL: NaN, botAvgCPL: NaN },
+          },
+        },
+        positionsEvaluated: 0,
+      };
+
+      // Fill in defaults for missing fields
+      const experiment: ExperimentRecord = {
+        id: partial.id ?? randomUUID(),
+        sessionId: partial.sessionId ?? session.id,
+        number: partial.number ?? session.experiments.length + 1,
+        timestamp: partial.timestamp ?? new Date().toISOString(),
+        hypothesis: partial.hypothesis!,
+        category: partial.category ?? "parameter",
+        codeChanges: partial.codeChanges ?? [],
+        configChanges: partial.configChanges ?? [],
+        players: partial.players ?? session.players,
+        positionsEvaluated: partial.positionsEvaluated ?? 0,
+        evaluationDurationMs: partial.evaluationDurationMs ?? 0,
+        result: partial.result ?? emptyResult,
+        delta: partial.delta ?? { moveAccuracy: 0, cplKLDivergence: 0, blunderRateDelta: 0, compositeScore: 0 },
+        significance: partial.significance ?? [],
+        conclusion: partial.conclusion ?? "inconclusive",
+        notes: partial.notes ?? "",
+        nextSteps: partial.nextSteps ?? [],
+        oracleQueryId: partial.oracleQueryId,
+      };
+
       // Write markdown log
       const path = writeExperimentLog(session.name, experiment);
 

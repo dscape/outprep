@@ -86,6 +86,26 @@ export interface ComparisonRow {
   improved: boolean;
 }
 
+/* ── NaN restoration after JSON round-trip ─────────────────── */
+
+/**
+ * JSON.stringify(NaN) produces null. After JSON.parse, restore null → NaN
+ * for numeric metric fields that legitimately use NaN (no data available).
+ */
+function restoreMetricNaNs(result: TestResult): void {
+  const m = result.metrics;
+  if (m.avgActualCPL === null) (m as any).avgActualCPL = NaN;
+  if (m.avgBotCPL === null) (m as any).avgBotCPL = NaN;
+  if (m.cplDelta === null) (m as any).cplDelta = NaN;
+
+  if (m.byPhase) {
+    for (const phase of Object.values(m.byPhase)) {
+      if (phase.avgCPL === null) (phase as any).avgCPL = NaN;
+      if (phase.botAvgCPL === null) (phase as any).botAvgCPL = NaN;
+    }
+  }
+}
+
 /* ── Spawn the eval worker in the sandbox ──────────────────── */
 
 /**
@@ -152,6 +172,7 @@ async function runWorker(
       try {
         const output: EvalWorkerOutput = JSON.parse(stdout);
         if (output.success && output.result) {
+          restoreMetricNaNs(output.result);
           resolve(output.result);
         } else {
           reject(
@@ -324,16 +345,27 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
         valB: number,
         higherIsBetter: boolean
       ): void {
-        const delta = valB - valA;
+        // Skip rows where both values are missing (null/NaN from JSON round-trip)
+        const aMissing = valA == null || isNaN(valA);
+        const bMissing = valB == null || isNaN(valB);
+        if (aMissing && bMissing) return;
+
+        const safeA = aMissing ? NaN : valA;
+        const safeB = bMissing ? NaN : valB;
+        const delta = safeB - safeA;
         const deltaPercent =
-          valA !== 0 ? (delta / Math.abs(valA)) * 100 : delta !== 0 ? Infinity : 0;
+          !isNaN(delta) && safeA !== 0
+            ? (delta / Math.abs(safeA)) * 100
+            : !isNaN(delta) && delta !== 0
+              ? Infinity
+              : 0;
         rows.push({
           metric,
-          baseline: valA,
-          experiment: valB,
-          delta,
-          deltaPercent,
-          improved: higherIsBetter ? delta > 0 : delta < 0,
+          baseline: safeA,
+          experiment: safeB,
+          delta: isNaN(delta) ? NaN : delta,
+          deltaPercent: isNaN(deltaPercent) ? NaN : deltaPercent,
+          improved: isNaN(delta) ? false : higherIsBetter ? delta > 0 : delta < 0,
         });
       }
 

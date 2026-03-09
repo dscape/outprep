@@ -4,6 +4,12 @@
 
 import type { Metrics, TestResult } from "./types";
 
+/** Safe .toFixed() that handles null/NaN (from JSON round-trip). */
+function safeFixed(val: number, digits = 1): string {
+  if (val == null || isNaN(val)) return "N/A";
+  return val.toFixed(digits);
+}
+
 // ── Progress bar ────────────────────────────────────────────────────
 
 export function progressBar(
@@ -28,9 +34,9 @@ export function formatMetrics(m: Metrics): string {
   lines.push(`  Move match rate:      ${(m.matchRate * 100).toFixed(1)}%`);
   lines.push(`  Top-4 accuracy:       ${(m.topNRate * 100).toFixed(1)}%`);
   lines.push(`  Book coverage:        ${(m.bookCoverage * 100).toFixed(1)}%`);
-  lines.push(`  Avg actual CPL:       ${m.avgActualCPL.toFixed(1)}`);
-  lines.push(`  Avg bot CPL:          ${m.avgBotCPL.toFixed(1)}`);
-  lines.push(`  CPL delta:            ${m.cplDelta.toFixed(1)}`);
+  lines.push(`  Avg actual CPL:       ${safeFixed(m.avgActualCPL)}`);
+  lines.push(`  Avg bot CPL:          ${safeFixed(m.avgBotCPL)}`);
+  lines.push(`  CPL delta:            ${safeFixed(m.cplDelta)}`);
   lines.push("");
   lines.push("  Phase Breakdown");
   lines.push("  " + "\u2500".repeat(50));
@@ -41,7 +47,7 @@ export function formatMetrics(m: Metrics): string {
   for (const phase of ["opening", "middlegame", "endgame"] as const) {
     const p = m.byPhase[phase];
     lines.push(
-      `  ${phase.padEnd(12)} ${String(p.positions).padStart(9)}  ${(p.matchRate * 100).toFixed(1).padStart(5)}%  ${(p.topNRate * 100).toFixed(1).padStart(4)}%  ${p.avgCPL.toFixed(1).padStart(5)}  ${p.botAvgCPL.toFixed(1).padStart(5)}`
+      `  ${phase.padEnd(12)} ${String(p.positions).padStart(9)}  ${(p.matchRate * 100).toFixed(1).padStart(5)}%  ${(p.topNRate * 100).toFixed(1).padStart(4)}%  ${safeFixed(p.avgCPL).padStart(5)}  ${safeFixed(p.botAvgCPL).padStart(5)}`
     );
   }
   lines.push("");
@@ -80,9 +86,9 @@ export function formatComparison(results: TestResult[]): string {
       (m.matchRate * 100).toFixed(1).padStart(7),
       (m.topNRate * 100).toFixed(1).padStart(6),
       (m.bookCoverage * 100).toFixed(1).padStart(6),
-      m.avgActualCPL.toFixed(1).padStart(6),
-      m.avgBotCPL.toFixed(1).padStart(6),
-      m.cplDelta.toFixed(1).padStart(6),
+      safeFixed(m.avgActualCPL).padStart(6),
+      safeFixed(m.avgBotCPL).padStart(6),
+      safeFixed(m.cplDelta).padStart(6),
     ];
     lines.push("  " + row.join("  "));
   }

@@ -66,6 +66,22 @@ export function getSession(id: string): Omit<ForgeSession, "conversationHistory"
   return rest;
 }
 
+/**
+ * If a session is still marked "active" in state but its process has exited,
+ * patch it to "paused" so the UI shows the correct controls.
+ */
+export function markSessionPausedIfActive(nameOrId: string): void {
+  const state = loadForgeState();
+  if (!state) return;
+  const session = state.sessions.find(
+    (s) => (s.id === nameOrId || s.name === nameOrId) && s.status === "active"
+  );
+  if (!session) return;
+  session.status = "paused";
+  session.updatedAt = new Date().toISOString();
+  fs.writeFileSync(STATE_PATH, JSON.stringify(state, null, 2));
+}
+
 /* ── Experiment Logs ────────────────────────────────────── */
 
 export function getSessionLogs(

@@ -70,10 +70,13 @@ export function SessionControls({
 
       {status === "active" && (
         <>
-          <span className="flex items-center gap-1.5 text-xs text-emerald-400">
+          <button
+            onClick={() => onTabChange?.("console")}
+            className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 cursor-pointer transition-colors"
+          >
             <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
             Live
-          </span>
+          </button>
           <button
             onClick={handleStop}
             disabled={loading}
