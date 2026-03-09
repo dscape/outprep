@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 const tabs = [
   { href: "/forge", label: "Sessions" },
   { href: "/forge/knowledge", label: "Knowledge" },
+  { href: "/forge/data", label: "Data" },
 ];
 
 export function ForgeNav() {
@@ -16,7 +17,7 @@ export function ForgeNav() {
       {tabs.map((tab) => {
         const active =
           tab.href === "/forge"
-            ? pathname === "/forge"
+            ? pathname === "/forge" || (pathname.startsWith("/forge/") && !pathname.startsWith("/forge/knowledge") && !pathname.startsWith("/forge/data"))
             : pathname.startsWith(tab.href);
         return (
           <Link

@@ -57,7 +57,9 @@
       "Bash(head -40 /Users/dscape/dev/outprep/src/app/scout/[username]/page.tsx)",
       "mcp__claude_ai_Vercel__web_fetch_vercel_url",
       "Bash(git show HEAD:src/app/player/[slug]/scout-features.tsx)",
-      "Bash(sudo chown -R 501:20 \"/Users/dscape/.npm\")"
+      "Bash(sudo chown -R 501:20 \"/Users/dscape/.npm\")",
+      "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/resume)",
+      "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/stop)"
     ]
   }
 }

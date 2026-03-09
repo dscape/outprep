@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { ForgeSession, ExperimentRecord } from "@/lib/forge-types";
+import type { ForgeSession, ActivityEvent } from "@/lib/forge-types";
 import { CostDisplay } from "@/components/forge/CostDisplay";
 import { ExperimentTimeline } from "@/components/forge/ExperimentTimeline";
 import { OracleCard } from "@/components/forge/OracleCard";
@@ -12,36 +12,57 @@ import { AccuracyToHumanChart } from "@/components/forge/charts/AccuracyToHumanC
 import { CplAccuracyChart } from "@/components/forge/charts/CplAccuracyChart";
 import { ErrorRateByPhaseChart } from "@/components/forge/charts/ErrorRateByPhaseChart";
 import { ConsoleLogViewer } from "@/components/forge/ConsoleLogViewer";
+import { ActivityTimeline } from "@/components/forge/ActivityTimeline";
+import { DiffViewer } from "@/components/forge/DiffViewer";
 
-type Tab = "overview" | "experiments" | "oracle" | "logs" | "console";
+type Tab = "overview" | "activity" | "experiments" | "oracle" | "changes" | "logs" | "console";
 
 export function SessionTabs({
   session,
   logs,
+  activity,
   isDev,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
   logs: { filename: string; content: string }[];
+  activity?: ActivityEvent[];
   isDev?: boolean;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
+  const [consoleHighlightTs, setConsoleHighlightTs] = useState<string | undefined>();
+
+  const allCodeChanges = [
+    ...session.activeChanges,
+    ...session.experiments.flatMap((e) => e.codeChanges),
+  ];
 
   const tabs: { key: Tab; label: string; count?: number }[] = [
     { key: "overview", label: "Overview" },
+    { key: "activity", label: "Activity", count: activity?.length },
     { key: "experiments", label: "Experiments", count: session.experiments.length },
     { key: "oracle", label: "Oracle", count: session.oracleConsultations.length },
+    { key: "changes", label: "Changes", count: allCodeChanges.length },
     { key: "logs", label: "Logs", count: logs.length },
-    ...(isDev ? [{ key: "console" as Tab, label: "Console" }] : []),
+    { key: "console", label: "Console" },
   ];
+
+  function navigateToConsole(ts?: string) {
+    setConsoleHighlightTs(ts);
+    setTab("console");
+  }
+
+  function navigateToTab(targetTab: string) {
+    setTab(targetTab as Tab);
+  }
 
   return (
     <div>
-      <div className="flex gap-1 border-b border-zinc-800 mb-6">
+      <div className="flex gap-1 border-b border-zinc-800 mb-6 overflow-x-auto">
         {tabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`px-4 py-2 text-sm font-medium transition-colors ${
+            className={`whitespace-nowrap px-4 py-2 text-sm font-medium transition-colors ${
               tab === t.key
                 ? "text-zinc-100 border-b-2 border-zinc-100"
                 : "text-zinc-500 hover:text-zinc-300"
@@ -56,13 +77,27 @@ export function SessionTabs({
       </div>
 
       {tab === "overview" && <OverviewTab session={session} />}
+      {tab === "activity" && (
+        <ActivityTimeline
+          events={activity || []}
+          onNavigate={navigateToTab}
+          onSeeInConsole={navigateToConsole}
+        />
+      )}
       {tab === "experiments" && (
         <ExperimentTimeline experiments={session.experiments} />
       )}
       {tab === "oracle" && <OracleTab session={session} />}
+      {tab === "changes" && (
+        <ChangesTab session={session} onSeeInConsole={navigateToConsole} />
+      )}
       {tab === "logs" && <LogsTab logs={logs} />}
       {tab === "console" && (
-        <ConsoleLogViewer sessionId={session.id} sessionStatus={session.status} />
+        <ConsoleLogViewer
+          sessionId={session.id}
+          sessionStatus={session.status}
+          highlightTs={consoleHighlightTs}
+        />
       )}
     </div>
   );
@@ -168,6 +203,63 @@ function OverviewTab({
         <div className="text-sm text-zinc-500">
           Session has not computed a baseline yet.
         </div>
+      )}
+    </div>
+  );
+}
+
+function ChangesTab({
+  session,
+  onSeeInConsole,
+}: {
+  session: Omit<ForgeSession, "conversationHistory">;
+  onSeeInConsole: (ts?: string) => void;
+}) {
+  const hasActive = session.activeChanges.length > 0;
+  const hasExperimentChanges = session.experiments.some((e) => e.codeChanges.length > 0);
+
+  if (!hasActive && !hasExperimentChanges) {
+    return (
+      <div className="text-center py-12 text-zinc-500 text-sm">
+        No code changes yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {hasActive && (
+        <div>
+          <h3 className="text-xs font-medium text-zinc-500 mb-3">Active (uncommitted) Changes</h3>
+          <div className="space-y-3">
+            {session.activeChanges.map((cc) => (
+              <DiffViewer
+                key={cc.id}
+                change={cc}
+                onSeeInConsole={() => onSeeInConsole(cc.timestamp)}
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {session.experiments.map((exp) =>
+        exp.codeChanges.length > 0 ? (
+          <div key={exp.id}>
+            <h3 className="text-xs font-medium text-zinc-500 mb-3">
+              Experiment #{exp.number}: {exp.hypothesis.slice(0, 60)}
+            </h3>
+            <div className="space-y-3">
+              {exp.codeChanges.map((cc) => (
+                <DiffViewer
+                  key={cc.id}
+                  change={cc}
+                  onSeeInConsole={() => onSeeInConsole(cc.timestamp)}
+                />
+              ))}
+            </div>
+          </div>
+        ) : null
       )}
     </div>
   );

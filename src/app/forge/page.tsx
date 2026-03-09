@@ -1,9 +1,11 @@
-import { getSessionSummaries } from "@/lib/forge";
+import { getSessionSummaries, isForgeAvailable } from "@/lib/forge";
 import { SessionCard } from "@/components/forge/SessionCard";
+import { NewSessionButton } from "@/components/forge/NewSessionButton";
 
 export const revalidate = 0;
 
 export default function ForgeSessionsPage() {
+  const forgeAvailable = isForgeAvailable();
   const sessions = getSessionSummaries();
 
   const totalExperiments = sessions.reduce((n, s) => n + s.experimentCount, 0);
@@ -16,6 +18,11 @@ export default function ForgeSessionsPage() {
 
   return (
     <div>
+      {/* Header with New Session button */}
+      <div className="flex items-center justify-end mb-4">
+        <NewSessionButton />
+      </div>
+
       {/* Summary stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
         <Stat label="Sessions" value={String(sessions.length)} />
@@ -30,11 +37,23 @@ export default function ForgeSessionsPage() {
 
       {sessions.length === 0 ? (
         <div className="text-center py-16 text-zinc-500">
-          No forge sessions found. Run{" "}
-          <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">
-            npm run forge -- research
-          </code>{" "}
-          to start.
+          {!forgeAvailable ? (
+            <p>
+              Forge state file not found. Ensure{" "}
+              <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">
+                packages/forge/forge-state.json
+              </code>{" "}
+              exists, or set <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">FORGE_DATA_DIR</code>.
+            </p>
+          ) : (
+            <p>
+              No forge sessions found. Run{" "}
+              <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">
+                npm run forge -- research
+              </code>{" "}
+              to start.
+            </p>
+          )}
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">

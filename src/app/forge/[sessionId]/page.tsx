@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
-import { getSession, getSessionLogs } from "@/lib/forge";
+import { getSession, getSessionLogs, buildActivityLog } from "@/lib/forge";
 import { StatusBadge } from "@/components/forge/StatusBadge";
+import { SessionControls } from "@/components/forge/SessionControls";
 import { SessionTabs } from "./session-tabs";
 
 export const revalidate = 0;
@@ -15,6 +16,7 @@ export default async function SessionDetailPage({
   if (!session) notFound();
 
   const logs = getSessionLogs(session.name);
+  const activity = buildActivityLog(session);
 
   const created = new Date(session.createdAt).toLocaleDateString("en-US", {
     month: "short",
@@ -33,6 +35,7 @@ export default async function SessionDetailPage({
             {session.name}
           </h2>
           <StatusBadge status={session.status} />
+          <SessionControls sessionId={session.id} status={session.status} />
         </div>
         <p className="text-sm text-zinc-500">
           {session.players.join(", ")} &middot; {session.focus} &middot;
@@ -40,7 +43,7 @@ export default async function SessionDetailPage({
         </p>
       </div>
 
-      <SessionTabs session={session} logs={logs} isDev={process.env.NODE_ENV === "development"} />
+      <SessionTabs session={session} logs={logs} activity={activity} isDev={process.env.NODE_ENV === "development"} />
     </div>
   );
 }

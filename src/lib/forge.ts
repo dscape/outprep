@@ -7,19 +7,27 @@ import type {
   KnowledgeTopic,
 } from "./forge-types";
 
-const FORGE_ROOT = path.join(process.cwd(), "packages", "forge");
+const FORGE_ROOT = process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
 const STATE_PATH = path.join(FORGE_ROOT, "forge-state.json");
 const TOPICS_DIR = path.join(FORGE_ROOT, "src", "knowledge", "topics");
 const NOTES_DIR = path.join(FORGE_ROOT, "src", "knowledge", "notes");
 const LOGS_DIR = path.join(FORGE_ROOT, "logs");
+const GAMES_DIR = path.join(FORGE_ROOT, "data", "games");
 
 /* ── State ──────────────────────────────────────────────── */
+
+export function isForgeAvailable(): boolean {
+  return fs.existsSync(STATE_PATH);
+}
 
 export function loadForgeState(): ForgeState | null {
   try {
     const raw = fs.readFileSync(STATE_PATH, "utf-8");
     return JSON.parse(raw) as ForgeState;
   } catch {
+    if (!fs.existsSync(STATE_PATH)) {
+      console.warn(`[forge] forge-state.json not found at ${STATE_PATH}`);
+    }
     return null;
   }
 }
@@ -157,4 +165,109 @@ export function loadAgentNotes(): KnowledgeTopic[] {
       content,
     };
   });
+}
+
+/* ── Game Data ─────────────────────────────────────────── */
+
+export interface PlayerMeta {
+  username: string;
+  estimatedElo: number;
+  gameCount: number;
+  contentHash: string;
+  fetchedAt: string;
+}
+
+export function listGamePlayers(): PlayerMeta[] {
+  try {
+    const files = fs.readdirSync(GAMES_DIR).filter((f) => f.endsWith(".meta.json"));
+    return files.map((f) => {
+      const raw = fs.readFileSync(path.join(GAMES_DIR, f), "utf-8");
+      return JSON.parse(raw) as PlayerMeta;
+    });
+  } catch {
+    return [];
+  }
+}
+
+export function getPlayerGames(
+  username: string,
+  page = 1,
+  limit = 50
+): { games: unknown[]; total: number } {
+  try {
+    const raw = fs.readFileSync(path.join(GAMES_DIR, `${username.toLowerCase()}.json`), "utf-8");
+    const allGames = JSON.parse(raw) as unknown[];
+    const start = (page - 1) * limit;
+    return {
+      games: allGames.slice(start, start + limit),
+      total: allGames.length,
+    };
+  } catch {
+    return { games: [], total: 0 };
+  }
+}
+
+/* ── Activity Log ──────────────────────────────────────── */
+
+export function buildActivityLog(
+  session: Omit<ForgeSession, "conversationHistory">
+): import("./forge-types").ActivityEvent[] {
+  const events: import("./forge-types").ActivityEvent[] = [];
+
+  for (const exp of session.experiments) {
+    events.push({
+      id: `exp-${exp.id}`,
+      timestamp: exp.timestamp,
+      type: "experiment",
+      title: `Experiment #${exp.number}: ${exp.hypothesis.slice(0, 80)}`,
+      detail: `${exp.conclusion} — composite delta ${exp.delta.compositeScore > 0 ? "+" : ""}${exp.delta.compositeScore.toFixed(3)}`,
+      artifactId: exp.id,
+      artifactType: "experiments",
+      consoleTimestamp: exp.timestamp,
+    });
+
+    for (const cc of exp.codeChanges) {
+      events.push({
+        id: `cc-${cc.id}`,
+        timestamp: cc.timestamp,
+        type: "code-change",
+        title: `Code change: ${cc.file}`,
+        detail: cc.description,
+        artifactId: cc.id,
+        artifactType: "changes",
+        consoleTimestamp: cc.timestamp,
+      });
+    }
+  }
+
+  for (const o of session.oracleConsultations) {
+    events.push({
+      id: `oracle-${o.id}`,
+      timestamp: o.timestamp,
+      type: "oracle",
+      title: `Oracle: ${o.question.slice(0, 80)}`,
+      detail: `Confidence: ${o.confidence}`,
+      artifactId: o.id,
+      artifactType: "oracle",
+      consoleTimestamp: o.timestamp,
+    });
+  }
+
+  for (const cc of session.activeChanges) {
+    if (!events.some((e) => e.id === `cc-${cc.id}`)) {
+      events.push({
+        id: `cc-${cc.id}`,
+        timestamp: cc.timestamp,
+        type: "code-change",
+        title: `Active change: ${cc.file}`,
+        detail: cc.description,
+        artifactId: cc.id,
+        artifactType: "changes",
+        consoleTimestamp: cc.timestamp,
+      });
+    }
+  }
+
+  events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  return events;
 }

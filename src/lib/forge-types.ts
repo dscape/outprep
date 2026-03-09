@@ -145,6 +145,17 @@ export interface KnowledgeTopic {
   content: string;
 }
 
+export interface ActivityEvent {
+  id: string;
+  timestamp: string;
+  type: "experiment" | "oracle" | "code-change" | "note" | "knowledge-update" | "session-status";
+  title: string;
+  detail?: string;
+  artifactId?: string;
+  artifactType?: string;
+  consoleTimestamp?: string;
+}
+
 export interface SessionSummary {
   id: string;
   name: string;

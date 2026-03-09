@@ -12,17 +12,21 @@ interface LogEntry {
 export function ConsoleLogViewer({
   sessionId,
   sessionStatus,
+  highlightTs,
 }: {
   sessionId: string;
   sessionStatus: SessionStatus;
+  highlightTs?: string;
 }) {
   const [lines, setLines] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
   const [connected, setConnected] = useState(false);
   const [done, setDone] = useState(false);
+  const [highlightIdx, setHighlightIdx] = useState<number | null>(null);
   const bufferRef = useRef<LogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const pausedRef = useRef(paused);
 
   pausedRef.current = paused;
@@ -41,6 +45,26 @@ export function ConsoleLogViewer({
       scrollToBottom();
     }
   }, [paused, scrollToBottom]);
+
+  // Scroll to the closest line matching highlightTs
+  useEffect(() => {
+    if (!highlightTs || lines.length === 0) return;
+    const targetTime = new Date(highlightTs).getTime();
+    let bestIdx = 0;
+    let bestDiff = Infinity;
+    for (let i = 0; i < lines.length; i++) {
+      const diff = Math.abs(new Date(lines[i].ts).getTime() - targetTime);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        bestIdx = i;
+      }
+    }
+    setHighlightIdx(bestIdx);
+    const el = lineRefs.current.get(bestIdx);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightTs, lines.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const es = new EventSource(`/api/forge/${sessionId}/logs`);
@@ -142,7 +166,17 @@ export function ConsoleLogViewer({
           <p className="text-zinc-600">No console output recorded.</p>
         )}
         {lines.map((entry, i) => (
-          <div key={i} className="flex gap-2">
+          <div
+            key={i}
+            ref={(el) => {
+              if (el) lineRefs.current.set(i, el);
+            }}
+            className={`flex gap-2 ${
+              highlightIdx === i
+                ? "bg-amber-900/30 border-l-2 border-amber-400 pl-2 -ml-2"
+                : ""
+            }`}
+          >
             <span className="text-zinc-600 shrink-0 select-none">
               {formatTime(entry.ts)}
             </span>
