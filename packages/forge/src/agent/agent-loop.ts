@@ -522,7 +522,8 @@ async function runAgentLoop(
       }
 
       // Otherwise, prompt the agent to continue with refreshed knowledge context
-      const freshKnowledge = buildKnowledgeContext(opts.focus, 2);
+      const focusAreas = opts.focus.split(",").map((s: string) => s.trim()).filter(Boolean);
+      const freshKnowledge = focusAreas.map((a: string) => buildKnowledgeContext(a, 2)).filter(Boolean).join("\n\n");
       const freshNotes = buildNotesContext(3);
       const contextRefresh = [freshKnowledge, freshNotes].filter(Boolean).join("\n\n");
 

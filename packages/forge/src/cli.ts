@@ -33,7 +33,7 @@ program
   .option("--players <list>", "Comma-separated Lichess usernames")
   .option(
     "--focus <area>",
-    "Focus area: accuracy, cpl, blunders, opening, endgame",
+    "Focus area(s), comma-separated: accuracy, cpl, blunders, opening, middlegame, endgame",
     "accuracy"
   )
   .option("--max-experiments <n>", "Max experiments before stopping", "20")
@@ -228,6 +228,31 @@ program
       console.log(`    • ${item}`);
     }
     console.log();
+  });
+
+/* ── fetch ────────────────────────────────────────────────── */
+
+program
+  .command("fetch <username>")
+  .description("Fetch a player's game archive from Lichess")
+  .option("--force", "Re-download even if cached")
+  .option("--max <n>", "Max games to fetch", "200")
+  .action(async (username: string, opts) => {
+    const { fetchPlayer, getGames } = await import("./data/game-store");
+    console.log(`  Fetching ${username}...`);
+    try {
+      const data = await fetchPlayer(username, {
+        max: parseInt(opts.max, 10),
+        force: opts.force ?? false,
+      });
+      const games = getGames(username);
+      console.log(`  ✓ ${data.username}: ${games.length} games (Elo: ${data.estimatedElo})`);
+      // Output JSON for programmatic consumption
+      console.log(JSON.stringify(data));
+    } catch (err) {
+      console.error(`  ✗ Failed to fetch ${username}: ${err}`);
+      process.exit(1);
+    }
   });
 
 /* ── baseline ─────────────────────────────────────────────── */
@@ -488,14 +513,17 @@ program
   .option("--id <session-id>", "Remove a specific session by ID prefix")
   .action(async (opts) => {
     const state = loadState();
+    const { destroySandbox, listSandboxes } = await import("./repl/sandbox");
+    const sandboxes = listSandboxes();
 
-    if (state.sessions.length === 0) {
+    // Detect orphaned sandboxes (worktrees with no matching session in state)
+    const sessionIds = new Set(state.sessions.map((s) => s.id));
+    const orphans = sandboxes.filter((s) => !sessionIds.has(s.sessionId));
+
+    if (state.sessions.length === 0 && orphans.length === 0) {
       console.log("\n  No sessions to clean.\n");
       return;
     }
-
-    const { destroySandbox, listSandboxes } = await import("./repl/sandbox");
-    const sandboxes = listSandboxes();
 
     let toRemove: typeof state.sessions;
 
@@ -510,22 +538,32 @@ program
       toRemove = [...state.sessions];
     } else {
       // Show sessions and let user confirm
-      console.log("\n  Sessions:");
-      for (const s of state.sessions) {
-        const exps = s.experiments.length;
-        const best = s.bestResult
-          ? `best: ${(s.bestResult.moveAccuracy * 100).toFixed(1)}%`
-          : "no results";
-        console.log(
-          `  ${s.id.slice(0, 8)}  ${s.name.padEnd(25)} ${s.status.padEnd(10)} ${exps} exps  ${best}`
-        );
+      if (state.sessions.length > 0) {
+        console.log("\n  Sessions:");
+        for (const s of state.sessions) {
+          const exps = s.experiments.length;
+          const best = s.bestResult
+            ? `best: ${(s.bestResult.moveAccuracy * 100).toFixed(1)}%`
+            : "no results";
+          console.log(
+            `  ${s.id.slice(0, 8)}  ${s.name.padEnd(25)} ${s.status.padEnd(10)} ${exps} exps  ${best}`
+          );
+        }
+      }
+
+      if (orphans.length > 0) {
+        console.log(`\n  Orphaned sandboxes (no matching session in state): ${orphans.length}`);
+        for (const o of orphans) {
+          console.log(`  ${o.sessionId.slice(0, 8)}  branch: ${o.branchName}`);
+        }
       }
 
       // Use readline for confirmation
       const readline = await import("node:readline");
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+      const total = state.sessions.length + orphans.length;
       const answer = await new Promise<string>((resolve) => {
-        rl.question("\n  Remove all sessions? (y/N): ", resolve);
+        rl.question(`\n  Remove ${total} session(s)/sandbox(es)? (y/N): `, resolve);
       });
       rl.close();
 
@@ -549,6 +587,19 @@ program
         }
       }
       cleaned++;
+    }
+
+    // Remove orphaned sandboxes
+    if (!opts.id) {
+      for (const orphan of orphans) {
+        try {
+          destroySandbox(orphan);
+          console.log(`  ✓ Removed orphaned sandbox ${orphan.sessionId.slice(0, 8)} (${orphan.branchName})`);
+        } catch (err) {
+          console.error(`  ✗ Failed to remove orphaned sandbox ${orphan.sessionId.slice(0, 8)}: ${err}`);
+        }
+        cleaned++;
+      }
     }
 
     // Remove from state

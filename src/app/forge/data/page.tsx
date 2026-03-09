@@ -1,10 +1,35 @@
-import Link from "next/link";
-import { listGamePlayers } from "@/lib/forge";
+"use client";
 
-export const revalidate = 0;
+import Link from "next/link";
+import { useState, useEffect, useCallback } from "react";
+import { AddPlayerForm } from "@/components/forge/AddPlayerForm";
+
+interface PlayerMeta {
+  username: string;
+  estimatedElo: number;
+  gameCount: number;
+  contentHash: string;
+  fetchedAt: string;
+}
 
 export default function ForgeDataPage() {
-  const players = listGamePlayers();
+  const [players, setPlayers] = useState<PlayerMeta[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const loadPlayers = useCallback(async () => {
+    try {
+      const res = await fetch("/api/forge/players");
+      if (res.ok) {
+        setPlayers(await res.json());
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPlayers();
+  }, [loadPlayers]);
 
   return (
     <div>
@@ -12,9 +37,15 @@ export default function ForgeDataPage() {
         Game Archives
       </h2>
 
-      {players.length === 0 ? (
+      <AddPlayerForm onAdded={loadPlayers} />
+
+      {loading ? (
         <div className="text-center py-16 text-zinc-500 text-sm">
-          No game data found. Run forge to fetch player games.
+          Loading...
+        </div>
+      ) : players.length === 0 ? (
+        <div className="text-center py-16 text-zinc-500 text-sm">
+          No game data found. Use the form above to fetch player games.
         </div>
       ) : (
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">

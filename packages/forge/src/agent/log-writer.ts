@@ -1,6 +1,8 @@
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from "node:url";
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const LOGS_DIR = path.join(__dirname, "..", "..", "logs");
 
 export interface LogWriter {

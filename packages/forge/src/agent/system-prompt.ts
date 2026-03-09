@@ -36,9 +36,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   // API documentation
   sections.push(API_DOCS);
 
-  // Domain knowledge (relevant to focus area)
-  const knowledge = buildKnowledgeContext(ctx.focus);
-  if (knowledge) sections.push(knowledge);
+  // Domain knowledge (relevant to focus area(s))
+  const focusAreas = ctx.focus.split(",").map((s) => s.trim()).filter(Boolean);
+  for (const area of focusAreas) {
+    const knowledge = buildKnowledgeContext(area);
+    if (knowledge) sections.push(knowledge);
+  }
 
   // Inter-agent notes from previous sessions
   const notes = buildNotesContext(5);
@@ -73,13 +76,23 @@ function buildObjective(focus: string): string {
       "Primary: match per-phase blunder/mistake rates. Secondary: maintain accuracy and CPL match.",
     opening:
       "Primary: improve opening accuracy and book coverage. Secondary: don't regress middlegame/endgame.",
+    middlegame:
+      "Primary: improve middlegame accuracy and tactical play. Secondary: maintain opening/endgame accuracy.",
     endgame:
       "Primary: improve endgame accuracy. Secondary: maintain opening/middlegame accuracy.",
   };
 
+  const areas = focus.split(",").map((s) => s.trim()).filter(Boolean);
+  const descriptions = areas
+    .map((a) => focusDetail[a])
+    .filter(Boolean);
+  const combined = descriptions.length > 0
+    ? descriptions.join("\n\n")
+    : focusDetail.accuracy;
+
   return `## Objective
 
-${focusDetail[focus] ?? focusDetail.accuracy}
+${combined}
 
 ### Three Key Metrics (aligned with Maia papers)
 1. **Move Prediction Accuracy** (50% weight) — Top-1 match rate on held-out test set. Maia achieves ~53%. We want to get as close as possible.

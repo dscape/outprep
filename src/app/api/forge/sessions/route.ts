@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import { startSession } from "@/lib/forge-process";
+import { getSessionSummaries } from "@/lib/forge";
+
+export async function GET() {
+  return NextResponse.json(getSessionSummaries());
+}
 
 export async function POST(request: Request) {
   try {
