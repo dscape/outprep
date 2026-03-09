@@ -35,11 +35,26 @@ npm run forge -- research \
 # Resume a paused session
 npm run forge -- resume <session-id>
 
+# List all sessions with live running status
+npm run forge -- ls
+
 # Check status of active session
 npm run forge -- status
 
 # List past sessions and results
 npm run forge -- history
+
+# Stop the active session (graceful pause via SIGINT)
+npm run forge -- stop
+
+# Stop a specific session by ID prefix
+npm run forge -- stop a3f2
+
+# Stop all running sessions
+npm run forge -- stop --all
+
+# Attach REPL to the active session
+npm run forge -- attach
 
 # Ask the oracle (Claude → ChatGPT → Claude pipeline)
 npm run forge -- oracle "What temperature curve works best for 1500 Elo?"

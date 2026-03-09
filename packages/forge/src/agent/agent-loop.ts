@@ -17,6 +17,7 @@ import { createSandbox, destroySandbox } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
 import { createForgeApi } from "../repl/forge-api";
 import { buildSystemPrompt, type PromptContext } from "./system-prompt";
+import { writePid, removePid } from "../pid";
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
 import { CostTracker, CLAUDE_INPUT_COST_PER_1K, CLAUDE_OUTPUT_COST_PER_1K } from "./cost-tracker";
@@ -92,6 +93,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   state.sessions.push(session);
   state.activeSessionId = sessionId;
   saveState(state);
+  writePid(sessionId);
 
   // Create REPL and inject forge API (playerData passed after construction below)
   const repl = createReplServer();
@@ -147,6 +149,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
       s.status = "paused";
     });
   } finally {
+    removePid(sessionId);
     repl.dispose();
     // Don't destroy sandbox on pause — it can be resumed
     if (session.status === "completed" || session.status === "abandoned") {
@@ -255,6 +258,7 @@ export async function resumeSession(
   updateSession(state, session.id, (s) => {
     s.status = "active";
   });
+  writePid(session.id);
 
   try {
     await runAgentLoop(client, repl, session, state, promptCtx, resumeMessage, costTracker, {
@@ -270,6 +274,7 @@ export async function resumeSession(
       s.status = "paused";
     });
   } finally {
+    removePid(session.id);
     repl.dispose();
     logWriter.close();
   }

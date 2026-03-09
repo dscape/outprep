@@ -6,15 +6,18 @@
  * Commands:
  *   research   Start a new autonomous research session
  *   resume     Resume a paused session
+ *   ls         List all sessions with live running status
  *   status     Show current session state
  *   history    List past sessions and results
+ *   stop       Stop running forge agent(s)
+ *   attach     Attach REPL to the active session
  *   oracle     Direct oracle query (outside a session)
  *   baseline   Compute fresh baseline metrics
  */
 
 import "dotenv/config";
 import { Command } from "commander";
-import { loadState, saveState, getActiveSession } from "./state/forge-state";
+import { loadState, saveState, getActiveSession, updateSession } from "./state/forge-state";
 import { listSandboxes } from "./repl/sandbox";
 
 const program = new Command();
@@ -611,6 +614,137 @@ program
     saveState(state);
 
     console.log(`\n  Cleaned ${cleaned} session(s).\n`);
+  });
+
+/* ── ls ─────────────────────────────────────────────────── */
+
+program
+  .command("ls")
+  .description("List all sessions with live running status")
+  .action(async () => {
+    const { readPid, isProcessRunning } = await import("./pid");
+    const state = loadState();
+
+    if (state.sessions.length === 0) {
+      console.log("\n  No research sessions.\n");
+      return;
+    }
+
+    console.log("\n  Sessions");
+    console.log("  ════════════════════════════════════════");
+
+    for (const session of state.sessions) {
+      const icon =
+        session.status === "completed"
+          ? "✓"
+          : session.status === "active"
+            ? "▶"
+            : session.status === "paused"
+              ? "⏸"
+              : "✗";
+
+      const isActive = session.id === state.activeSessionId;
+      const pid = readPid(session.id);
+      const running = pid !== null && isProcessRunning(pid);
+
+      const best = session.bestResult
+        ? `${(session.bestResult.moveAccuracy * 100).toFixed(1)}%`
+        : "—";
+
+      const tags = [
+        isActive ? "★" : "",
+        running ? "RUNNING" : "",
+      ].filter(Boolean).join(" ");
+
+      console.log(
+        `  ${icon} ${session.name.padEnd(25)} ` +
+          `${String(session.experiments.length).padStart(3)} exps  ` +
+          `best: ${best.padEnd(6)}  ` +
+          `$${session.totalCostUsd.toFixed(2).padStart(6)}  ` +
+          `${session.id.slice(0, 8)}` +
+          (tags ? `  ${tags}` : "")
+      );
+    }
+    console.log();
+  });
+
+/* ── stop ────────────────────────────────────────────────── */
+
+program
+  .command("stop [session-id]")
+  .description("Stop running forge agent(s)")
+  .option("--all", "Stop all running sessions")
+  .action(async (sessionId: string | undefined, opts: { all?: boolean }) => {
+    const { readPid, isProcessRunning } = await import("./pid");
+    const state = loadState();
+
+    let targets: typeof state.sessions;
+
+    if (opts.all) {
+      targets = state.sessions.filter((s) => {
+        const pid = readPid(s.id);
+        return pid !== null && isProcessRunning(pid);
+      });
+    } else {
+      const id = sessionId ?? state.activeSessionId;
+      if (!id) {
+        console.error("  ✗ No active session. Specify a session ID or use --all.");
+        process.exit(1);
+      }
+      const matches = state.sessions.filter((s) => s.id.startsWith(id));
+      if (matches.length === 0) {
+        console.error(`  ✗ No session matching "${id}".`);
+        process.exit(1);
+      }
+      if (matches.length > 1) {
+        console.error(`  ✗ Ambiguous ID "${id}" matches ${matches.length} sessions.`);
+        process.exit(1);
+      }
+      targets = matches;
+    }
+
+    if (targets.length === 0) {
+      console.log("\n  No running sessions to stop.\n");
+      return;
+    }
+
+    for (const session of targets) {
+      const pid = readPid(session.id);
+      if (pid === null || !isProcessRunning(pid)) {
+        console.log(`  ${session.name} (${session.id.slice(0, 8)}) — not running`);
+        continue;
+      }
+
+      try {
+        process.kill(pid, "SIGINT");
+        console.log(`  ✓ Sent SIGINT to ${session.name} (pid ${pid})`);
+        updateSession(state, session.id, (s) => {
+          s.status = "paused";
+        });
+      } catch (err) {
+        console.error(`  ✗ Failed to stop ${session.name}: ${err}`);
+      }
+    }
+    console.log();
+  });
+
+/* ── attach ─────────────────────────────────────────────── */
+
+program
+  .command("attach")
+  .description("Attach REPL to the active session")
+  .action(async () => {
+    const state = loadState();
+    const active = getActiveSession(state);
+
+    if (!active) {
+      console.error("  ✗ No active session to attach to.");
+      process.exit(1);
+    }
+
+    await program.parseAsync(["node", "forge", "repl", "--session", active.id], {
+      from: "user",
+    });
   });
 
 program.parse();

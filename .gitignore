@@ -48,6 +48,7 @@ packages/forge/data/
 packages/forge/sessions/
 packages/forge/logs/
 packages/forge/forge-state.json
+packages/forge/.pids/
 
 # TWIC data archives (multi-GB, created by scripts/create-twic-archive.sh)
 twic-archive-*.zip
