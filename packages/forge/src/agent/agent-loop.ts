@@ -732,7 +732,7 @@ export async function runAgentLoop(
           needsReflection
             ? `- ⚠ REFLECTION DUE: ${expsSinceReflection} experiments since last reflection. Call forge.log.reflect() before continuing.`
             : "",
-          "- Prefer code changes (forge.code.prompt()) over config-only experiments for larger improvements.",
+          "- ⚠ Sessions with ZERO code changes receive a 0.5x leaderboard PENALTY. Use forge.code.prompt() for architectural changes.",
           contextRefresh ? `\n## Updated Knowledge Context\n\n${contextRefresh}` : "",
         ].filter(Boolean).join("\n"),
       });
@@ -753,6 +753,14 @@ export function buildInitialMessage(opts: ResearchOptions, playerData: Record<st
   parts.push(`Start research session "${opts.name}" focused on ${opts.focus}.`);
   parts.push(`Seed: ${opts.seed}\n`);
 
+  parts.push(`## COMPETITIVE OBJECTIVE: Reach #1 on the Leaderboard\n`);
+  parts.push(`Before anything else, check your standing:`);
+  parts.push("```typescript");
+  parts.push(`const lb = await forge.leaderboard.get();`);
+  parts.push(`console.log("Current leaderboard:", JSON.stringify(lb, null, 2));`);
+  parts.push("```");
+  parts.push(`\n**CRITICAL SCORING RULE:** Groundbreaking (exploratory) sessions earn **5x** the leaderboard score of incremental sessions. If you are behind on the leaderboard, a successful groundbreaking session is the fastest path to #1. Factor this into your hypothesis commitment.\n`);
+
   // Show available player data
   parts.push("## Available Players (pre-downloaded and split)\n");
   parts.push("Data is pre-loaded in `playerData`. Each entry has: `{ meta, games, trainGames, testGames, split }`\n");
@@ -770,7 +778,7 @@ export function buildInitialMessage(opts: ResearchOptions, playerData: Record<st
 
   // Give the agent a concrete first step
   const first = opts.players?.[0];
-  parts.push(`\n## First step: compute baseline\n`);
+  parts.push(`\n## Step 1: Compute baseline\n`);
   parts.push("```typescript");
   if (first) {
     parts.push(`const baseline = await forge.eval.baseline(playerData["${first}"].testGames);`);
@@ -779,13 +787,13 @@ export function buildInitialMessage(opts: ResearchOptions, playerData: Record<st
   parts.push("```");
 
   parts.push(`\n## After baseline, follow this workflow:\n`);
-  parts.push(`**Step 1: Consult history** — check what previous sessions learned:`);
+  parts.push(`**Step 2: Consult history** — check what previous sessions learned:`);
   parts.push("```typescript");
   parts.push(`await forge.knowledge.search("${opts.focus}")`);
   parts.push(`await forge.knowledge.notes({ limit: 5 })`);
   parts.push(`await forge.history.searchExperiments("${opts.focus}")`);
   parts.push("```");
-  parts.push(`\n**Step 2: Generate hypotheses** — MANDATORY before any experiments:`);
+  parts.push(`\n**Step 3: Generate hypotheses** — MANDATORY before any experiments:`);
   parts.push("```typescript");
   parts.push(`forge.hypothesis.commit({`);
   parts.push(`  hypotheses: [`);
@@ -793,21 +801,22 @@ export function buildInitialMessage(opts: ResearchOptions, playerData: Record<st
   parts.push(`    { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
   parts.push(`    { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
   parts.push(`  ],`);
-  parts.push(`  committedLevel: "continuous-a",`);
+  parts.push(`  committedLevel: "<choose based on leaderboard strategy>",`);
   parts.push(`  commitmentRationale: "Choosing this because...",`);
   parts.push(`  costOfBeingWrong: "If wrong, it means...",`);
   parts.push(`});`);
   parts.push("```");
-  parts.push(`\n**Step 3: Challenge your hypothesis** — first oracle query must seek disconfirmation:`);
+  parts.push(`\n**Remember:** Groundbreaking = 5x score, but config-only sessions = 0.5x penalty. The best strategy: commit to groundbreaking AND make code changes (5x). The worst: continuous + config-only (0.5x).\n`);
+  parts.push(`\n**Step 4: Challenge your hypothesis** — first oracle query must seek disconfirmation:`);
   parts.push("```typescript");
   parts.push(`const oracleResult = await forge.oracle.ask("What inputs would most likely make this hypothesis fail?", JSON.stringify(baseline), "adversarial")`);
   parts.push(`forge.oracle.recordSurprise(oracleResult.id, "I expected...", true/false, "The surprise was...")`);
   parts.push("```");
-  parts.push(`\n**Step 4: Run experiment, record, and leave a note:**`);
+  parts.push(`\n**Step 5: Run experiment, record, and leave a note:**`);
   parts.push("```typescript");
   parts.push(`forge.knowledge.note("EXP <name>: <hypothesis>. Result: <delta>. Conclusion: <learning>", ["${opts.focus}", "<technique>"])`);
   parts.push("```");
-  parts.push(`\nRepeat steps 3-4. After every 5 experiments, call forge.log.reflect(). When abandoning a hypothesis, call forge.log.kill().`);
+  parts.push(`\nRepeat steps 4-5. After every 5 experiments, call forge.log.reflect(). When abandoning a hypothesis, call forge.log.kill().`);
 
   if (opts.quick) {
     parts.push(`\nUse \`forge.eval.runQuick(testGames, trainGames)\` for faster triage iterations.`);

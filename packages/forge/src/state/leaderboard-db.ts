@@ -70,14 +70,20 @@ export interface AgentSessionResult {
   cplKlDelta: number;
   compositeDelta: number;
   isExploratory: boolean;
+  isConfigOnly: boolean;
   totalCostUsd: number;
 }
 
 export function recordSessionResult(result: AgentSessionResult): void {
   const db = getDb();
-  const weightedDelta = result.isExploratory
-    ? result.compositeDelta * 5
-    : result.compositeDelta;
+  // Scoring multipliers:
+  //   groundbreaking + code changes = 5x
+  //   groundbreaking + config-only  = 2.5x
+  //   continuous + code changes     = 1x
+  //   continuous + config-only      = 0.5x
+  const exploratoryMultiplier = result.isExploratory ? 5 : 1;
+  const configOnlyMultiplier = result.isConfigOnly ? 0.5 : 1;
+  const weightedDelta = result.compositeDelta * exploratoryMultiplier * configOnlyMultiplier;
 
   db.prepare(`
     INSERT OR REPLACE INTO agent_session_results

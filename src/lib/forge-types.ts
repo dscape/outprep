@@ -106,6 +106,12 @@ export interface AgentSummary {
   totalTimeSeconds: number;
 }
 
+export interface AgentDetail extends AgentSummary {
+  sessionHistory: AgentSessionEntry[];
+  totalInputTokens: number;
+  totalOutputTokens: number;
+}
+
 /* ── Leaderboard ────────────────────────────────────────────── */
 
 export interface LeaderboardEntry {

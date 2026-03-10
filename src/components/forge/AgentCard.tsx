@@ -1,21 +1,6 @@
 import Link from "next/link";
 import type { AgentSummary } from "@/lib/forge-types";
-
-function AgentStatusBadge({ status, isRunning }: { status: string; isRunning: boolean }) {
-  if (isRunning) {
-    return (
-      <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800/50">
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-        Running
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center rounded-full bg-zinc-800 px-2 py-0.5 text-xs font-medium text-zinc-400 border border-zinc-700/50">
-      Stopped
-    </span>
-  );
-}
+import { AgentStatusBadge } from "./AgentStatusBadge";
 
 export function AgentCard({ agent }: { agent: AgentSummary }) {
   const sign = agent.avgWeightedCompositeDelta > 0 ? "+" : "";
@@ -23,7 +8,7 @@ export function AgentCard({ agent }: { agent: AgentSummary }) {
 
   return (
     <Link
-      href={agent.currentSessionId ? `/forge/${agent.currentSessionId}` : "#"}
+      href={`/forge/agents/${agent.id}`}
       className="block rounded-lg border border-zinc-800 bg-zinc-900 p-5 hover:border-zinc-700 hover:bg-zinc-800/50 transition-all group"
     >
       <div className="flex items-start justify-between mb-3">
@@ -44,7 +29,7 @@ export function AgentCard({ agent }: { agent: AgentSummary }) {
             </p>
           </div>
         </div>
-        <AgentStatusBadge status={agent.status} isRunning={agent.isRunning} />
+        <AgentStatusBadge isRunning={agent.isRunning} />
       </div>
 
       <div className="grid grid-cols-4 gap-3 text-sm">

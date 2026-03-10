@@ -423,7 +423,8 @@ async function runAgentSession(
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
-  injectAgentExtensions(forgeApi, agentId, agentName, session.id);
+  const sessionStartedAt = new Date().toISOString();
+  injectAgentExtensions(forgeApi, agentId, agentName, session, sessionStartedAt);
   repl.inject("forge", forgeApi);
 
   const agent = state.agents.find((a) => a.id === agentId);
@@ -542,7 +543,8 @@ async function resumeAgentSession(
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
-  injectAgentExtensions(forgeApi, agentId, agentName, session.id);
+  const sessionStartedAt = session.startedAt ?? new Date().toISOString();
+  injectAgentExtensions(forgeApi, agentId, agentName, session, sessionStartedAt);
   repl.inject("forge", forgeApi);
 
   const focus = session.focus ?? "accuracy";
@@ -624,7 +626,8 @@ function client(): Anthropic {
 }
 
 /**
- * Inject leaderboard (read-only) and feature request callback onto the forge API.
+ * Inject leaderboard (read-only), feature request callback, and
+ * incremental leaderboard update hook onto the forge API.
  * These bypass the ForgeApi type intentionally — agents cannot write to
  * the leaderboard, only the agent-manager writes.
  */
@@ -632,7 +635,8 @@ function injectAgentExtensions(
   forgeApi: any,
   agentId: string,
   agentName: string,
-  sessionId: string,
+  session: ForgeSession,
+  sessionStartedAt: string,
 ): void {
   forgeApi.leaderboard = {
     get: () => getLeaderboard(),
@@ -648,13 +652,18 @@ function injectAgentExtensions(
       id: reqId,
       agentId,
       agentName,
-      sessionId,
+      sessionId: session.id,
       title,
       description,
       category,
     });
     console.log(`  Feature request filed: ${title}`);
     return reqId;
+  };
+
+  // Update leaderboard after every experiment (incremental)
+  forgeApi._onExperimentRecorded = () => {
+    recordSessionToLeaderboard(agentId, agentName, session, sessionStartedAt);
   };
 }
 
@@ -695,8 +704,14 @@ function recordSessionToLeaderboard(
   const isExploratory =
     latestHypothesis?.committedLevel === "groundbreaking";
 
+  // Check if session had any code changes (config-only sessions get penalized)
+  const hasCodeChanges = session.experiments.some(
+    (e) => (e.codeChanges?.length ?? 0) > 0
+  ) || (session.activeChanges?.length ?? 0) > 0;
+  const isConfigOnly = !hasCodeChanges;
+
   recordSessionResult({
-    id: randomUUID(),
+    id: `${agentId}:${session.id}`,
     agentId,
     agentName,
     sessionId: session.id,
@@ -709,6 +724,7 @@ function recordSessionToLeaderboard(
     cplKlDelta,
     compositeDelta,
     isExploratory,
+    isConfigOnly,
     totalCostUsd: session.totalCostUsd,
   });
 }

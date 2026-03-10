@@ -1,3 +1,4 @@
+import Link from "next/link";
 import type { LeaderboardEntry } from "@/lib/forge-types";
 
 interface LeaderboardProps {
@@ -45,7 +46,12 @@ export function Leaderboard({ entries, highlightAgentId }: LeaderboardProps) {
                   #{e.rank}
                 </td>
                 <td className="px-4 py-3 font-medium text-zinc-200">
-                  {e.agentName}
+                  <Link
+                    href={`/forge/agents/${e.agentId}`}
+                    className="hover:text-emerald-400 transition-colors"
+                  >
+                    {e.agentName}
+                  </Link>
                   {isHighlighted && (
                     <span className="ml-2 text-xs text-emerald-400">YOU</span>
                   )}

@@ -30,6 +30,7 @@ export function SessionTabs({
   isDev,
   tab,
   onTabChange,
+  agent,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
   logs: { filename: string; content: string }[];
@@ -37,6 +38,7 @@ export function SessionTabs({
   isDev?: boolean;
   tab: Tab;
   onTabChange: (tab: Tab) => void;
+  agent?: { id: string; name: string; isRunning: boolean } | null;
 }) {
   const [consoleHighlightTs, setConsoleHighlightTs] = useState<string | undefined>();
 
@@ -86,7 +88,7 @@ export function SessionTabs({
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab session={session} />}
+      {tab === "overview" && <OverviewTab session={session} agent={agent} />}
       {tab === "activity" && (
         <ActivityTimeline
           events={activity || []}
@@ -116,13 +118,32 @@ export function SessionTabs({
 
 function OverviewTab({
   session,
+  agent,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
+  agent?: { id: string; name: string; isRunning: boolean } | null;
 }) {
   const githubBranch = session.worktreeBranch;
 
   return (
     <div className="space-y-6">
+      {/* Agent */}
+      {agent && (
+        <Card title="Agent">
+          <div className="flex items-center gap-3">
+            <a href={`/forge/agents/${agent.id}`} className="text-sm font-medium text-zinc-200 hover:text-emerald-400 transition-colors">
+              {agent.name}
+            </a>
+            {agent.isRunning && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800/50">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Running
+              </span>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* Cost */}
       <Card title="Cost">
         <CostDisplay

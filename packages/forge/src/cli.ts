@@ -638,7 +638,15 @@ agent
   .option("--seed <n>", "Random seed", "42")
   .option("--quick", "Use triage-size evaluations")
   .option("--all", "Re-start all stopped agents with their saved config")
+  .option("--resume <agentId>", "Re-start a specific stopped agent by ID")
   .action(async (opts) => {
+    if (opts.resume) {
+      const { resumeAgent } = await import("./agent/agent-manager");
+      console.log(`\n  Resuming agent ${opts.resume.slice(0, 8)}...\n`);
+      await resumeAgent(opts.resume);
+      return;
+    }
+
     if (opts.all) {
       // Re-start all stopped agents
       const { readAgentPid, isProcessRunning } = await import("./pid");

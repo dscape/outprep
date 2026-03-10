@@ -168,10 +168,12 @@ function buildDecisionPrompt(ctx: DecisionContext): string {
   sections.push(`## Decision Rules
 1. If a paused session has promising unfinished work, prefer RESUMING it.
 2. Diversify: pick focus areas and players that haven't been explored much.
-3. If behind on the leaderboard, consider a "groundbreaking" exploratory approach.
+3. If behind on the leaderboard, strongly consider committing to a "groundbreaking" exploratory hypothesis — groundbreaking sessions earn **5x** the leaderboard score of incremental sessions. This is the fastest way to climb to #1.
 4. You can combine multiple focus areas with commas (e.g., "accuracy,opening").
 5. If no players are available, output action "wait".
 6. Pick 1-3 players per session — don't use all players every time.
+7. Your objective is to reach **#1 on the leaderboard**. The 5x multiplier for groundbreaking (exploratory) research means a single successful groundbreaking session can outweigh five incremental sessions. Factor this into your strategy.
+8. **IMPORTANT: Config-only sessions (zero code changes) receive a 0.5x PENALTY.** Most agents default to continuous-a with config tuning — this is the weakest strategy (0.5x). A single successful groundbreaking session with code changes (5x) outweighs TEN config-only continuous sessions. Plan to make CODE changes via forge.code.prompt().
 
 Respond with ONLY valid JSON (no markdown, no explanation):
 {

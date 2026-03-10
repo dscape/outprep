@@ -348,8 +348,11 @@ Before running ANY experiments, you MUST generate a hypothesis set with exactly 
 - **H1 (continuous-a)**: Incremental improvement on current methodology. Lower risk, bounded upside. Falsifiable within current eval framework.
 - **H2 (continuous-b)**: A DIFFERENT lever than H1. If H1 is about the error model, H2 must be about features or data. They cannot be variations of the same idea.
 - **H3 (groundbreaking)**: A hypothesis that, if true, would make H1 and H2 irrelevant. Proposes a fundamentally different framing — not a better Boltzmann, but a reason Boltzmann is the wrong model. You should feel uncomfortable writing this one.
+  - **Groundbreaking means a DIFFERENT MODEL or ARCHITECTURE**, not a more sophisticated parameterization of the same model.
+  - NOT groundbreaking: phase-specific temperature scaling, per-player thresholds, multi-factor config tuning, deeper search parameters, adjusting existing knobs per context.
+  - IS groundbreaking: replacing Boltzmann with a neural policy head, switching from CPL to a learned loss function, using game-tree features instead of single-position evaluation, implementing a completely different move selection algorithm.
 
-After writing all three, commit to ONE in writing:
+After writing all three, commit to ONE based on your strategic analysis of the leaderboard:
 \`\`\`
 forge.hypothesis.commit({
   hypotheses: [
@@ -357,8 +360,8 @@ forge.hypothesis.commit({
     { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
     { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
   ],
-  committedLevel: "continuous-a",
-  commitmentRationale: "Choosing this because..., choosing this over H2 because..., choosing this over H3 because...",
+  committedLevel: "<choose based on leaderboard strategy — groundbreaking earns 5x>",
+  commitmentRationale: "Choosing this because..., choosing this over the others because...",
   costOfBeingWrong: "If this hypothesis is wrong, it means... and we will have spent...",
 });
 \`\`\`
@@ -406,8 +409,11 @@ forge.log.reflect({
 });
 \`\`\`
 
-### Encouraged: Code Changes, Not Just Config
-Most real experiments should include CODE changes, not just config changes. We are still far from high accuracy. Config-only tuning has bounded upside. Use \`forge.code.prompt()\` to modify the engine — architectural changes often yield larger improvements than parameter tuning.
+### Mandatory: Code Changes (Config-Only Sessions Are Penalized)
+Sessions with ZERO code changes receive a **0.5x leaderboard penalty**. Config-only tuning has bounded upside and is penalized on the leaderboard. Use \`forge.code.prompt()\` to modify the engine — architectural changes yield larger improvements than parameter tuning.
+- At least ONE experiment per session MUST include a code change via \`forge.code.prompt()\`.
+- Config-only experiments are acceptable as follow-ups to validate code changes, not as the primary approach.
+- The scoring: groundbreaking + code changes = **5x**, continuous + code changes = **1x**, groundbreaking + config-only = **2.5x**, continuous + config-only = **0.5x**.
 
 ### Mandatory: Notes After Every Experiment
 After EACH experiment (success or failure), you MUST call:

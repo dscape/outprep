@@ -143,13 +143,36 @@ export function createHypothesisOps(
         );
       }
 
-      // If committing to groundbreaking, rationale must address why default is insufficient
-      if (set.committedLevel === "groundbreaking" && set.commitmentRationale) {
-        if (set.commitmentRationale.length < 50) {
+      // If committing to groundbreaking, validate it's truly architectural
+      if (set.committedLevel === "groundbreaking") {
+        if (set.commitmentRationale && set.commitmentRationale.length < 50) {
           errors.push(
             "When committing to a groundbreaking hypothesis, commitmentRationale must be at least 50 characters — " +
             "articulate specifically why the default approach is insufficient for this hypothesis"
           );
+        }
+
+        // Check if the groundbreaking hypothesis looks like config tuning
+        const groundbreakingH = set.hypotheses?.find(
+          (h) => h.level === "groundbreaking"
+        );
+        if (groundbreakingH?.statement) {
+          const stmt = groundbreakingH.statement.toLowerCase();
+          const configWords = ["temperature", "threshold", "parameter", "scaling", "tuning", "adjust", "tweak", "knob"];
+          const architectureWords = ["model", "architecture", "neural", "replace", "rewrite", "implement", "algorithm", "network", "embedding", "transformer", "policy"];
+          const hasConfigWords = configWords.some((w) => stmt.includes(w));
+          const hasArchWords = architectureWords.some((w) => stmt.includes(w));
+
+          if (hasConfigWords && !hasArchWords) {
+            // Looks like config tuning dressed as groundbreaking — require longer rationale
+            if (!set.commitmentRationale || set.commitmentRationale.length < 100) {
+              errors.push(
+                "Your groundbreaking hypothesis mentions config/parameter concepts without architectural changes. " +
+                "Either rewrite the hypothesis to propose a truly different model/architecture, or provide a commitmentRationale " +
+                "of 100+ characters explaining why this is genuinely architectural and not just sophisticated parameter tuning."
+              );
+            }
+          }
         }
       }
 

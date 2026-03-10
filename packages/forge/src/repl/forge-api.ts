@@ -155,6 +155,8 @@ export interface ForgeApi {
   leaderboard?: LeaderboardOps;
   /** File a feature request (injected by agent-manager) */
   request?: (title: string, description: string, category: string) => string;
+  /** Callback fired after each experiment is recorded (injected by agent-manager) */
+  _onExperimentRecorded?: () => void;
   compare(a: TestResult, b: TestResult): ComparisonTable;
 }
 
@@ -173,6 +175,9 @@ export function createForgeApi(
   const oracleLimiter = createOracleLimiter();
   const surpriseTracker = createSurpriseTracker(session, state);
   const hypothesisOps = createHypothesisOps(session, state);
+
+  // Mutable ref for post-experiment callback (set by agent-manager via _onExperimentRecorded)
+  const callbacks: { onExperimentRecorded?: () => void } = {};
 
   // Infer trainGames from playerData when not explicitly provided
   function inferTrainGames(testGames: LichessGame[]): LichessGame[] | undefined {
@@ -497,6 +502,9 @@ export function createForgeApi(
         }
       });
 
+      // Notify agent-manager to update leaderboard incrementally
+      try { callbacks.onExperimentRecorded?.(); } catch { /* non-fatal */ }
+
       return path;
     },
     trend() {
@@ -535,7 +543,7 @@ export function createForgeApi(
     },
   };
 
-  return {
+  const api: ForgeApi = {
     code: codeOps,
     config: configOps,
     eval: evalOps,
@@ -547,8 +555,11 @@ export function createForgeApi(
     log,
     history,
     hypothesis: hypothesisOps,
+    get _onExperimentRecorded() { return callbacks.onExperimentRecorded; },
+    set _onExperimentRecorded(fn: (() => void) | undefined) { callbacks.onExperimentRecorded = fn; },
     compare(a: TestResult, b: TestResult) {
       return evalOps.compare(a, b);
     },
   };
+  return api;
 }

@@ -121,6 +121,27 @@ export function stopAllAgents(): number {
   return stopped;
 }
 
+export function startSingleAgent(agentId: string): { started: boolean; error?: string } {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { started: false, error: "ANTHROPIC_API_KEY is not configured." };
+  }
+
+  const args = ["tsx", FORGE_CLI, "agent", "start", "--resume", agentId];
+
+  const child = spawn("npx", args, {
+    cwd: PROJECT_ROOT,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: false,
+  });
+
+  child.stderr?.on("data", (data: Buffer) => {
+    console.error(`[forge-agent:resume:${agentId.slice(0, 8)}]`, data.toString());
+  });
+
+  return { started: true };
+}
+
 export function startAllAgents(): { started: number; error?: string } {
   if (!process.env.ANTHROPIC_API_KEY) {
     return { started: 0, error: "ANTHROPIC_API_KEY is not configured." };

@@ -1,13 +1,11 @@
-import { getAgentSummaries, getLeaderboard } from "@/lib/forge";
+import { getAgentSummaries } from "@/lib/forge";
 import { AgentCard } from "@/components/forge/AgentCard";
-import { Leaderboard } from "@/components/forge/Leaderboard";
 import { AgentControls } from "./agent-controls";
 
 export const dynamic = "force-dynamic";
 
 export default function AgentsPage() {
   const agents = getAgentSummaries();
-  const leaderboard = getLeaderboard();
 
   const running = agents.filter((a) => a.isRunning).length;
   const stopped = agents.filter((a) => !a.isRunning).length;
@@ -24,13 +22,6 @@ export default function AgentsPage() {
         </div>
         <AgentControls hasAgents={agents.length > 0} hasStoppedAgents={stopped > 0} hasRunningAgents={running > 0} />
       </div>
-
-      {leaderboard.length > 0 && (
-        <div>
-          <h3 className="text-sm font-medium text-zinc-400 mb-3">Leaderboard</h3>
-          <Leaderboard entries={leaderboard} />
-        </div>
-      )}
 
       {agents.length > 0 ? (
         <div className="grid gap-4 sm:grid-cols-2">

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { ForgeSession, ActivityEvent } from "@/lib/forge-types";
 import { StatusBadge } from "@/components/forge/StatusBadge";
 import { SessionTabs, type Tab } from "./session-tabs";
@@ -11,12 +12,14 @@ export function SessionLayout({
   activity,
   isDev,
   created,
+  agent,
 }: {
   session: Omit<ForgeSession, "conversationHistory"> & { isRunning?: boolean };
   logs: { filename: string; content: string }[];
   activity: ActivityEvent[];
   isDev: boolean;
   created: string;
+  agent?: { id: string; name: string; isRunning: boolean } | null;
 }) {
   const [tab, setTab] = useState<Tab>("overview");
 
@@ -43,6 +46,20 @@ export function SessionLayout({
           {session.players.join(", ")} &middot; {session.focus} &middot;
           Created {created}
         </p>
+        {agent && (
+          <p className="text-sm text-zinc-500 mt-1">
+            Agent:{" "}
+            <Link href={`/forge/agents/${agent.id}`} className="text-zinc-300 hover:text-emerald-400 transition-colors">
+              {agent.name}
+            </Link>
+            {agent.isRunning && (
+              <span className="ml-2 inline-flex items-center gap-1 text-xs text-emerald-400">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Running
+              </span>
+            )}
+          </p>
+        )}
       </div>
 
       <SessionTabs
@@ -52,6 +69,7 @@ export function SessionLayout({
         isDev={isDev}
         tab={tab}
         onTabChange={setTab}
+        agent={agent}
       />
     </div>
   );

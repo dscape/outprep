@@ -6,6 +6,7 @@ import type {
   SessionSummary,
   KnowledgeTopic,
   AgentSummary,
+  AgentDetail,
   LeaderboardEntry,
   FeatureRequest,
 } from "./forge-types";
@@ -360,6 +361,86 @@ export function getAgentSummaries(): AgentSummary[] {
       totalTimeSeconds: entry?.totalTimeSeconds ?? 0,
     };
   });
+}
+
+export function getAgent(agentId: string): AgentDetail | null {
+  const state = loadForgeState();
+  if (!state) return null;
+
+  const agent = (state.agents ?? []).find((a) => a.id === agentId);
+  if (!agent) return null;
+
+  const running = isAgentProcessRunning(agent.id);
+  const status = agent.status === "running" && !running ? "stopped" : agent.status;
+  const currentSession = agent.currentSessionId
+    ? state.sessions.find((s) => s.id === agent.currentSessionId)
+    : null;
+
+  // Load leaderboard rank for this agent
+  let rank: number | null = null;
+  let avgWeightedCompositeDelta = 0;
+  let avgAccuracyDelta = 0;
+  let totalTimeSeconds = 0;
+  try {
+    const dbPath = path.join(FORGE_ROOT, "leaderboard.db");
+    if (fs.existsSync(dbPath)) {
+      const Database = require("better-sqlite3");
+      const db = new Database(dbPath, { readonly: true });
+      const rows = db.prepare(`
+        SELECT agent_id,
+          AVG(accuracy_delta) as avg_accuracy_delta,
+          AVG(weighted_composite_delta) as avg_weighted_composite_delta,
+          SUM(duration_seconds) as total_time_seconds
+        FROM agent_session_results WHERE ended_at IS NOT NULL
+        GROUP BY agent_id ORDER BY avg_weighted_composite_delta DESC
+      `).all() as any[];
+      db.close();
+      const idx = rows.findIndex((r: any) => r.agent_id === agentId);
+      if (idx !== -1) {
+        rank = idx + 1;
+        avgWeightedCompositeDelta = rows[idx].avg_weighted_composite_delta;
+        avgAccuracyDelta = rows[idx].avg_accuracy_delta;
+        totalTimeSeconds = rows[idx].total_time_seconds;
+      }
+    }
+  } catch {
+    // SQLite not available
+  }
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    status,
+    createdAt: agent.createdAt,
+    updatedAt: agent.updatedAt,
+    currentSessionId: agent.currentSessionId,
+    currentSessionName: currentSession?.name ?? null,
+    sessionCount: agent.sessionHistory.length,
+    totalCostUsd: agent.totalCostUsd,
+    config: agent.config,
+    isRunning: running,
+    rank,
+    avgWeightedCompositeDelta,
+    avgAccuracyDelta,
+    totalTimeSeconds,
+    sessionHistory: agent.sessionHistory,
+    totalInputTokens: agent.totalInputTokens,
+    totalOutputTokens: agent.totalOutputTokens,
+  };
+}
+
+export function getAgentBasicInfo(agentId: string): { id: string; name: string; isRunning: boolean } | null {
+  const state = loadForgeState();
+  if (!state) return null;
+
+  const agent = (state.agents ?? []).find((a) => a.id === agentId);
+  if (!agent) return null;
+
+  return {
+    id: agent.id,
+    name: agent.name,
+    isRunning: isAgentProcessRunning(agent.id),
+  };
 }
 
 export function getLeaderboard(): LeaderboardEntry[] {
