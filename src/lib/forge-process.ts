@@ -17,9 +17,12 @@ interface RunningProcess {
   process: ChildProcess;
   sessionId: string;
   startedAt: string;
+  exitCode: number | null;
+  stderrTail: string;
 }
 
 const running = new Map<string, RunningProcess>();
+const finished = new Map<string, { exitCode: number | null; error: string }>();
 
 export interface StartSessionOpts {
   name?: string;
@@ -30,7 +33,14 @@ export interface StartSessionOpts {
   quick?: boolean;
 }
 
-export function startSession(opts: StartSessionOpts): { sessionId: string } {
+export function startSession(opts: StartSessionOpts): { sessionId: string; error?: string } {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return {
+      sessionId: "",
+      error: "ANTHROPIC_API_KEY is not configured. Add it to .env or .env.local and restart the dev server.",
+    };
+  }
+
   const args = ["tsx", FORGE_CLI, "research"];
 
   if (opts.name) args.push("--name", opts.name);
@@ -55,17 +65,25 @@ export function startSession(opts: StartSessionOpts): { sessionId: string } {
     process: child,
     sessionId: tempId,
     startedAt: new Date().toISOString(),
+    exitCode: null,
+    stderrTail: "",
   };
 
   running.set(tempId, entry);
 
-  child.on("exit", () => {
+  child.on("exit", (code) => {
+    if (code !== 0 && code !== null) {
+      finished.set(tempId, { exitCode: code, error: entry.stderrTail.trim() });
+    }
     running.delete(tempId);
     markSessionPausedIfActive(tempId);
   });
 
   child.stderr?.on("data", (data: Buffer) => {
-    console.error(`[forge:${tempId}]`, data.toString());
+    const text = data.toString();
+    console.error(`[forge:${tempId}]`, text);
+    // Keep last 2KB of stderr for error reporting
+    entry.stderrTail = (entry.stderrTail + text).slice(-2048);
   });
 
   return { sessionId: tempId };
@@ -87,17 +105,24 @@ export function resumeSession(sessionId: string): boolean {
     process: child,
     sessionId,
     startedAt: new Date().toISOString(),
+    exitCode: null,
+    stderrTail: "",
   };
 
   running.set(sessionId, entry);
 
-  child.on("exit", () => {
+  child.on("exit", (code) => {
+    if (code !== 0 && code !== null) {
+      finished.set(sessionId, { exitCode: code, error: entry.stderrTail.trim() });
+    }
     running.delete(sessionId);
     markSessionPausedIfActive(sessionId);
   });
 
   child.stderr?.on("data", (data: Buffer) => {
-    console.error(`[forge:${sessionId}]`, data.toString());
+    const text = data.toString();
+    console.error(`[forge:${sessionId}]`, text);
+    entry.stderrTail = (entry.stderrTail + text).slice(-2048);
   });
 
   return true;
@@ -118,4 +143,8 @@ export function isRunning(sessionId: string): boolean {
 
 export function getRunningSessionIds(): string[] {
   return Array.from(running.keys());
+}
+
+export function getProcessError(sessionId: string): { exitCode: number | null; error: string } | null {
+  return finished.get(sessionId) ?? null;
 }

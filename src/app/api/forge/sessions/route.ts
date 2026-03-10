@@ -1,8 +1,17 @@
-import { NextResponse } from "next/server";
-import { startSession } from "@/lib/forge-process";
+import { NextRequest, NextResponse } from "next/server";
+import { startSession, getProcessError } from "@/lib/forge-process";
 import { getSessionSummaries } from "@/lib/forge";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const tempId = request.nextUrl.searchParams.get("checkError");
+  if (tempId) {
+    const err = getProcessError(tempId);
+    if (err) {
+      return NextResponse.json({ error: err.error || `Process exited with code ${err.exitCode}` }, { status: 500 });
+    }
+    return NextResponse.json({ status: "running" });
+  }
+
   return NextResponse.json(getSessionSummaries());
 }
 
@@ -26,6 +35,13 @@ export async function POST(request: Request) {
       seed,
       quick,
     });
+
+    if (result.error) {
+      return NextResponse.json(
+        { error: result.error },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({ sessionId: result.sessionId, status: "starting" });
   } catch (err) {

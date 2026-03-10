@@ -15,21 +15,34 @@ const NOTES_DIR = path.join(FORGE_ROOT, "src", "knowledge", "notes");
 const LOGS_DIR = path.join(FORGE_ROOT, "logs");
 const GAMES_DIR = path.join(FORGE_ROOT, "data", "games");
 
+const EMPTY_STATE: ForgeState = {
+  version: 1,
+  sessions: [],
+  activeSessionId: null,
+  lastCheckpoint: new Date().toISOString(),
+};
+
 /* ── State ──────────────────────────────────────────────── */
 
 export function isForgeAvailable(): boolean {
-  return fs.existsSync(STATE_PATH);
+  return true;
 }
 
-export function loadForgeState(): ForgeState | null {
+export function loadForgeState(): ForgeState {
+  if (!fs.existsSync(STATE_PATH)) {
+    const empty = { ...EMPTY_STATE };
+    // Auto-create the state file so the app has parity with the CLI
+    fs.mkdirSync(path.dirname(STATE_PATH), { recursive: true });
+    fs.writeFileSync(STATE_PATH, JSON.stringify(empty, null, 2));
+    return empty;
+  }
+
   try {
     const raw = fs.readFileSync(STATE_PATH, "utf-8");
     return JSON.parse(raw) as ForgeState;
-  } catch {
-    if (!fs.existsSync(STATE_PATH)) {
-      console.warn(`[forge] forge-state.json not found at ${STATE_PATH}`);
-    }
-    return null;
+  } catch (err) {
+    console.error(`[forge] Failed to load forge-state.json: ${err}`);
+    return { ...EMPTY_STATE };
   }
 }
 

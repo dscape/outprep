@@ -125,38 +125,53 @@ export function NewSessionDialog({ onClose }: { onClose: () => void }) {
       }
 
       const sessionName = name || data.sessionId;
-
-      onClose();
+      const tempId = data.sessionId;
 
       // Poll for the new session to appear in forge-state (CLI writes it async)
-      const pollForSession = async () => {
-        for (let i = 0; i < 20; i++) {
-          await new Promise((r) => setTimeout(r, 2000));
-          router.refresh();
-          try {
-            const stateRes = await fetch("/api/forge/sessions");
-            if (!stateRes.ok) continue;
-            const sessions = await stateRes.json();
-            // Match by name
-            const match = sessions.find(
-              (s: { name: string }) => s.name === sessionName
-            );
-            if (match) {
-              router.push(`/forge/${match.id}`);
-              return;
-            }
-            // Fallback: find any session that didn't exist before
-            const newSession = sessions.find(
-              (s: { id: string }) => !existingIds.has(s.id)
-            );
-            if (newSession) {
-              router.push(`/forge/${newSession.id}`);
-              return;
-            }
-          } catch {}
+      for (let i = 0; i < 20; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+
+        // Check if the process crashed
+        try {
+          const errRes = await fetch(`/api/forge/sessions?checkError=${encodeURIComponent(tempId)}`);
+          if (!errRes.ok) {
+            const errData = await errRes.json();
+            throw new Error(errData.error || "Forge process failed");
+          }
+        } catch (e) {
+          if (e instanceof Error && e.message !== "Failed to fetch") {
+            throw e;
+          }
         }
-      };
-      pollForSession();
+
+        try {
+          const stateRes = await fetch("/api/forge/sessions");
+          if (!stateRes.ok) continue;
+          const sessions = await stateRes.json();
+          // Match by name
+          const match = sessions.find(
+            (s: { name: string }) => s.name === sessionName
+          );
+          if (match) {
+            onClose();
+            router.push(`/forge/${match.id}`);
+            return;
+          }
+          // Fallback: find any session that didn't exist before
+          const newSession = sessions.find(
+            (s: { id: string }) => !existingIds.has(s.id)
+          );
+          if (newSession) {
+            onClose();
+            router.push(`/forge/${newSession.id}`);
+            return;
+          }
+        } catch {}
+
+        router.refresh();
+      }
+
+      throw new Error("Session did not appear after 40 seconds. Check server logs for details.");
     } catch (err) {
       setError(String(err instanceof Error ? err.message : err));
     } finally {

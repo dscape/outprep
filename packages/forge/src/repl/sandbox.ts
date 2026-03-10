@@ -169,6 +169,14 @@ export function acceptSandbox(sandbox: SandboxInfo): string {
  * Destroy the sandbox worktree and delete the branch.
  */
 export function destroySandbox(sandbox: SandboxInfo): void {
+  // Safety: never destroy a worktree outside the sessions directory
+  if (!sandbox.worktreePath.startsWith(SESSIONS_DIR)) {
+    throw new Error(
+      `Refusing to destroy sandbox at "${sandbox.worktreePath}" — ` +
+        `path is outside sessions directory "${SESSIONS_DIR}"`
+    );
+  }
+
   try {
     // Remove the worktree
     execSync(`git worktree remove "${sandbox.worktreePath}" --force`, {
@@ -217,6 +225,10 @@ export function listSandboxes(): SandboxInfo[] {
         const branch = branchLine.replace("branch refs/heads/", "");
 
         if (branch.startsWith("research/") || branch.startsWith("forge/")) {
+          // Only include worktrees inside the sessions directory —
+          // never match the root repo or other external worktrees
+          if (!worktreePath.startsWith(SESSIONS_DIR)) continue;
+
           const sessionId = branch.replace(/^(research|forge)\//, "");
           sandboxes.push({
             sessionId,
