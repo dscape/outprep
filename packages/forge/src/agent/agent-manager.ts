@@ -543,7 +543,7 @@ async function resumeAgentSession(
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
-  const sessionStartedAt = session.startedAt ?? new Date().toISOString();
+  const sessionStartedAt = session.createdAt ?? new Date().toISOString();
   injectAgentExtensions(forgeApi, agentId, agentName, session, sessionStartedAt);
   repl.inject("forge", forgeApi);
 
