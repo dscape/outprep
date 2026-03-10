@@ -104,8 +104,18 @@ export async function resumeAgent(agentId: string): Promise<void> {
     process.exit(1);
   }
   if (agent.status === "running") {
-    console.error(`  ✗ Agent "${agent.name}" is already running.`);
-    process.exit(1);
+    // Check if the process is actually alive — stale state is common after crashes
+    const { readAgentPid, isProcessRunning } = await import("../pid");
+    const pid = readAgentPid(agentId);
+    if (pid && isProcessRunning(pid)) {
+      console.error(`  ✗ Agent "${agent.name}" is already running (pid ${pid}).`);
+      process.exit(1);
+    }
+    // Stale state — process is dead, reset to stopped and continue
+    console.log(`  Agent "${agent.name}" was marked running but process is dead. Resetting...`);
+    updateAgent(state, agentId, (a) => {
+      a.status = "stopped";
+    });
   }
 
   updateAgent(state, agentId, (a) => {
