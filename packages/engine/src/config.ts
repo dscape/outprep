@@ -83,7 +83,7 @@ export const DEFAULT_CONFIG: BotConfig = {
     temperatureBySkill: [
       [
         0,
-        15
+        10
       ],
       [
         3,
