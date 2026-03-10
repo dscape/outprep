@@ -12,6 +12,9 @@ const typeConfig: Record<
   note: { color: "text-amber-400", bg: "bg-amber-400", label: "Note" },
   "knowledge-update": { color: "text-cyan-400", bg: "bg-cyan-400", label: "Knowledge" },
   "session-status": { color: "text-zinc-400", bg: "bg-zinc-400", label: "Status" },
+  hypothesis: { color: "text-yellow-400", bg: "bg-yellow-400", label: "Hypothesis" },
+  "kill-signal": { color: "text-red-400", bg: "bg-red-400", label: "Kill Signal" },
+  reflection: { color: "text-teal-400", bg: "bg-teal-400", label: "Reflection" },
 };
 
 export function ActivityTimeline({

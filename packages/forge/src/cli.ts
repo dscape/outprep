@@ -17,7 +17,7 @@
 
 import "dotenv/config";
 import { Command } from "commander";
-import { loadState, saveState, getActiveSession, updateSession } from "./state/forge-state";
+import { loadState, saveState, getActiveSession, updateSession, updateAgent } from "./state/forge-state";
 import { listSandboxes } from "./repl/sandbox";
 
 const program = new Command();
@@ -164,6 +164,40 @@ program
           `    Composite:  ${active.bestResult.compositeScore.toFixed(4)}`
         );
       }
+
+      // Hypothesis info
+      const hypothesisSets = active.hypothesisSets ?? [];
+      if (hypothesisSets.length > 0) {
+        const current = hypothesisSets[hypothesisSets.length - 1];
+        const committed = current.hypotheses.find(
+          (h) => h.level === current.committedLevel
+        );
+        console.log(`\n  Current Hypothesis:`);
+        console.log(`    Level:      ${current.committedLevel}`);
+        console.log(`    Archetype:  ${current.committedLevel === "groundbreaking" ? "EXPLORATORY" : "INCREMENTAL"}`);
+        console.log(`    Statement:  ${committed?.statement?.slice(0, 80) ?? "(unknown)"}`);
+      }
+
+      // Surprise rate
+      const surprises = active.oracleSurprises ?? [];
+      if (surprises.length > 0) {
+        const surprising = surprises.filter((s) => s.wasSurprising).length;
+        const rate = surprising / surprises.length;
+        const health = rate >= 0.2 ? "healthy" : "LOW";
+        console.log(`\n  Surprise Rate: ${(rate * 100).toFixed(0)}% (${surprising}/${surprises.length}) [${health}]`);
+      }
+
+      // Kill signals
+      const kills = active.killSignals ?? [];
+      if (kills.length > 0) {
+        console.log(`  Abandoned:    ${kills.length} hypothesis/experiment(s)`);
+      }
+
+      // Reflections
+      const reflections = active.reflections ?? [];
+      if (reflections.length > 0) {
+        console.log(`  Reflections:  ${reflections.length}`);
+      }
     }
 
     console.log();
@@ -198,9 +232,25 @@ program
         ? `${(session.bestResult.moveAccuracy * 100).toFixed(1)}%`
         : "—";
 
+      // Experiment archetype distribution
+      const incremental = session.experiments.filter(
+        (e) => (e.archetype ?? "incremental") === "incremental"
+      ).length;
+      const exploratory = session.experiments.filter(
+        (e) => e.archetype === "exploratory"
+      ).length;
+      const archDist =
+        session.experiments.length > 0
+          ? `${incremental}i/${exploratory}e`
+          : "—";
+
+      // Hypothesis count
+      const hCount = session.hypothesisSets?.length ?? 0;
+
       console.log(
         `  ${status} ${session.name.padEnd(30)} ` +
-          `${session.experiments.length} exps  ` +
+          `${session.experiments.length} exps (${archDist})  ` +
+          `hyp: ${hCount}  ` +
           `best: ${best}  ` +
           `$${session.totalCostUsd.toFixed(2)}  ` +
           `${session.id.slice(0, 8)}`
@@ -724,6 +774,219 @@ program
       } catch (err) {
         console.error(`  ✗ Failed to stop ${session.name}: ${err}`);
       }
+    }
+    console.log();
+  });
+
+/* ── agent ───────────────────────────────────────────────── */
+
+const agent = program
+  .command("agent")
+  .description("Manage autonomous agents");
+
+agent
+  .command("start")
+  .description("Start a new autonomous agent")
+  .option("--players <list>", "Comma-separated Lichess usernames")
+  .option(
+    "--focus <area>",
+    "Focus area(s), comma-separated",
+    "accuracy"
+  )
+  .option("--max-experiments <n>", "Max experiments per session", "20")
+  .option("--seed <n>", "Random seed", "42")
+  .option("--quick", "Use triage-size evaluations")
+  .option("--all", "Re-start all stopped agents with their saved config")
+  .action(async (opts) => {
+    if (opts.all) {
+      // Re-start all stopped agents
+      const { readAgentPid, isProcessRunning } = await import("./pid");
+      const { resumeAgent } = await import("./agent/agent-manager");
+      const state = loadState();
+      const stopped = state.agents.filter((a) => {
+        if (a.status !== "stopped") return false;
+        const pid = readAgentPid(a.id);
+        return pid === null || !isProcessRunning(pid);
+      });
+
+      if (stopped.length === 0) {
+        console.log("\n  No stopped agents to start.\n");
+        return;
+      }
+
+      console.log(`\n  Starting ${stopped.length} stopped agent(s)...\n`);
+      // Start them sequentially (each takes over the process)
+      // In practice, you'd fork child processes — for now, start the first one.
+      // TODO: fork child processes for true parallelism
+      for (const a of stopped) {
+        console.log(`  Starting "${a.name}" (${a.id.slice(0, 8)})...`);
+        await resumeAgent(a.id);
+      }
+      return;
+    }
+
+    const players = opts.players
+      ? opts.players.split(",").map((s: string) => s.trim())
+      : undefined;
+
+    if (!players || players.length === 0) {
+      console.error("  ✗ Specify at least one player with --players");
+      process.exit(1);
+    }
+
+    const { startAgent } = await import("./agent/agent-manager");
+    await startAgent({
+      players,
+      focus: opts.focus,
+      maxExperiments: parseInt(opts.maxExperiments, 10),
+      seed: parseInt(opts.seed, 10),
+      quick: opts.quick ?? false,
+    });
+  });
+
+agent
+  .command("stop [agent-id]")
+  .description("Stop a running agent")
+  .option("--all", "Stop all running agents")
+  .action(async (agentId: string | undefined, opts: { all?: boolean }) => {
+    const { readAgentPid, isProcessRunning } = await import("./pid");
+    const state = loadState();
+
+    let targets: typeof state.agents;
+
+    if (opts.all) {
+      targets = state.agents.filter((a) => {
+        const pid = readAgentPid(a.id);
+        return pid !== null && isProcessRunning(pid);
+      });
+    } else {
+      if (!agentId) {
+        console.error("  ✗ Specify an agent ID or use --all.");
+        process.exit(1);
+      }
+      targets = state.agents.filter((a) => a.id.startsWith(agentId) || a.name.toLowerCase() === agentId.toLowerCase());
+      if (targets.length === 0) {
+        console.error(`  ✗ No agent matching "${agentId}".`);
+        process.exit(1);
+      }
+      if (targets.length > 1) {
+        console.error(`  ✗ Ambiguous ID "${agentId}" matches ${targets.length} agents.`);
+        process.exit(1);
+      }
+    }
+
+    if (targets.length === 0) {
+      console.log("\n  No running agents to stop.\n");
+      return;
+    }
+
+    for (const a of targets) {
+      const pid = readAgentPid(a.id);
+      if (pid === null || !isProcessRunning(pid)) {
+        console.log(`  ${a.name} (${a.id.slice(0, 8)}) — not running`);
+        // Still mark as stopped in state
+        if (a.currentSessionId) {
+          try { updateSession(state, a.currentSessionId, (s) => { s.status = "paused"; }); } catch { /* session may not exist */ }
+        }
+        updateAgent(state, a.id, (ag) => { ag.status = "stopped"; });
+        continue;
+      }
+
+      try {
+        process.kill(pid, "SIGINT");
+        console.log(`  ✓ Sent SIGINT to "${a.name}" (pid ${pid})`);
+        updateAgent(state, a.id, (ag) => { ag.status = "stopped"; });
+      } catch (err) {
+        console.error(`  ✗ Failed to stop "${a.name}": ${err}`);
+      }
+    }
+    console.log();
+  });
+
+agent
+  .command("ls")
+  .description("List all agents with status and ranking")
+  .action(async () => {
+    const { readAgentPid, isProcessRunning } = await import("./pid");
+    const { getLeaderboard } = await import("./state/leaderboard-db");
+    const state = loadState();
+
+    if (state.agents.length === 0) {
+      console.log("\n  No agents.\n");
+      return;
+    }
+
+    const leaderboard = getLeaderboard();
+    const rankMap = new Map(leaderboard.map((e) => [e.agentId, e]));
+
+    console.log("\n  Agents");
+    console.log("  ════════════════════════════════════════");
+
+    for (const a of state.agents) {
+      const pid = readAgentPid(a.id);
+      const running = pid !== null && isProcessRunning(pid);
+      const icon = running ? "▶" : a.status === "stopped" ? "⏸" : "·";
+
+      const entry = rankMap.get(a.id);
+      const rank = entry ? `#${entry.rank}` : "—";
+      const avgDelta = entry
+        ? `${entry.avgWeightedCompositeDelta > 0 ? "+" : ""}${entry.avgWeightedCompositeDelta.toFixed(4)}`
+        : "—";
+      const sessions = a.sessionHistory.length;
+      const currentSession = a.currentSessionId
+        ? state.sessions.find((s) => s.id === a.currentSessionId)?.name ?? a.currentSessionId.slice(0, 8)
+        : "—";
+
+      console.log(
+        `  ${icon} ${a.name.padEnd(15)} ` +
+          `rank: ${rank.padEnd(4)} ` +
+          `avg Δ: ${avgDelta.padEnd(8)} ` +
+          `sessions: ${String(sessions).padStart(3)}  ` +
+          `current: ${currentSession.slice(0, 20)}  ` +
+          `$${a.totalCostUsd.toFixed(2).padStart(6)}  ` +
+          (running ? "RUNNING" : a.status)
+      );
+    }
+    console.log();
+  });
+
+/* ── leaderboard ─────────────────────────────────────────── */
+
+program
+  .command("leaderboard")
+  .description("Show the agent leaderboard")
+  .action(async () => {
+    const { getLeaderboard } = await import("./state/leaderboard-db");
+    const leaderboard = getLeaderboard();
+
+    if (leaderboard.length === 0) {
+      console.log("\n  No leaderboard entries yet.\n");
+      return;
+    }
+
+    console.log("\n  Agent Leaderboard");
+    console.log("  ════════════════════════════════════════════════════════════════");
+    console.log(
+      `  ${"Rank".padEnd(6)}${"Agent".padEnd(16)}${"Weighted Avg Δ".padEnd(16)}` +
+        `${"Accuracy Δ".padEnd(14)}${"CPL KL Δ".padEnd(12)}` +
+        `${"Sessions".padEnd(10)}${"Time".padEnd(8)}${"Cost".padEnd(8)}`
+    );
+    console.log("  " + "─".repeat(86));
+
+    for (const e of leaderboard) {
+      const sign = e.avgWeightedCompositeDelta > 0 ? "+" : "";
+      const accSign = e.avgAccuracyDelta > 0 ? "+" : "";
+      const cplSign = e.avgCplKlDelta > 0 ? "+" : "";
+      const hours = Math.round(e.totalTimeSeconds / 3600);
+      console.log(
+        `  ${`#${e.rank}`.padEnd(6)}${e.agentName.padEnd(16)}` +
+          `${(sign + e.avgWeightedCompositeDelta.toFixed(4)).padEnd(16)}` +
+          `${(accSign + (e.avgAccuracyDelta * 100).toFixed(1) + "%").padEnd(14)}` +
+          `${(cplSign + e.avgCplKlDelta.toFixed(4)).padEnd(12)}` +
+          `${String(e.sessionsCount).padEnd(10)}` +
+          `${hours + "h".padEnd(8)}` +
+          `$${e.totalCostUsd.toFixed(2)}`
+      );
     }
     console.log();
   });

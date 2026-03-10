@@ -22,6 +22,9 @@ export function SessionCard({ session }: { session: SessionSummary }) {
             {session.name}
           </h3>
           <p className="text-xs text-zinc-500 mt-0.5">
+            {session.agentName && (
+              <span className="text-zinc-400 font-medium">{session.agentName} &middot; </span>
+            )}
             {session.players.join(", ")} &middot; {session.focus}
           </p>
         </div>

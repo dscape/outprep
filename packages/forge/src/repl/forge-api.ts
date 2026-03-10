@@ -9,8 +9,11 @@
 import type { SandboxInfo } from "./sandbox";
 import type {
   ForgeSession, ForgeState, MaiaMetrics, OracleRecord,
-  SessionStatus, ExperimentRecord,
+  SessionStatus, ExperimentRecord, ExperimentArchetype,
+  KillSignalRecord, ReflectionCheckpoint, OracleSurpriseEntry,
+  HypothesisSet, LeaderboardEntry,
 } from "../state/types";
+import type { AgentStats } from "../state/leaderboard-db";
 import type { TestResult, PositionResult, Metrics } from "@outprep/harness";
 import type { LichessGame } from "@outprep/harness";
 
@@ -33,6 +36,10 @@ import {
   type Topic, type TopicArchive, type AgentNote,
 } from "../knowledge/index";
 import { consultOracle } from "../oracle/oracle";
+import { createOracleLimiter } from "../oracle/oracle-limiter";
+import { createSurpriseTracker, type SurpriseHealthAssessment } from "../oracle/surprise-tracker";
+import { detectIncrementalPattern } from "../oracle/incremental-detector";
+import { createHypothesisOps, type HypothesisOps } from "../hypothesis/hypothesis-manager";
 import { writeExperimentLog } from "../log/log-formatter";
 import { computeTrend, formatTrend } from "../log/trend-tracker";
 import { randomUUID } from "node:crypto";
@@ -105,14 +112,29 @@ export interface HistoryOps {
 }
 
 export interface OracleOps {
-  ask(question: string, context?: string): Promise<OracleRecord>;
+  ask(question: string, context?: string, queryType?: "adversarial" | "confirmatory" | "exploratory"): Promise<OracleRecord>;
   history(): OracleRecord[];
+  /** Get current surprise rate and health assessment */
+  surpriseRate(): SurpriseHealthAssessment;
+  /** Record the agent's surprise/expectation after an oracle result */
+  recordSurprise(oracleId: string, priorExpectation: string, wasSurprising: boolean, explanation?: string): void;
 }
 
 export interface LogOps {
   record(experiment: Partial<import("../state/types").ExperimentRecord> & { hypothesis: string }): string;
   trend(): ReturnType<typeof computeTrend>;
   summary(): string;
+  /** Record a kill signal when abandoning an experiment or hypothesis */
+  kill(signal: Omit<KillSignalRecord, "id" | "timestamp">): string;
+  /** Record a reflection checkpoint */
+  reflect(reflection: Omit<ReflectionCheckpoint, "id" | "sessionId" | "timestamp">): string;
+}
+
+export interface LeaderboardOps {
+  /** View the current leaderboard (read-only) */
+  get(): LeaderboardEntry[];
+  /** View your own stats */
+  me(): AgentStats | null;
 }
 
 /* ── Full API type ─────────────────────────────────────────── */
@@ -128,6 +150,11 @@ export interface ForgeApi {
   oracle: OracleOps;
   log: LogOps;
   history: HistoryOps;
+  hypothesis: HypothesisOps;
+  /** Leaderboard access (read-only, injected by agent-manager) */
+  leaderboard?: LeaderboardOps;
+  /** File a feature request (injected by agent-manager) */
+  request?: (title: string, description: string, category: string) => string;
   compare(a: TestResult, b: TestResult): ComparisonTable;
 }
 
@@ -143,6 +170,9 @@ export function createForgeApi(
   const configOps = createConfigOps(sandbox);
   const rawEvalOps = createEvalOps(sandbox);
   const sessionOps = createSessionOps(sandbox, session, state, codeOps, configOps);
+  const oracleLimiter = createOracleLimiter();
+  const surpriseTracker = createSurpriseTracker(session, state);
+  const hypothesisOps = createHypothesisOps(session, state);
 
   // Infer trainGames from playerData when not explicitly provided
   function inferTrainGames(testGames: LichessGame[]): LichessGame[] | undefined {
@@ -310,18 +340,39 @@ export function createForgeApi(
 
   // ── Oracle namespace ──
   const oracle: OracleOps = {
-    async ask(question: string, context?: string) {
+    async ask(question: string, context?: string, queryType?: "adversarial" | "confirmatory" | "exploratory") {
+      const effectiveQueryType = queryType ?? "exploratory";
+
+      // Check oracle limiter
+      const currentHypothesis = hypothesisOps.current();
+      const archetype: ExperimentArchetype =
+        currentHypothesis?.committedLevel === "groundbreaking" ? "exploratory" : "incremental";
+      const limiterCheck = oracleLimiter.canQuery(effectiveQueryType);
+      if (!limiterCheck.allowed) {
+        throw new Error(`Oracle query blocked: ${limiterCheck.reason}`);
+      }
+
+      // Detect incremental tuning pattern
+      const detection = detectIncrementalPattern(session.oracleConsultations, session.experiments);
+      if (detection.detected) {
+        console.warn(`  ⚠ ${detection.message}`);
+      }
+
       const { record, interactions } = await consultOracle({
         question,
         domain: "chess-engine-optimization",
         context: context ?? "",
+        queryType: effectiveQueryType,
       });
+
+      // Track query in limiter
+      oracleLimiter.recordQuery(effectiveQueryType);
+
       // Record in session
       updateSession(state, session.id, (s) => {
         s.oracleConsultations.push(record);
         if (!s.interactions) s.interactions = [];
         s.interactions.push(...interactions);
-        // Update aggregate cost from oracle interactions
         for (const ix of interactions) {
           s.totalInputTokens += ix.inputTokens;
           s.totalOutputTokens += ix.outputTokens;
@@ -332,6 +383,17 @@ export function createForgeApi(
     },
     history() {
       return session.oracleConsultations;
+    },
+    surpriseRate() {
+      return surpriseTracker.getHealthAssessment();
+    },
+    recordSurprise(oracleId: string, priorExpectation: string, wasSurprising: boolean, explanation?: string) {
+      surpriseTracker.record({
+        oracleId,
+        priorExpectation,
+        wasSurprising,
+        surpriseExplanation: explanation,
+      });
     },
   };
 
@@ -380,6 +442,14 @@ export function createForgeApi(
         }
       }
 
+      // Auto-populate hypothesis/archetype from current hypothesis set
+      const currentHypothesisSet = hypothesisOps.current();
+      const autoArchetype: ExperimentArchetype =
+        currentHypothesisSet?.committedLevel === "groundbreaking" ? "exploratory" : "incremental";
+
+      // Notify oracle limiter that an eval has run (burn-in complete)
+      oracleLimiter.completeBurnIn();
+
       // Fill in defaults for missing fields
       const experiment: ExperimentRecord = {
         id: partial.id ?? randomUUID(),
@@ -400,6 +470,9 @@ export function createForgeApi(
         notes: partial.notes ?? "",
         nextSteps: partial.nextSteps ?? [],
         oracleQueryId: partial.oracleQueryId,
+        archetype: partial.archetype ?? autoArchetype,
+        hypothesisSetId: partial.hypothesisSetId ?? currentHypothesisSet?.id,
+        hypothesisLevel: partial.hypothesisLevel ?? currentHypothesisSet?.committedLevel,
       };
 
       // Write markdown log (non-fatal — experiment still gets recorded on failure)
@@ -433,6 +506,33 @@ export function createForgeApi(
       const trend = computeTrend(session.experiments);
       return formatTrend(trend);
     },
+    kill(signal: Omit<KillSignalRecord, "id" | "timestamp">) {
+      const record: KillSignalRecord = {
+        ...signal,
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+      };
+      updateSession(state, session.id, (s) => {
+        if (!s.killSignals) s.killSignals = [];
+        s.killSignals.push(record);
+      });
+      console.log(`  Kill signal recorded: ${signal.description.slice(0, 80)}`);
+      return record.id;
+    },
+    reflect(input: Omit<ReflectionCheckpoint, "id" | "sessionId" | "timestamp">) {
+      const checkpoint: ReflectionCheckpoint = {
+        ...input,
+        id: randomUUID(),
+        sessionId: session.id,
+        timestamp: new Date().toISOString(),
+      };
+      updateSession(state, session.id, (s) => {
+        if (!s.reflections) s.reflections = [];
+        s.reflections.push(checkpoint);
+      });
+      console.log(`  Reflection checkpoint recorded after experiment #${input.afterExperimentNumber}`);
+      return checkpoint.id;
+    },
   };
 
   return {
@@ -446,6 +546,7 @@ export function createForgeApi(
     oracle,
     log,
     history,
+    hypothesis: hypothesisOps,
     compare(a: TestResult, b: TestResult) {
       return evalOps.compare(a, b);
     },

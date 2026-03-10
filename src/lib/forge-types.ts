@@ -6,8 +6,9 @@
 export type SessionStatus = "active" | "paused" | "completed" | "abandoned";
 
 export interface ForgeState {
-  version: 1;
+  version: 1 | 2;
   sessions: ForgeSession[];
+  agents: ForgeAgent[];
   activeSessionId: string | null;
   lastCheckpoint: string;
 }
@@ -18,6 +19,7 @@ export interface ForgeSession {
   createdAt: string;
   updatedAt: string;
   status: SessionStatus;
+  agentId: string | null;
   worktreeBranch: string;
   focus: string;
   players: string[];
@@ -32,7 +34,92 @@ export interface ForgeSession {
   totalCostUsd: number;
   oracleConsultations: OracleRecord[];
   interactions?: InteractionRecord[];
+  hypothesisSets?: HypothesisSet[];
+  oracleSurprises?: OracleSurpriseEntry[];
+  killSignals?: KillSignalRecord[];
+  reflections?: ReflectionCheckpoint[];
 }
+
+/* ── Agents ─────────────────────────────────────────────────── */
+
+export type AgentStatus = "running" | "stopped";
+
+export interface ForgeAgent {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  status: AgentStatus;
+  currentSessionId: string | null;
+  sessionHistory: AgentSessionEntry[];
+  config: AgentConfig;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number;
+}
+
+export interface AgentSessionEntry {
+  sessionId: string;
+  sessionName: string;
+  startedAt: string;
+  endedAt: string | null;
+  endReason?: "completed" | "abandoned" | "stopped";
+}
+
+export interface AgentConfig {
+  players: string[];
+  focus: string;
+  maxExperiments: number;
+  seed: number;
+  quick: boolean;
+}
+
+export interface AgentSummary {
+  id: string;
+  name: string;
+  status: AgentStatus;
+  createdAt: string;
+  updatedAt: string;
+  currentSessionId: string | null;
+  currentSessionName: string | null;
+  sessionCount: number;
+  totalCostUsd: number;
+  config: AgentConfig;
+  isRunning: boolean;
+  rank: number | null;
+  avgWeightedCompositeDelta: number;
+  avgAccuracyDelta: number;
+  totalTimeSeconds: number;
+}
+
+/* ── Leaderboard ────────────────────────────────────────────── */
+
+export interface LeaderboardEntry {
+  agentId: string;
+  agentName: string;
+  rank: number;
+  sessionsCount: number;
+  avgAccuracyDelta: number;
+  avgCplKlDelta: number;
+  avgWeightedCompositeDelta: number;
+  totalTimeSeconds: number;
+  totalCostUsd: number;
+}
+
+export interface FeatureRequest {
+  id: string;
+  agentId: string;
+  agentName: string;
+  sessionId: string;
+  timestamp: string;
+  title: string;
+  description: string;
+  category: "repl" | "forge" | "harness" | "engine" | "other";
+  status: "open" | "accepted" | "rejected" | "implemented";
+  response: string | null;
+}
+
+/* ── Metrics ────────────────────────────────────────────────── */
 
 export interface BaselineSnapshot {
   timestamp: string;
@@ -100,6 +187,9 @@ export interface ExperimentRecord {
   notes: string;
   nextSteps: string[];
   oracleQueryId?: string;
+  archetype?: ExperimentArchetype;
+  hypothesisSetId?: string;
+  hypothesisLevel?: HypothesisLevel;
 }
 
 export interface MaiaMetricsDelta {
@@ -136,6 +226,60 @@ export interface OracleRecord {
   claudeFinal: string;
   actionItems: string[];
   confidence: "high" | "medium" | "low";
+  queryType?: "adversarial" | "confirmatory" | "exploratory";
+}
+
+/* ── Hypothesis System ────────────────────────────────────── */
+
+export type HypothesisLevel = "continuous-a" | "continuous-b" | "groundbreaking";
+export type ExperimentArchetype = "incremental" | "exploratory";
+
+export interface Hypothesis {
+  level: HypothesisLevel;
+  statement: string;
+  falsificationCriteria: string;
+  estimatedCost: string;
+}
+
+export interface HypothesisSet {
+  id: string;
+  sessionId: string;
+  timestamp: string;
+  hypotheses: [Hypothesis, Hypothesis, Hypothesis];
+  committedLevel: HypothesisLevel;
+  commitmentRationale: string;
+  costOfBeingWrong: string;
+}
+
+export interface OracleSurpriseEntry {
+  oracleId: string;
+  timestamp: string;
+  priorExpectation: string;
+  wasSurprising: boolean;
+  surpriseExplanation?: string;
+}
+
+export interface KillSignalRecord {
+  id: string;
+  timestamp: string;
+  hypothesisSetId: string;
+  description: string;
+  abandonmentPoint: string;
+  reason: string;
+  firstOracleType: "adversarial" | "confirmatory" | "none";
+  surpriseRateAtAbandonment: number;
+  experimentsCompleted: number;
+}
+
+export interface ReflectionCheckpoint {
+  id: string;
+  sessionId: string;
+  timestamp: string;
+  afterExperimentNumber: number;
+  ruledOut: string;
+  surpriseRateAnalysis: string;
+  unexpectedResultDescription: string;
+  currentSurpriseRate: number;
 }
 
 export interface InteractionRecord {
@@ -163,7 +307,7 @@ export interface KnowledgeTopic {
 export interface ActivityEvent {
   id: string;
   timestamp: string;
-  type: "experiment" | "oracle" | "code-change" | "note" | "knowledge-update" | "session-status";
+  type: "experiment" | "oracle" | "code-change" | "note" | "knowledge-update" | "session-status" | "hypothesis" | "kill-signal" | "reflection";
   title: string;
   detail?: string;
   artifactId?: string;
@@ -186,6 +330,8 @@ export interface SessionSummary {
   totalOutputTokens: number;
   bestCompositeScore: number | null;
   worktreeBranch: string;
+  agentId: string | null;
+  agentName: string | null;
   /** True when the agent process is actually running (PID alive) */
   isRunning: boolean;
 }

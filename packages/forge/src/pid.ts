@@ -43,3 +43,40 @@ export function isProcessRunning(pid: number): boolean {
     return false;
   }
 }
+
+/* ── Agent PID tracking ────────────────────────────────────── */
+
+export function writeAgentPid(agentId: string): void {
+  mkdirSync(PIDS_DIR, { recursive: true });
+  writeFileSync(join(PIDS_DIR, `agent-${agentId}.pid`), String(process.pid));
+}
+
+export function removeAgentPid(agentId: string): void {
+  try {
+    unlinkSync(join(PIDS_DIR, `agent-${agentId}.pid`));
+  } catch {
+    // Ignore — file may already be gone
+  }
+}
+
+export function readAgentPid(agentId: string): number | null {
+  try {
+    const raw = readFileSync(join(PIDS_DIR, `agent-${agentId}.pid`), "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    return Number.isFinite(pid) ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+/** List all agent IDs that have PID files */
+export function listAgentPids(): string[] {
+  try {
+    const { readdirSync } = require("node:fs");
+    return readdirSync(PIDS_DIR)
+      .filter((f: string) => f.startsWith("agent-") && f.endsWith(".pid"))
+      .map((f: string) => f.slice("agent-".length, -".pid".length));
+  } catch {
+    return [];
+  }
+}

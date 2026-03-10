@@ -61,5 +61,8 @@
       "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/resume)",
       "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/stop)"
     ]
+  },
+  "enabledPlugins": {
+    "vtsls@claude-code-lsps": true
   }
 }

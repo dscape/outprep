@@ -74,6 +74,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     status: "active",
+    agentId: null,
     worktreeBranch: sandbox.branchName,
     focus: opts.focus,
     players: opts.players ?? [],
@@ -88,6 +89,10 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     totalCostUsd: 0,
     oracleConsultations: [],
     interactions: [],
+    hypothesisSets: [],
+    oracleSurprises: [],
+    killSignals: [],
+    reflections: [],
   };
 
   state.sessions.push(session);
@@ -355,7 +360,7 @@ function pruneMessages(
 /**
  * Main agent loop — iterates between Claude and the REPL.
  */
-async function runAgentLoop(
+export async function runAgentLoop(
   client: Anthropic,
   repl: ReturnType<typeof createReplServer>,
   session: ForgeSession,
@@ -512,6 +517,13 @@ async function runAgentLoop(
           const originalStderrWrite = process.stderr.write.bind(process.stderr);
           let pendingProgress = "";
 
+          // Write directly to original stdout to avoid recursion:
+          // log() -> console.log() -> process.stdout.write -> handleWrite -> log() ...
+          const captureLog = (msg: string) => {
+            originalStdoutWrite.call(process.stdout, `${msg}\n`);
+            logWriter?.log(msg, "info");
+          };
+
           const handleWrite = (chunk: string | Uint8Array) => {
             const str = typeof chunk === "string" ? chunk : chunk.toString();
             if (str.includes("\r") && !str.includes("\n")) {
@@ -520,11 +532,11 @@ async function runAgentLoop(
             } else {
               // Regular output — flush pending progress first, then log
               if (pendingProgress) {
-                log(`  ${pendingProgress}`);
+                captureLog(`  ${pendingProgress}`);
                 pendingProgress = "";
               }
               const trimmed = str.trim();
-              if (trimmed) log(`  ${trimmed}`);
+              if (trimmed) captureLog(`  ${trimmed}`);
             }
           };
 
@@ -634,14 +646,30 @@ async function runAgentLoop(
       const freshNotes = buildNotesContext(3);
       const contextRefresh = [freshKnowledge, freshNotes].filter(Boolean).join("\n\n");
 
+      // Compute reflection status
+      const reflections = session.reflections ?? [];
+      const lastRef = reflections.length > 0 ? reflections[reflections.length - 1] : null;
+      const expsSinceReflection = session.experiments.length - (lastRef?.afterExperimentNumber ?? 0);
+      const needsReflection = expsSinceReflection >= 5;
+
+      const hasHypothesis = (session.hypothesisSets ?? []).length > 0;
+
       messages.push({
         role: "user",
         content: [
           "Continue with the next experiment. Remember:",
-          "- Ask the oracle (`forge.oracle.ask(question, context)`) if you're unsure what to try next.",
-          "- After each experiment, leave a note (`forge.knowledge.note(summary, [tags])`).",
+          !hasHypothesis
+            ? "- ⚠ You have NOT generated a hypothesis set yet. Call forge.hypothesis.commit() BEFORE running experiments."
+            : "",
+          "- Frame oracle queries as adversarial: 'What would make my hypothesis fail?'",
+          "- After each oracle result, record surprise: forge.oracle.recordSurprise(oracleId, expectation, wasSurprising)",
+          "- After each experiment, record with forge.log.record() and leave a knowledge note.",
+          needsReflection
+            ? `- ⚠ REFLECTION DUE: ${expsSinceReflection} experiments since last reflection. Call forge.log.reflect() before continuing.`
+            : "",
+          "- Prefer code changes (forge.code.prompt()) over config-only experiments for larger improvements.",
           contextRefresh ? `\n## Updated Knowledge Context\n\n${contextRefresh}` : "",
-        ].join("\n"),
+        ].filter(Boolean).join("\n"),
       });
     }
   }
@@ -654,7 +682,7 @@ async function runAgentLoop(
   }
 }
 
-function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, any>): string {
+export function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, any>): string {
   const parts: string[] = [];
 
   parts.push(`Start research session "${opts.name}" focused on ${opts.focus}.`);
@@ -692,15 +720,29 @@ function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, a
   parts.push(`await forge.knowledge.notes({ limit: 5 })`);
   parts.push(`await forge.history.searchExperiments("${opts.focus}")`);
   parts.push("```");
-  parts.push(`\n**Step 2: Ask the oracle** — before your first experiment, consult the oracle for strategy:`);
+  parts.push(`\n**Step 2: Generate hypotheses** — MANDATORY before any experiments:`);
   parts.push("```typescript");
-  parts.push(`await forge.oracle.ask("Given baseline metrics and ${opts.focus} focus, what is the highest-impact first experiment?", JSON.stringify(baseline))`);
+  parts.push(`forge.hypothesis.commit({`);
+  parts.push(`  hypotheses: [`);
+  parts.push(`    { level: "continuous-a", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
+  parts.push(`    { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
+  parts.push(`    { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
+  parts.push(`  ],`);
+  parts.push(`  committedLevel: "continuous-a",`);
+  parts.push(`  commitmentRationale: "Choosing this because...",`);
+  parts.push(`  costOfBeingWrong: "If wrong, it means...",`);
+  parts.push(`});`);
   parts.push("```");
-  parts.push(`\n**Step 3: Run experiment, then ALWAYS leave a note:**`);
+  parts.push(`\n**Step 3: Challenge your hypothesis** — first oracle query must seek disconfirmation:`);
+  parts.push("```typescript");
+  parts.push(`const oracleResult = await forge.oracle.ask("What inputs would most likely make this hypothesis fail?", JSON.stringify(baseline), "adversarial")`);
+  parts.push(`forge.oracle.recordSurprise(oracleResult.id, "I expected...", true/false, "The surprise was...")`);
+  parts.push("```");
+  parts.push(`\n**Step 4: Run experiment, record, and leave a note:**`);
   parts.push("```typescript");
   parts.push(`forge.knowledge.note("EXP <name>: <hypothesis>. Result: <delta>. Conclusion: <learning>", ["${opts.focus}", "<technique>"])`);
   parts.push("```");
-  parts.push(`\nRepeat steps 2-3. Use the oracle whenever you're unsure which direction to take next.`);
+  parts.push(`\nRepeat steps 3-4. After every 5 experiments, call forge.log.reflect(). When abandoning a hypothesis, call forge.log.kill().`);
 
   if (opts.quick) {
     parts.push(`\nUse \`forge.eval.runQuick(testGames, trainGames)\` for faster triage iterations.`);

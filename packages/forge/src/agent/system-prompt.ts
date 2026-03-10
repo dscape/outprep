@@ -9,7 +9,7 @@
  * 5. Convergence/stopping rules
  */
 
-import type { ForgeSession, ForgeState, BaselineSnapshot } from "../state/types";
+import type { ForgeSession, ForgeState, BaselineSnapshot, ForgeAgent } from "../state/types";
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { formatTrend, computeTrend } from "../log/trend-tracker";
 
@@ -19,6 +19,8 @@ export interface PromptContext {
   baseline: BaselineSnapshot | null;
   focus: string;
   maxExperiments: number;
+  /** Agent running this session (for leaderboard injection) */
+  agent?: ForgeAgent;
 }
 
 /**
@@ -53,6 +55,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   // Session state
   sections.push(buildSessionState(ctx));
+
+  // Leaderboard (injected when agent is available)
+  if (ctx.agent) {
+    const leaderboardSection = buildLeaderboardSection(ctx.agent);
+    if (leaderboardSection) sections.push(leaderboardSection);
+  }
 
   // Rules
   sections.push(buildRules(ctx.maxExperiments));
@@ -132,10 +140,17 @@ forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile
 forge.knowledge: search(query) | read(topicId) | append(topicId, entry) | create({id, title, relevance, content}) | compact(topicId, keepRecent?) | archives(topicId)
 forge.knowledge (notes): note(content, tags?) | notes({limit?, tags?}) | searchNotes(query)
 forge.history: sessions({status?, player?}) | searchExperiments(query) | experiment(id)
-forge.oracle: ask(question, context?) → { claudeInitial, chatgptResponse, claudeFinal, actionItems: string[], confidence } | history()
-forge.log: record({ hypothesis, result?, conclusion?, notes?, nextSteps?, category? }) | trend() | summary()
+forge.hypothesis: commit(set) | current() | all() | validate(set)
+  commit({ hypotheses: [h1, h2, h3], committedLevel, commitmentRationale, costOfBeingWrong })
+  Each hypothesis: { level: "continuous-a"|"continuous-b"|"groundbreaking", statement, falsificationCriteria, estimatedCost }
+forge.oracle: ask(question, context?, queryType?) | history() | surpriseRate() | recordSurprise(oracleId, priorExpectation, wasSurprising, explanation?)
+  queryType: "adversarial" (seek disconfirmation) | "confirmatory" | "exploratory" (default)
+  surpriseRate() → { rate, healthy, message, totalEntries, surprisingCount }
+forge.log: record({ hypothesis, result?, conclusion?, notes?, nextSteps?, category? }) | trend() | summary() | kill(signal) | reflect(reflection)
   result must be MaiaMetrics (from forge.metrics.composite()). DO NOT pass custom objects.
   conclusion: "confirmed"|"refuted"|"partial"|"inconclusive"
+  kill({ hypothesisSetId, description, abandonmentPoint, reason, firstOracleType, surpriseRateAtAbandonment, experimentsCompleted })
+  reflect({ afterExperimentNumber, ruledOut, surpriseRateAnalysis, unexpectedResultDescription, currentSurpriseRate })
 forge.session: checkpoint() | accept() | reject() | push()
 
 ### Recording an Experiment (MANDATORY after every eval)
@@ -194,6 +209,49 @@ function buildSessionState(ctx: PromptContext): string {
     }
   }
 
+  // Hypothesis state
+  const hypothesisSets = session.hypothesisSets ?? [];
+  const currentHypothesis = hypothesisSets.length > 0 ? hypothesisSets[hypothesisSets.length - 1] : null;
+  if (currentHypothesis) {
+    const committed = currentHypothesis.hypotheses.find(
+      (h) => h.level === currentHypothesis.committedLevel
+    );
+    lines.push(`\n### Current Hypothesis Set`);
+    lines.push(`- Committed to: ${currentHypothesis.committedLevel}`);
+    lines.push(`- Statement: ${committed?.statement ?? "(unknown)"}`);
+    lines.push(`- Archetype: ${currentHypothesis.committedLevel === "groundbreaking" ? "EXPLORATORY" : "INCREMENTAL"}`);
+  } else {
+    lines.push(`\n### ⚠ No hypothesis set generated yet — generate one before running experiments`);
+  }
+
+  // Surprise rate
+  const surprises = session.oracleSurprises ?? [];
+  if (surprises.length > 0) {
+    const surprisingCount = surprises.filter((s) => s.wasSurprising).length;
+    const rate = surprisingCount / surprises.length;
+    lines.push(`\n### Oracle Surprise Rate: ${(rate * 100).toFixed(0)}% (${surprisingCount}/${surprises.length})`);
+    if (rate < 0.2) {
+      lines.push(`  ⚠ LOW SURPRISE RATE — you may be confirming rather than exploring`);
+    }
+  }
+
+  // Reflection status
+  const reflections = session.reflections ?? [];
+  const lastReflection = reflections.length > 0 ? reflections[reflections.length - 1] : null;
+  const experimentsSinceReflection = session.experiments.length - (lastReflection?.afterExperimentNumber ?? 0);
+  if (experimentsSinceReflection >= 5) {
+    lines.push(`\n### ⚠ REFLECTION DUE — ${experimentsSinceReflection} experiments since last reflection. Call forge.log.reflect() before continuing.`);
+  }
+
+  // Kill signals
+  const killSignals = session.killSignals ?? [];
+  if (killSignals.length > 0) {
+    lines.push(`\n### Abandoned Hypotheses: ${killSignals.length}`);
+    for (const ks of killSignals.slice(-3)) {
+      lines.push(`- ${ks.description.slice(0, 60)} — reason: ${ks.reason.slice(0, 60)}`);
+    }
+  }
+
   return lines.join("\n");
 }
 
@@ -216,6 +274,55 @@ function buildPastSessionsSummary(state: ForgeState, currentSessionId: string): 
   return lines.join("\n");
 }
 
+function buildLeaderboardSection(agent: ForgeAgent): string {
+  // Lazy-import to avoid circular deps at module level
+  let leaderboard: import("../state/types").LeaderboardEntry[] = [];
+  try {
+    const { getLeaderboard } = require("../state/leaderboard-db");
+    leaderboard = getLeaderboard();
+  } catch {
+    // SQLite not available (e.g., first run)
+  }
+
+  const lines: string[] = [
+    `## Leaderboard`,
+    ``,
+    `Your name is **${agent.name}**. Your objective is to maximize your weighted average composite score and reach #1.`,
+    ``,
+    `**IMPORTANT:** Breakthrough research (groundbreaking hypothesis) scores **5x** on the leaderboard.`,
+    `Check the leaderboard with \`forge.leaderboard.get()\` before deciding your next hypothesis.`,
+  ];
+
+  if (leaderboard.length > 0) {
+    lines.push(``);
+    lines.push(`| Rank | Agent | Weighted Avg Δ | Avg Accuracy Δ | Sessions | Time |`);
+    lines.push(`|------|-------|----------------|----------------|----------|------|`);
+    for (const entry of leaderboard) {
+      const you = entry.agentId === agent.id ? " (YOU)" : "";
+      const sign = entry.avgWeightedCompositeDelta > 0 ? "+" : "";
+      const accSign = entry.avgAccuracyDelta > 0 ? "+" : "";
+      const hours = Math.round(entry.totalTimeSeconds / 3600);
+      lines.push(
+        `| ${entry.rank} | ${entry.agentName}${you} | ${sign}${entry.avgWeightedCompositeDelta.toFixed(4)} | ${accSign}${(entry.avgAccuracyDelta * 100).toFixed(1)}% | ${entry.sessionsCount} | ${hours}h |`,
+      );
+    }
+  } else {
+    lines.push(``, `No completed sessions yet. You're the first — set the bar.`);
+  }
+
+  lines.push(
+    ``,
+    `## Feature Requests`,
+    ``,
+    `If your research needs a capability that doesn't exist yet (new REPL functions,`,
+    `harness improvements, engine features, etc.), file a request:`,
+    `  \`forge.request("Title", "Description of what you need and why", "category")\``,
+    `Categories: repl, forge, harness, engine, other`,
+  );
+
+  return lines.join("\n");
+}
+
 function buildRules(maxExperiments: number): string {
   return `## Rules
 
@@ -226,20 +333,77 @@ function buildRules(maxExperiments: number): string {
 5. **Revert failed experiments** before trying the next one.
 6. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
 
+### Mandatory: Hypothesis Generation Before Experiments
+Before running ANY experiments, you MUST generate a hypothesis set with exactly 3 hypotheses:
+- **H1 (continuous-a)**: Incremental improvement on current methodology. Lower risk, bounded upside. Falsifiable within current eval framework.
+- **H2 (continuous-b)**: A DIFFERENT lever than H1. If H1 is about the error model, H2 must be about features or data. They cannot be variations of the same idea.
+- **H3 (groundbreaking)**: A hypothesis that, if true, would make H1 and H2 irrelevant. Proposes a fundamentally different framing — not a better Boltzmann, but a reason Boltzmann is the wrong model. You should feel uncomfortable writing this one.
+
+After writing all three, commit to ONE in writing:
+\`\`\`
+forge.hypothesis.commit({
+  hypotheses: [
+    { level: "continuous-a", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
+    { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
+    { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
+  ],
+  committedLevel: "continuous-a",
+  commitmentRationale: "Choosing this because..., choosing this over H2 because..., choosing this over H3 because...",
+  costOfBeingWrong: "If this hypothesis is wrong, it means... and we will have spent...",
+});
+\`\`\`
+
+If committing to H3 (groundbreaking), you MUST articulate specifically why the default approach is insufficient for THIS hypothesis. Not generic — specific to what you're testing.
+
+### Mandatory: Oracle as Adversary
+The oracle is an ADVERSARY, not a validator. Its job is to BREAK your hypothesis, not support it.
+- **Seek disconfirmation first**: Frame oracle queries as "What is the input most likely to make my hypothesis fail?" Run that worst-case BEFORE any representative case.
+- **Never use oracle to tune**: If you catch yourself doing query → small change → re-query on the same distribution, that's tuning, not research. The harness will detect and flag this.
+- **Track surprise**: After EVERY oracle result, record your prior expectation:
+\`\`\`
+forge.oracle.recordSurprise(oracleRecord.id, "I expected the oracle to say X because...", true/false, "The surprise was...")
+\`\`\`
+- **Monitor surprise rate**: Check \`forge.oracle.surpriseRate()\` — a rate near zero means you already know the answers and aren't exploring.
+
+### Mandatory: Experiment Archetypes
+Your hypothesis commitment determines the experiment archetype:
+- **INCREMENTAL** (H1/H2): Oracle access is unrestricted. Tightly scoped. Requires a measurable delta against a named baseline. Use for: threshold tuning, data pipeline work, hyperparameter sweeps.
+- **EXPLORATORY** (H3): Oracle access is rate-limited. You must run at least one eval BEFORE querying the oracle (burn-in). The first oracle query MUST be adversarial. Use for: architectural alternatives, non-Stockfish proxies, alternative error models, novel feature spaces.
+
+### Mandatory: Kill Signal When Abandoning
+When killing an experiment or dropping a hypothesis, record why:
+\`\`\`
+forge.log.kill({
+  hypothesisSetId: forge.hypothesis.current().id,
+  description: "What was being tried",
+  abandonmentPoint: "After experiment #3, accuracy dropped 2pp",
+  reason: "The approach fundamentally cannot account for...",
+  firstOracleType: "adversarial",
+  surpriseRateAtAbandonment: forge.oracle.surpriseRate().rate,
+  experimentsCompleted: 3,
+});
+\`\`\`
+
+### Mandatory: Reflection Every 5 Experiments
+Every 5 experiments, you MUST write a reflection BEFORE running the next batch:
+\`\`\`
+forge.log.reflect({
+  afterExperimentNumber: 5,
+  ruledOut: "Temperature tuning alone cannot improve accuracy beyond 52%",
+  surpriseRateAnalysis: "Rate 0.3 — healthy, still finding unexpected results",
+  unexpectedResultDescription: "Finding that endgame accuracy improves when reducing opening temperature",
+  currentSurpriseRate: forge.oracle.surpriseRate().rate,
+});
+\`\`\`
+
+### Encouraged: Code Changes, Not Just Config
+Most real experiments should include CODE changes, not just config changes. We are still far from high accuracy. Config-only tuning has bounded upside. Use \`forge.code.prompt()\` to modify the engine — architectural changes often yield larger improvements than parameter tuning.
+
 ### Mandatory: Notes After Every Experiment
 After EACH experiment (success or failure), you MUST call:
 \`\`\`
 forge.knowledge.note("EXP <name>: <hypothesis>. Result: <metric delta>. Conclusion: <what was learned>", ["<focus>", "<technique>"])
 \`\`\`
-Also log with \`forge.log.record()\`. If you discover a novel insight, create a topic with \`forge.knowledge.create()\`. Compact topics with 10+ entries via \`forge.knowledge.compact(topicId)\`.
-
-### Mandatory: Consult Oracle for Research Decisions
-Use \`forge.oracle.ask(question, context)\` whenever you face ambiguity:
-- **Before your first experiment**: ask the oracle what approach to try given the baseline metrics and player profile.
-- **When an experiment fails unexpectedly**: ask why and what to try next.
-- **When choosing between approaches**: ask the oracle to compare trade-offs.
-- **Before making code changes**: ask about the expected effect on metrics.
-The oracle cross-validates with multiple LLMs — use it to make better decisions. Aim for 3-5 oracle calls per session.
 
 ### Mandatory: Consult History Before New Approaches
 Before trying something new, run:

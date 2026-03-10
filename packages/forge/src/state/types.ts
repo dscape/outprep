@@ -17,6 +17,9 @@ export interface ForgeSession {
   updatedAt: string;
   status: SessionStatus;
 
+  /** Which agent owns this session (null for legacy sessions) */
+  agentId: string | null;
+
   /** Git worktree branch name */
   worktreeBranch: string;
 
@@ -52,6 +55,15 @@ export interface ForgeSession {
 
   /** Per-API-call interaction records */
   interactions: InteractionRecord[];
+
+  /** Hypothesis sets generated during this session */
+  hypothesisSets?: HypothesisSet[];
+  /** Oracle surprise tracking entries */
+  oracleSurprises?: OracleSurpriseEntry[];
+  /** Kill signal records */
+  killSignals?: KillSignalRecord[];
+  /** Reflection checkpoints */
+  reflections?: ReflectionCheckpoint[];
 }
 
 /* ── Baseline ─────────────────────────────────────────────── */
@@ -157,6 +169,13 @@ export interface ExperimentRecord {
 
   /** Oracle consultation (if any) */
   oracleQueryId?: string;
+
+  /** Experiment archetype */
+  archetype?: ExperimentArchetype;
+  /** Which hypothesis set this experiment is testing */
+  hypothesisSetId?: string;
+  /** Which specific hypothesis level is being tested */
+  hypothesisLevel?: HypothesisLevel;
 }
 
 export interface MaiaMetricsDelta {
@@ -198,6 +217,9 @@ export interface OracleRecord {
   claudeFinal: string;
   actionItems: string[];
   confidence: "high" | "medium" | "low";
+
+  /** Whether this query was adversarial (seeking disconfirmation) */
+  queryType?: "adversarial" | "confirmatory" | "exploratory";
 }
 
 /* ── Interaction Records (per-API-call tracking) ─────────── */
@@ -258,12 +280,159 @@ export interface EvalCacheEntry {
   created: string; // ISO timestamp
 }
 
+/* ── Hypothesis System ────────────────────────────────────── */
+
+export type HypothesisLevel = "continuous-a" | "continuous-b" | "groundbreaking";
+export type ExperimentArchetype = "incremental" | "exploratory";
+
+export interface Hypothesis {
+  level: HypothesisLevel;
+  statement: string;
+  /** What would falsify this hypothesis */
+  falsificationCriteria: string;
+  /** Expected cost to test (agent's estimate) */
+  estimatedCost: string;
+}
+
+export interface HypothesisSet {
+  id: string;
+  sessionId: string;
+  timestamp: string;
+  hypotheses: [Hypothesis, Hypothesis, Hypothesis];
+  /** Which hypothesis the agent committed to */
+  committedLevel: HypothesisLevel;
+  /** Agent's rationale for commitment */
+  commitmentRationale: string;
+  /** What being wrong means for the committed hypothesis */
+  costOfBeingWrong: string;
+}
+
+/* ── Oracle Surprise Tracking ────────────────────────────── */
+
+export interface OracleSurpriseEntry {
+  oracleId: string;
+  timestamp: string;
+  /** Agent's prior expectation BEFORE seeing the result */
+  priorExpectation: string;
+  /** Whether the result was surprising to the agent */
+  wasSurprising: boolean;
+  /** Brief explanation of what was expected vs. what was observed */
+  surpriseExplanation?: string;
+}
+
+/* ── Kill Signal Log ─────────────────────────────────────── */
+
+export interface KillSignalRecord {
+  id: string;
+  timestamp: string;
+  /** Which hypothesis set was active */
+  hypothesisSetId: string;
+  /** What was being tried */
+  description: string;
+  /** Point at which it was abandoned */
+  abandonmentPoint: string;
+  /** Agent's stated reason */
+  reason: string;
+  /** Whether the first oracle query was adversarial or confirmatory */
+  firstOracleType: "adversarial" | "confirmatory" | "none";
+  /** Surprise rate at time of abandonment */
+  surpriseRateAtAbandonment: number;
+  /** Number of experiments completed for this hypothesis */
+  experimentsCompleted: number;
+}
+
+/* ── Reflection Checkpoint ───────────────────────────────── */
+
+export interface ReflectionCheckpoint {
+  id: string;
+  sessionId: string;
+  timestamp: string;
+  /** Experiment number at which this reflection occurred */
+  afterExperimentNumber: number;
+  /** What has been ruled out */
+  ruledOut: string;
+  /** What the current surprise rate implies */
+  surpriseRateAnalysis: string;
+  /** What a genuinely unexpected result would look like */
+  unexpectedResultDescription: string;
+  /** Current surprise rate at the time of reflection */
+  currentSurpriseRate: number;
+}
+
+/* ── Agents ─────────────────────────────────────────────────── */
+
+export type AgentStatus = "running" | "stopped";
+
+export interface ForgeAgent {
+  id: string;
+  /** Auto-generated chess grandmaster name */
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  status: AgentStatus;
+  /** Session this agent is currently working in (null if stopped) */
+  currentSessionId: string | null;
+  /** Ordered history of sessions this agent has worked on */
+  sessionHistory: AgentSessionEntry[];
+  /** Config the agent was started with */
+  config: AgentConfig;
+  /** Cumulative cost across all sessions */
+  totalInputTokens: number;
+  totalOutputTokens: number;
+  totalCostUsd: number;
+}
+
+export interface AgentSessionEntry {
+  sessionId: string;
+  sessionName: string;
+  startedAt: string;
+  endedAt: string | null;
+  endReason?: "completed" | "abandoned" | "stopped";
+}
+
+export interface AgentConfig {
+  players: string[];
+  focus: string;
+  maxExperiments: number;
+  seed: number;
+  quick: boolean;
+}
+
+/* ── Leaderboard (SQLite read-only types) ───────────────────── */
+
+export interface LeaderboardEntry {
+  agentId: string;
+  agentName: string;
+  rank: number;
+  sessionsCount: number;
+  avgAccuracyDelta: number;
+  avgCplKlDelta: number;
+  avgWeightedCompositeDelta: number;
+  totalTimeSeconds: number;
+  totalCostUsd: number;
+}
+
+export interface FeatureRequest {
+  id: string;
+  agentId: string;
+  agentName: string;
+  sessionId: string;
+  timestamp: string;
+  title: string;
+  description: string;
+  category: "repl" | "forge" | "harness" | "engine" | "other";
+  status: "open" | "accepted" | "rejected" | "implemented";
+  response: string | null;
+}
+
 /* ── Top-Level Forge State ────────────────────────────────── */
 
 export interface ForgeState {
-  version: 1;
+  version: 1 | 2;
   /** All research sessions */
   sessions: ForgeSession[];
+  /** All agents */
+  agents: ForgeAgent[];
   /** Currently active session ID (null if none) */
   activeSessionId: string | null;
   /** Last checkpoint timestamp */

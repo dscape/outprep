@@ -5,6 +5,9 @@ import type {
   ForgeSession,
   SessionSummary,
   KnowledgeTopic,
+  AgentSummary,
+  LeaderboardEntry,
+  FeatureRequest,
 } from "./forge-types";
 
 const FORGE_ROOT = process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
@@ -16,8 +19,9 @@ const LOGS_DIR = path.join(FORGE_ROOT, "logs");
 const GAMES_DIR = path.join(FORGE_ROOT, "data", "games");
 
 const EMPTY_STATE: ForgeState = {
-  version: 1,
+  version: 2,
   sessions: [],
+  agents: [],
   activeSessionId: null,
   lastCheckpoint: new Date().toISOString(),
 };
@@ -39,7 +43,16 @@ export function loadForgeState(): ForgeState {
 
   try {
     const raw = fs.readFileSync(STATE_PATH, "utf-8");
-    return JSON.parse(raw) as ForgeState;
+    const state = JSON.parse(raw) as ForgeState;
+    // Migrate v1 → v2: add agents array
+    if (!state.agents) (state as any).agents = [];
+    if ((state.version as number) === 1) {
+      for (const s of state.sessions) {
+        if ((s as any).agentId === undefined) (s as any).agentId = null;
+      }
+      (state as any).version = 2;
+    }
+    return state;
   } catch (err) {
     console.error(`[forge] Failed to load forge-state.json: ${err}`);
     return { ...EMPTY_STATE };
@@ -69,6 +82,10 @@ export function getSessionSummaries(): SessionSummary[] {
     const running = isAgentRunning(s.id);
     // If state says "active" but no process is alive, it's actually paused
     const status = s.status === "active" && !running ? "paused" : s.status;
+    // Find agent name if session has an agentId
+    const agent = s.agentId
+      ? state.agents?.find((a) => a.id === s.agentId)
+      : null;
     return {
       id: s.id,
       name: s.name,
@@ -84,6 +101,8 @@ export function getSessionSummaries(): SessionSummary[] {
       totalOutputTokens: s.totalOutputTokens,
       bestCompositeScore: s.bestResult?.compositeScore ?? null,
       worktreeBranch: s.worktreeBranch,
+      agentId: s.agentId ?? null,
+      agentName: agent?.name ?? null,
       isRunning: running,
     };
   });
@@ -261,6 +280,178 @@ export function getPlayerGames(
   }
 }
 
+/* ── Agents ────────────────────────────────────────────── */
+
+function isAgentProcessRunning(agentId: string): boolean {
+  try {
+    const raw = fs.readFileSync(path.join(PIDS_DIR, `agent-${agentId}.pid`), "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (!Number.isFinite(pid)) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function getAgentSummaries(): AgentSummary[] {
+  const state = loadForgeState();
+  if (!state) return [];
+
+  // Try to load leaderboard data
+  let leaderboard: LeaderboardEntry[] = [];
+  try {
+    const dbPath = path.join(FORGE_ROOT, "leaderboard.db");
+    if (fs.existsSync(dbPath)) {
+      const Database = require("better-sqlite3");
+      const db = new Database(dbPath, { readonly: true });
+      const rows = db.prepare(`
+        SELECT agent_id, agent_name, COUNT(*) as sessions_count,
+          AVG(accuracy_delta) as avg_accuracy_delta,
+          AVG(cpl_kl_delta) as avg_cpl_kl_delta,
+          AVG(weighted_composite_delta) as avg_weighted_composite_delta,
+          SUM(duration_seconds) as total_time_seconds,
+          SUM(total_cost_usd) as total_cost_usd
+        FROM agent_session_results WHERE ended_at IS NOT NULL
+        GROUP BY agent_id ORDER BY avg_weighted_composite_delta DESC
+      `).all() as any[];
+      leaderboard = rows.map((r: any, i: number) => ({
+        agentId: r.agent_id,
+        agentName: r.agent_name,
+        rank: i + 1,
+        sessionsCount: r.sessions_count,
+        avgAccuracyDelta: r.avg_accuracy_delta,
+        avgCplKlDelta: r.avg_cpl_kl_delta,
+        avgWeightedCompositeDelta: r.avg_weighted_composite_delta,
+        totalTimeSeconds: r.total_time_seconds,
+        totalCostUsd: r.total_cost_usd,
+      }));
+      db.close();
+    }
+  } catch {
+    // SQLite not available
+  }
+
+  const rankMap = new Map(leaderboard.map((e) => [e.agentId, e]));
+
+  return (state.agents ?? []).map((a) => {
+    const running = isAgentProcessRunning(a.id);
+    const status = a.status === "running" && !running ? "stopped" : a.status;
+    const currentSession = a.currentSessionId
+      ? state.sessions.find((s) => s.id === a.currentSessionId)
+      : null;
+    const entry = rankMap.get(a.id);
+
+    return {
+      id: a.id,
+      name: a.name,
+      status,
+      createdAt: a.createdAt,
+      updatedAt: a.updatedAt,
+      currentSessionId: a.currentSessionId,
+      currentSessionName: currentSession?.name ?? null,
+      sessionCount: a.sessionHistory.length,
+      totalCostUsd: a.totalCostUsd,
+      config: a.config,
+      isRunning: running,
+      rank: entry?.rank ?? null,
+      avgWeightedCompositeDelta: entry?.avgWeightedCompositeDelta ?? 0,
+      avgAccuracyDelta: entry?.avgAccuracyDelta ?? 0,
+      totalTimeSeconds: entry?.totalTimeSeconds ?? 0,
+    };
+  });
+}
+
+export function getLeaderboard(): LeaderboardEntry[] {
+  try {
+    const dbPath = path.join(FORGE_ROOT, "leaderboard.db");
+    if (!fs.existsSync(dbPath)) return [];
+    const Database = require("better-sqlite3");
+    const db = new Database(dbPath, { readonly: true });
+    const rows = db.prepare(`
+      SELECT agent_id, agent_name, COUNT(*) as sessions_count,
+        AVG(accuracy_delta) as avg_accuracy_delta,
+        AVG(cpl_kl_delta) as avg_cpl_kl_delta,
+        AVG(weighted_composite_delta) as avg_weighted_composite_delta,
+        SUM(duration_seconds) as total_time_seconds,
+        SUM(total_cost_usd) as total_cost_usd
+      FROM agent_session_results WHERE ended_at IS NOT NULL
+      GROUP BY agent_id ORDER BY avg_weighted_composite_delta DESC
+    `).all() as any[];
+    db.close();
+    return rows.map((r: any, i: number) => ({
+      agentId: r.agent_id,
+      agentName: r.agent_name,
+      rank: i + 1,
+      sessionsCount: r.sessions_count,
+      avgAccuracyDelta: r.avg_accuracy_delta,
+      avgCplKlDelta: r.avg_cpl_kl_delta,
+      avgWeightedCompositeDelta: r.avg_weighted_composite_delta,
+      totalTimeSeconds: r.total_time_seconds,
+      totalCostUsd: r.total_cost_usd,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export function getFeatureRequests(opts?: {
+  status?: string;
+  agentId?: string;
+}): FeatureRequest[] {
+  try {
+    const dbPath = path.join(FORGE_ROOT, "leaderboard.db");
+    if (!fs.existsSync(dbPath)) return [];
+    const Database = require("better-sqlite3");
+    const db = new Database(dbPath, { readonly: true });
+
+    let sql = "SELECT * FROM feature_requests";
+    const conditions: string[] = [];
+    const params: unknown[] = [];
+    if (opts?.status) { conditions.push("status = ?"); params.push(opts.status); }
+    if (opts?.agentId) { conditions.push("agent_id = ?"); params.push(opts.agentId); }
+    if (conditions.length > 0) sql += " WHERE " + conditions.join(" AND ");
+    sql += " ORDER BY timestamp DESC";
+
+    const rows = db.prepare(sql).all(...params) as any[];
+    db.close();
+
+    return rows.map((r: any) => ({
+      id: r.id,
+      agentId: r.agent_id,
+      agentName: r.agent_name,
+      sessionId: r.session_id,
+      timestamp: r.timestamp,
+      title: r.title,
+      description: r.description,
+      category: r.category,
+      status: r.status,
+      response: r.response,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+export function updateFeatureRequestStatus(
+  id: string,
+  status: string,
+  response?: string,
+): boolean {
+  try {
+    const dbPath = path.join(FORGE_ROOT, "leaderboard.db");
+    if (!fs.existsSync(dbPath)) return false;
+    const Database = require("better-sqlite3");
+    const db = new Database(dbPath);
+    db.prepare("UPDATE feature_requests SET status = ?, response = ? WHERE id = ?")
+      .run(status, response ?? null, id);
+    db.close();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /* ── Activity Log ──────────────────────────────────────── */
 
 export function buildActivityLog(
@@ -320,6 +511,46 @@ export function buildActivityLog(
         consoleTimestamp: cc.timestamp,
       });
     }
+  }
+
+  // Hypothesis set events
+  for (const hs of session.hypothesisSets ?? []) {
+    const committed = hs.hypotheses.find((h) => h.level === hs.committedLevel);
+    events.push({
+      id: `hypothesis-${hs.id}`,
+      timestamp: hs.timestamp,
+      type: "hypothesis",
+      title: `Hypothesis: committed to ${hs.committedLevel}`,
+      detail: committed?.statement?.slice(0, 80),
+      artifactId: hs.id,
+      artifactType: "hypotheses",
+    });
+  }
+
+  // Kill signal events
+  for (const ks of session.killSignals ?? []) {
+    events.push({
+      id: `kill-${ks.id}`,
+      timestamp: ks.timestamp,
+      type: "kill-signal",
+      title: `Killed: ${ks.description.slice(0, 80)}`,
+      detail: ks.reason.slice(0, 80),
+      artifactId: ks.id,
+      artifactType: "hypotheses",
+    });
+  }
+
+  // Reflection events
+  for (const ref of session.reflections ?? []) {
+    events.push({
+      id: `reflection-${ref.id}`,
+      timestamp: ref.timestamp,
+      type: "reflection",
+      title: `Reflection after experiment #${ref.afterExperimentNumber}`,
+      detail: `Surprise rate: ${(ref.currentSurpriseRate * 100).toFixed(0)}%`,
+      artifactId: ref.id,
+      artifactType: "hypotheses",
+    });
   }
 
   events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
