@@ -38,7 +38,9 @@ export function AgentCard({ agent }: { agent: AgentSummary }) {
               {agent.name}
             </h3>
             <p className="text-xs text-zinc-500 mt-0.5">
-              {agent.config.players.join(", ")} &middot; {agent.config.focus}
+              {agent.config.players?.length
+                ? <>{agent.config.players.join(", ")} &middot; {agent.config.focus ?? "accuracy"}</>
+                : <span className="text-purple-400">Autonomous</span>}
             </p>
           </div>
         </div>

@@ -4,13 +4,18 @@
  * Manages agent creation, session cycling, leaderboard recording,
  * and feature request handling. This is the ONLY module that writes
  * to the leaderboard SQLite database (anti-cheating).
+ *
+ * Agents can run in two modes:
+ * - **Fixed mode**: started with --players/--focus, locked to those settings.
+ * - **Autonomous mode**: no players/focus provided, uses LLM decision step
+ *   between sessions to decide what to work on next.
  */
 
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadState, saveState, updateSession, updateAgent } from "../state/forge-state";
-import { createSandbox, destroySandbox } from "../repl/sandbox";
+import { createSandbox, destroySandbox, listSandboxes, commitSandbox } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
 import { createForgeApi } from "../repl/forge-api";
 import { writePid, removePid, writeAgentPid, removeAgentPid } from "../pid";
@@ -24,14 +29,20 @@ import {
 import { CostTracker } from "./cost-tracker";
 import { createLogWriter } from "./log-writer";
 import { runAgentLoop, buildInitialMessage } from "./agent-loop";
-import type { ForgeAgent, ForgeSession } from "../state/types";
+import { makeDecision, type DecisionResult } from "./agent-decision";
+import type { ForgeAgent, ForgeSession, AgentDecision } from "../state/types";
 
 export interface AgentOptions {
-  players: string[];
-  focus: string;
+  players?: string[];    // Optional — autonomous if absent
+  focus?: string;        // Optional — autonomous if absent
   maxExperiments: number;
   seed: number;
   quick: boolean;
+}
+
+/** Whether the agent is running in autonomous mode (no fixed players/focus) */
+function isAutonomous(opts: AgentOptions): boolean {
+  return !opts.players?.length && !opts.focus;
 }
 
 /**
@@ -76,9 +87,10 @@ export async function startAgent(opts: AgentOptions): Promise<void> {
   state.agents.push(agent);
   saveState(state);
 
-  console.log(`\n  Agent "${agentName}" created (${agentId.slice(0, 8)})`);
+  const mode = isAutonomous(opts) ? "autonomous" : "fixed";
+  console.log(`\n  Agent "${agentName}" created (${agentId.slice(0, 8)}) — ${mode} mode`);
 
-  await runAgentOuterLoop(agentId, opts);
+  await runAgentOuterLoop(agentId, agentName, opts);
 }
 
 /**
@@ -102,50 +114,28 @@ export async function resumeAgent(agentId: string): Promise<void> {
 
   console.log(`\n  Resuming agent "${agent.name}" (${agentId.slice(0, 8)})`);
 
-  await runAgentOuterLoop(agentId, agent.config);
+  await runAgentOuterLoop(agentId, agent.name, agent.config);
 }
 
 /**
  * The outer loop: cycles sessions for an agent until stopped.
+ *
+ * In autonomous mode, each iteration calls makeDecision() to decide
+ * what players/focus to use or whether to resume an existing session.
+ * In fixed mode, the decision is implicit (always start_new with fixed config).
  */
 async function runAgentOuterLoop(
   agentId: string,
+  agentName: string,
   opts: AgentOptions
 ): Promise<void> {
   writeAgentPid(agentId);
 
-  // Pre-download player data once (reused across sessions)
-  const { fetchPlayer, getGames } = await import("../data/game-store");
-
-  console.log(`  Downloading data for ${opts.players.length} player(s)...\n`);
-  const validPlayers: string[] = [];
-  for (const username of opts.players) {
-    try {
-      console.log(`  [${username}] Fetching...`);
-      const data = await fetchPlayer(username);
-      const games = getGames(username);
-      if (games.length === 0) {
-        console.log(`  [${username}] ✗ 0 games found, skipping.`);
-      } else {
-        console.log(`  [${username}] ✓ ${games.length} games (Elo: ${data.estimatedElo})`);
-        validPlayers.push(username);
-      }
-    } catch (err) {
-      console.error(`  [${username}] ✗ Failed: ${err}`);
-    }
-  }
-
-  if (validPlayers.length === 0) {
-    console.error("\n  ✗ No valid players with games. Stopping agent.");
-    const state = loadState();
-    updateAgent(state, agentId, (a) => {
-      a.status = "stopped";
-    });
-    removeAgentPid(agentId);
-    return;
-  }
-
+  const autonomous = isAutonomous(opts);
+  let waitRetries = 0;
+  const MAX_WAIT_RETRIES = 10;
   let sessionNumber = 0;
+
   try {
     while (true) {
       // Re-load state to check if agent was stopped externally
@@ -156,31 +146,101 @@ async function runAgentOuterLoop(
         break;
       }
 
+      // ── Decision Step ──────────────────────────────────────
+      let decision: AgentDecision;
+      let decisionCost = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
+
+      if (autonomous) {
+        console.log(`\n  Making autonomous decision...`);
+        const result: DecisionResult = await makeDecision(agentId, agentName);
+        decision = result.decision;
+        decisionCost = {
+          inputTokens: result.inputTokens,
+          outputTokens: result.outputTokens,
+          costUsd: result.costUsd,
+        };
+
+        // Track decision cost on the agent
+        if (decisionCost.costUsd > 0) {
+          const ds = loadState();
+          updateAgent(ds, agentId, (a) => {
+            a.totalInputTokens += decisionCost.inputTokens;
+            a.totalOutputTokens += decisionCost.outputTokens;
+            a.totalCostUsd += decisionCost.costUsd;
+          });
+        }
+
+        console.log(`  Decision: ${decision.action} — ${decision.reasoning}`);
+      } else {
+        // Fixed mode: always start_new with configured players/focus
+        decision = {
+          action: "start_new",
+          players: opts.players!,
+          focus: opts.focus!,
+          reasoning: "Fixed mode — using configured players and focus",
+        };
+      }
+
+      // ── Handle "wait" action ───────────────────────────────
+      if (decision.action === "wait") {
+        waitRetries++;
+        if (waitRetries >= MAX_WAIT_RETRIES) {
+          console.log(`\n  No player data after ${MAX_WAIT_RETRIES} retries. Agent stopping.`);
+          break;
+        }
+        console.log(`  Waiting 60s before retrying (attempt ${waitRetries}/${MAX_WAIT_RETRIES})...`);
+        await new Promise((resolve) => setTimeout(resolve, 60_000));
+        continue;
+      }
+
+      // Reset wait counter on successful decision
+      waitRetries = 0;
       sessionNumber++;
       const sessionStartedAt = new Date().toISOString();
 
       console.log(`\n  ══════════════════════════════════════════`);
-      console.log(`  Agent "${freshAgent.name}" — Session #${sessionNumber}`);
+      console.log(`  Agent "${agentName}" — Session #${sessionNumber}`);
+      console.log(`  Action: ${decision.action} | Players: ${decision.players.join(", ")} | Focus: ${decision.focus}`);
       console.log(`  ══════════════════════════════════════════\n`);
 
-      // Run a single session
-      const result = await runAgentSession(
-        agentId,
-        freshAgent.name,
-        validPlayers,
-        opts,
-        sessionStartedAt,
-      );
+      // ── Execute decision ───────────────────────────────────
+      let result: { session: ForgeSession | null };
+
+      if (decision.action === "resume_session" && decision.resumeSessionId) {
+        result = await resumeAgentSession(
+          agentId,
+          agentName,
+          decision,
+          opts,
+        );
+      } else {
+        // Download player data for this session's players
+        const validPlayers = await downloadPlayers(decision.players);
+        if (validPlayers.length === 0) {
+          console.log(`\n  No valid players for this session. Trying next decision...`);
+          continue;
+        }
+
+        result = await runAgentSession(
+          agentId,
+          agentName,
+          validPlayers,
+          decision.focus,
+          opts,
+          sessionStartedAt,
+          decision,
+        );
+      }
 
       if (!result.session) {
-        console.log(`\n  Session failed to start. Agent stopping.`);
-        break;
+        console.log(`\n  Session failed to start. Trying next decision...`);
+        continue;
       }
 
       // Record results to SQLite leaderboard
       recordSessionToLeaderboard(
         agentId,
-        freshAgent.name,
+        agentName,
         result.session,
         sessionStartedAt,
       );
@@ -194,6 +254,7 @@ async function runAgentOuterLoop(
           startedAt: sessionStartedAt,
           endedAt: new Date().toISOString(),
           endReason: result.session!.status === "completed" ? "completed" : "abandoned",
+          decision,
         });
         a.currentSessionId = null;
         a.totalInputTokens += result.session!.totalInputTokens;
@@ -231,14 +292,43 @@ async function runAgentOuterLoop(
 }
 
 /**
- * Run a single research session for an agent.
+ * Download player data for the given usernames.
+ * Returns only the usernames that were successfully fetched with games.
+ */
+async function downloadPlayers(usernames: string[]): Promise<string[]> {
+  const { fetchPlayer, getGames } = await import("../data/game-store");
+
+  console.log(`  Downloading data for ${usernames.length} player(s)...\n`);
+  const validPlayers: string[] = [];
+  for (const username of usernames) {
+    try {
+      console.log(`  [${username}] Fetching...`);
+      const data = await fetchPlayer(username);
+      const games = getGames(username);
+      if (games.length === 0) {
+        console.log(`  [${username}] ✗ 0 games found, skipping.`);
+      } else {
+        console.log(`  [${username}] ✓ ${games.length} games (Elo: ${data.estimatedElo})`);
+        validPlayers.push(username);
+      }
+    } catch (err) {
+      console.error(`  [${username}] ✗ Failed: ${err}`);
+    }
+  }
+  return validPlayers;
+}
+
+/**
+ * Run a single NEW research session for an agent.
  */
 async function runAgentSession(
   agentId: string,
   agentName: string,
   players: string[],
+  focus: string,
   opts: AgentOptions,
   _startedAt: string,
+  decision?: AgentDecision,
 ): Promise<{ session: ForgeSession | null }> {
   const state = loadState();
   const costTracker = new CostTracker();
@@ -255,7 +345,7 @@ async function runAgentSession(
 
   log(`  Session: ${sessionName}`);
   log(`  Session ID: ${sessionId.slice(0, 8)}`);
-  log(`  Focus: ${opts.focus}`);
+  log(`  Focus: ${focus}`);
   log(``);
 
   // Create sandbox (git worktree)
@@ -272,7 +362,7 @@ async function runAgentSession(
     status: "active",
     agentId,
     worktreeBranch: sandbox.branchName,
-    focus: opts.focus,
+    focus,
     players,
     baseline: null,
     experiments: [],
@@ -333,33 +423,7 @@ async function runAgentSession(
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
-
-  // Inject leaderboard (read-only) and feature request callback.
-  // These bypass the ForgeApi type intentionally — agents cannot
-  // write to the leaderboard, only the agent-manager writes.
-  (forgeApi as any).leaderboard = {
-    get: () => getLeaderboard(),
-    me: () => getAgentStats(agentId),
-  };
-  (forgeApi as any).request = (
-    title: string,
-    description: string,
-    category: string,
-  ): string => {
-    const reqId = randomUUID();
-    fileFeatureRequest({
-      id: reqId,
-      agentId,
-      agentName,
-      sessionId: session.id,
-      title,
-      description,
-      category,
-    });
-    console.log(`  Feature request filed: ${title}`);
-    return reqId;
-  };
-
+  injectAgentExtensions(forgeApi, agentId, agentName, session.id);
   repl.inject("forge", forgeApi);
 
   const agent = state.agents.find((a) => a.id === agentId);
@@ -367,16 +431,17 @@ async function runAgentSession(
     session,
     state,
     baseline: session.baseline,
-    focus: opts.focus,
+    focus,
     maxExperiments: opts.maxExperiments,
     agent,
+    decision,
   };
 
   const initialMessage = buildInitialMessage(
     {
       name: sessionName,
       players,
-      focus: opts.focus,
+      focus,
       maxExperiments: opts.maxExperiments,
       seed: opts.seed,
       quick: opts.quick,
@@ -396,12 +461,14 @@ async function runAgentSession(
       {
         name: sessionName,
         players,
-        focus: opts.focus,
+        focus,
         maxExperiments: opts.maxExperiments,
         seed: opts.seed,
         quick: opts.quick,
       },
       logWriter,
+      forgeApi,
+      sandbox,
     );
   } catch (err) {
     log(`\n  ✗ Session error: ${err}`, "error");
@@ -412,6 +479,132 @@ async function runAgentSession(
     removePid(sessionId);
     repl.dispose();
     if (session.status === "completed" || session.status === "abandoned") {
+      try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
+      destroySandbox(sandbox);
+    }
+  }
+
+  logWriter.close();
+  return { session };
+}
+
+/**
+ * Resume an existing paused session for an agent (autonomous decision).
+ * Finds the sandbox, re-creates REPL + forge API, and continues.
+ */
+async function resumeAgentSession(
+  agentId: string,
+  agentName: string,
+  decision: AgentDecision,
+  opts: AgentOptions,
+): Promise<{ session: ForgeSession | null }> {
+  const state = loadState();
+  const session = state.sessions.find((s) => s.id === decision.resumeSessionId);
+  if (!session) {
+    console.log(`  ✗ Session ${decision.resumeSessionId} not found.`);
+    return { session: null };
+  }
+
+  // Find the sandbox
+  const sandboxes = listSandboxes();
+  const sandbox = sandboxes.find((s) => s.sessionId === session.id);
+  if (!sandbox) {
+    console.log(`  ✗ Sandbox not found for session ${session.id.slice(0, 8)}.`);
+    return { session: null };
+  }
+
+  const costTracker = new CostTracker();
+  const logWriter = createLogWriter(session.name);
+  const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
+    if (level === "error") console.error(msg);
+    else if (level === "warn") console.warn(msg);
+    else console.log(msg);
+    logWriter.log(msg, level);
+  };
+
+  log(`  Resuming session: ${session.name}`);
+  log(`  Experiments so far: ${session.experiments.length}`);
+
+  // Recreate REPL and rebuild player data
+  const repl = createReplServer();
+  const { getGames, loadPlayer } = await import("../data/game-store");
+  const { createSplit } = await import("../data/splits");
+
+  const playerData: Record<string, any> = {};
+  for (const username of session.players) {
+    const meta = loadPlayer(username);
+    const games = getGames(username);
+    if (meta && games.length > 0) {
+      const result = createSplit(games, { seed: opts.seed, trainRatio: 0.8 });
+      playerData[username] = { meta, games, ...result };
+    }
+  }
+  repl.inject("playerData", playerData);
+
+  const forgeApi = createForgeApi(sandbox, session, state, playerData);
+  injectAgentExtensions(forgeApi, agentId, agentName, session.id);
+  repl.inject("forge", forgeApi);
+
+  const focus = session.focus ?? "accuracy";
+  const agent = state.agents.find((a) => a.id === agentId);
+  const promptCtx = {
+    session,
+    state,
+    baseline: session.baseline,
+    focus,
+    maxExperiments: opts.maxExperiments,
+    agent,
+    decision,
+  };
+
+  // Resume message
+  const resumeMessage =
+    `Resuming session "${session.name}". ` +
+    `${session.experiments.length} experiments completed so far. ` +
+    `${session.activeChanges.length} code changes currently applied. ` +
+    `Decision reasoning: ${decision.reasoning}. ` +
+    `Continue the research from where you left off.`;
+
+  updateSession(state, session.id, (s) => {
+    s.status = "active";
+  });
+  writePid(session.id);
+
+  // Update agent's current session
+  updateAgent(state, agentId, (a) => {
+    a.currentSessionId = session.id;
+  });
+
+  try {
+    await runAgentLoop(
+      client(),
+      repl,
+      session,
+      state,
+      promptCtx,
+      resumeMessage,
+      costTracker,
+      {
+        name: session.name,
+        focus,
+        maxExperiments: opts.maxExperiments,
+        seed: opts.seed,
+        quick: opts.quick,
+      },
+      logWriter,
+      forgeApi,
+      sandbox,
+    );
+  } catch (err) {
+    log(`\n  ✗ Session error: ${err}`, "error");
+    updateSession(state, session.id, (s) => {
+      s.status = "paused";
+    });
+  } finally {
+    removePid(session.id);
+    repl.dispose();
+    if (session.status === "completed" || session.status === "abandoned") {
+      try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
       destroySandbox(sandbox);
     }
   }
@@ -428,6 +621,41 @@ function client(): Anthropic {
     _client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! });
   }
   return _client;
+}
+
+/**
+ * Inject leaderboard (read-only) and feature request callback onto the forge API.
+ * These bypass the ForgeApi type intentionally — agents cannot write to
+ * the leaderboard, only the agent-manager writes.
+ */
+function injectAgentExtensions(
+  forgeApi: any,
+  agentId: string,
+  agentName: string,
+  sessionId: string,
+): void {
+  forgeApi.leaderboard = {
+    get: () => getLeaderboard(),
+    me: () => getAgentStats(agentId),
+  };
+  forgeApi.request = (
+    title: string,
+    description: string,
+    category: string,
+  ): string => {
+    const reqId = randomUUID();
+    fileFeatureRequest({
+      id: reqId,
+      agentId,
+      agentName,
+      sessionId,
+      title,
+      description,
+      category,
+    });
+    console.log(`  Feature request filed: ${title}`);
+    return reqId;
+  };
 }
 
 function recordSessionToLeaderboard(

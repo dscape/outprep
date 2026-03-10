@@ -458,7 +458,7 @@ export function createForgeApi(
         timestamp: partial.timestamp ?? new Date().toISOString(),
         hypothesis: partial.hypothesis!,
         category: partial.category ?? "parameter",
-        codeChanges: partial.codeChanges ?? [],
+        codeChanges: partial.codeChanges ?? codeOps.getTrackedChanges(),
         configChanges: partial.configChanges ?? [],
         players: partial.players ?? session.players,
         positionsEvaluated: partial.positionsEvaluated ?? 0,

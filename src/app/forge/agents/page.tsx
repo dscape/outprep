@@ -41,11 +41,11 @@ export default function AgentsPage() {
       ) : (
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-8 text-center">
           <p className="text-sm text-zinc-400">
-            No agents yet. Start one from the CLI:
+            No agents yet. Click <span className="text-emerald-400">+ New Agent</span> above to start one.
           </p>
-          <code className="mt-2 block text-xs text-zinc-500">
-            forge agent start --players &lt;username&gt; --focus accuracy
-          </code>
+          <p className="text-xs text-zinc-600 mt-1">
+            Agents can run autonomously or focus on specific players and areas.
+          </p>
         </div>
       )}
     </div>

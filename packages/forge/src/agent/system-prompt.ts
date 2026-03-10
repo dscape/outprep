@@ -9,7 +9,7 @@
  * 5. Convergence/stopping rules
  */
 
-import type { ForgeSession, ForgeState, BaselineSnapshot, ForgeAgent } from "../state/types";
+import type { ForgeSession, ForgeState, BaselineSnapshot, ForgeAgent, AgentDecision } from "../state/types";
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { formatTrend, computeTrend } from "../log/trend-tracker";
 
@@ -21,6 +21,8 @@ export interface PromptContext {
   maxExperiments: number;
   /** Agent running this session (for leaderboard injection) */
   agent?: ForgeAgent;
+  /** The autonomous decision that led to this session */
+  decision?: AgentDecision;
 }
 
 /**
@@ -173,7 +175,7 @@ forge.log.record({
 - forge.metrics.significance() needs arrays of per-position values, not aggregate numbers.`;
 
 function buildSessionState(ctx: PromptContext): string {
-  const { session, baseline } = ctx;
+  const { session, baseline, decision } = ctx;
   const lines: string[] = ["## Current Session State"];
 
   lines.push(`- Name: ${session.name}`);
@@ -181,6 +183,14 @@ function buildSessionState(ctx: PromptContext): string {
   lines.push(`- Experiments: ${session.experiments.length}`);
   lines.push(`- Active code changes: ${session.activeChanges.length}`);
   lines.push(`- Cost so far: $${session.totalCostUsd.toFixed(4)}`);
+
+  if (decision) {
+    lines.push(`\n### Session Decision`);
+    lines.push(`You chose to work on this because: ${decision.reasoning}`);
+    if (decision.action === "resume_session") {
+      lines.push(`This is a RESUMED session — continue from where it left off.`);
+    }
+  }
 
   if (baseline) {
     lines.push(`\n### Baseline Metrics`);

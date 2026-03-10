@@ -3,7 +3,6 @@
 import { useState } from "react";
 import type { ForgeSession, ActivityEvent } from "@/lib/forge-types";
 import { StatusBadge } from "@/components/forge/StatusBadge";
-import { SessionControls } from "@/components/forge/SessionControls";
 import { SessionTabs, type Tab } from "./session-tabs";
 
 export function SessionLayout({
@@ -30,12 +29,15 @@ export function SessionLayout({
             {session.name}
           </h2>
           <StatusBadge status={session.status} />
-          <SessionControls
-            sessionId={session.id}
-            status={session.status}
-            isRunning={session.isRunning}
-            onTabChange={(t) => setTab(t as Tab)}
-          />
+          {session.isRunning && (
+            <button
+              onClick={() => setTab("console")}
+              className="flex items-center gap-1.5 text-xs text-emerald-400 hover:text-emerald-300 cursor-pointer transition-colors"
+            >
+              <span className="inline-block h-2 w-2 rounded-full bg-emerald-400 animate-pulse" />
+              Live
+            </button>
+          )}
         </div>
         <p className="text-sm text-zinc-500">
           {session.players.join(", ")} &middot; {session.focus} &middot;

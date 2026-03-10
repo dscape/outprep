@@ -64,14 +64,28 @@ export interface AgentSessionEntry {
   startedAt: string;
   endedAt: string | null;
   endReason?: "completed" | "abandoned" | "stopped";
+  /** The decision that led to this session (autonomous mode) */
+  decision?: AgentDecision;
 }
 
 export interface AgentConfig {
-  players: string[];
-  focus: string;
+  players?: string[];   // If set, agent is locked to these players. If absent, autonomous.
+  focus?: string;       // If set, agent is locked to this focus. If absent, autonomous.
   maxExperiments: number;
   seed: number;
   quick: boolean;
+}
+
+/* ── Agent Decision (autonomous mode) ──────────────────────── */
+
+export type AgentDecisionAction = "start_new" | "resume_session" | "wait";
+
+export interface AgentDecision {
+  action: AgentDecisionAction;
+  players: string[];
+  focus: string;
+  resumeSessionId?: string;
+  reasoning: string;
 }
 
 export interface AgentSummary {

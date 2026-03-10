@@ -4,15 +4,16 @@
  * Forge CLI — Autonomous Engine Research Laboratory
  *
  * Commands:
- *   research   Start a new autonomous research session
- *   resume     Resume a paused session
+ *   agent      Manage autonomous agents (start, stop, ls)
+ *   leaderboard Show the agent leaderboard
  *   ls         List all sessions with live running status
  *   status     Show current session state
  *   history    List past sessions and results
- *   stop       Stop running forge agent(s)
  *   attach     Attach REPL to the active session
+ *   repl       Interactive REPL with the forge API
  *   oracle     Direct oracle query (outside a session)
  *   baseline   Compute fresh baseline metrics
+ *   clean      Remove sessions and their sandboxes
  */
 
 import "dotenv/config";
@@ -26,105 +27,6 @@ program
   .name("forge")
   .description("Autonomous Engine Research Laboratory")
   .version("0.1.0");
-
-/* ── research ─────────────────────────────────────────────── */
-
-program
-  .command("research")
-  .description("Start a new autonomous research session")
-  .option("--name <name>", "Session name", `session-${Date.now()}`)
-  .option("--players <list>", "Comma-separated Lichess usernames")
-  .option(
-    "--focus <area>",
-    "Focus area(s), comma-separated: accuracy, cpl, blunders, opening, middlegame, endgame",
-    "accuracy"
-  )
-  .option("--max-experiments <n>", "Max experiments before stopping", "20")
-  .option("--seed <n>", "Random seed", "42")
-  .option("--quick", "Use triage-size evaluations (50 positions)")
-  .action(async (opts) => {
-    const players = opts.players
-      ? opts.players.split(",").map((s: string) => s.trim())
-      : undefined;
-
-    if (!players || players.length === 0) {
-      console.error("  ✗ Specify at least one player with --players");
-      process.exit(1);
-    }
-
-    // Pre-download all player data before starting the agent
-    const { fetchPlayer, getGames } = await import("./data/game-store");
-    console.log(`\n  Downloading data for ${players.length} player(s)...\n`);
-    const validPlayers: string[] = [];
-    for (const username of players) {
-      try {
-        console.log(`  [${username}] Fetching...`);
-        const data = await fetchPlayer(username);
-        const games = getGames(username);
-        if (games.length === 0) {
-          console.log(`  [${username}] ✗ 0 games found, skipping.`);
-        } else {
-          console.log(`  [${username}] ✓ ${games.length} games (Elo: ${data.estimatedElo})`);
-          validPlayers.push(username);
-        }
-      } catch (err) {
-        console.error(`  [${username}] ✗ Failed: ${err}`);
-      }
-    }
-
-    if (validPlayers.length === 0) {
-      console.error("\n  ✗ No valid players with games. Aborting.");
-      process.exit(1);
-    }
-
-    console.log(`\n  Starting research with ${validPlayers.length} player(s): ${validPlayers.join(", ")}\n`);
-
-    const { runResearchSession } = await import("./agent/agent-loop");
-    await runResearchSession({
-      name: opts.name,
-      players: validPlayers,
-      focus: opts.focus,
-      maxExperiments: parseInt(opts.maxExperiments, 10),
-      seed: parseInt(opts.seed, 10),
-      quick: opts.quick ?? false,
-    });
-  });
-
-/* ── resume ───────────────────────────────────────────────── */
-
-program
-  .command("resume [session-id]")
-  .description("Resume a paused research session")
-  .action(async (sessionId?: string) => {
-    const state = loadState();
-
-    const id = sessionId ?? state.activeSessionId;
-    if (!id) {
-      console.error("  ✗ No active session to resume. Specify a session ID.");
-      process.exit(1);
-    }
-
-    const matches = state.sessions.filter((s) => s.id.startsWith(id));
-    if (matches.length === 0) {
-      console.error(`  ✗ No session matching "${id}".`);
-      process.exit(1);
-    }
-    if (matches.length > 1) {
-      console.error(`  ✗ Ambiguous ID "${id}" matches ${matches.length} sessions. Be more specific.`);
-      process.exit(1);
-    }
-    const session = matches[0];
-
-    if (session.status !== "paused" && session.status !== "active") {
-      console.error(
-        `  ✗ Session ${id} is ${session.status}, cannot resume.`
-      );
-      process.exit(1);
-    }
-
-    const { resumeSession } = await import("./agent/agent-loop");
-    await resumeSession(state, session);
-  });
 
 /* ── status ───────────────────────────────────────────────── */
 
@@ -718,66 +620,6 @@ program
     console.log();
   });
 
-/* ── stop ────────────────────────────────────────────────── */
-
-program
-  .command("stop [session-id]")
-  .description("Stop running forge agent(s)")
-  .option("--all", "Stop all running sessions")
-  .action(async (sessionId: string | undefined, opts: { all?: boolean }) => {
-    const { readPid, isProcessRunning } = await import("./pid");
-    const state = loadState();
-
-    let targets: typeof state.sessions;
-
-    if (opts.all) {
-      targets = state.sessions.filter((s) => {
-        const pid = readPid(s.id);
-        return pid !== null && isProcessRunning(pid);
-      });
-    } else {
-      const id = sessionId ?? state.activeSessionId;
-      if (!id) {
-        console.error("  ✗ No active session. Specify a session ID or use --all.");
-        process.exit(1);
-      }
-      const matches = state.sessions.filter((s) => s.id.startsWith(id));
-      if (matches.length === 0) {
-        console.error(`  ✗ No session matching "${id}".`);
-        process.exit(1);
-      }
-      if (matches.length > 1) {
-        console.error(`  ✗ Ambiguous ID "${id}" matches ${matches.length} sessions.`);
-        process.exit(1);
-      }
-      targets = matches;
-    }
-
-    if (targets.length === 0) {
-      console.log("\n  No running sessions to stop.\n");
-      return;
-    }
-
-    for (const session of targets) {
-      const pid = readPid(session.id);
-      if (pid === null || !isProcessRunning(pid)) {
-        console.log(`  ${session.name} (${session.id.slice(0, 8)}) — not running`);
-        continue;
-      }
-
-      try {
-        process.kill(pid, "SIGINT");
-        console.log(`  ✓ Sent SIGINT to ${session.name} (pid ${pid})`);
-        updateSession(state, session.id, (s) => {
-          s.status = "paused";
-        });
-      } catch (err) {
-        console.error(`  ✗ Failed to stop ${session.name}: ${err}`);
-      }
-    }
-    console.log();
-  });
-
 /* ── agent ───────────────────────────────────────────────── */
 
 const agent = program
@@ -786,12 +628,11 @@ const agent = program
 
 agent
   .command("start")
-  .description("Start a new autonomous agent")
-  .option("--players <list>", "Comma-separated Lichess usernames")
+  .description("Start a new autonomous agent (autonomous mode if no --players/--focus)")
+  .option("--players <list>", "Comma-separated Lichess usernames (optional — autonomous if omitted)")
   .option(
     "--focus <area>",
-    "Focus area(s), comma-separated",
-    "accuracy"
+    "Focus area(s), comma-separated (optional — autonomous if omitted)"
   )
   .option("--max-experiments <n>", "Max experiments per session", "20")
   .option("--seed <n>", "Random seed", "42")
@@ -815,9 +656,6 @@ agent
       }
 
       console.log(`\n  Starting ${stopped.length} stopped agent(s)...\n`);
-      // Start them sequentially (each takes over the process)
-      // In practice, you'd fork child processes — for now, start the first one.
-      // TODO: fork child processes for true parallelism
       for (const a of stopped) {
         console.log(`  Starting "${a.name}" (${a.id.slice(0, 8)})...`);
         await resumeAgent(a.id);
@@ -829,15 +667,16 @@ agent
       ? opts.players.split(",").map((s: string) => s.trim())
       : undefined;
 
-    if (!players || players.length === 0) {
-      console.error("  ✗ Specify at least one player with --players");
-      process.exit(1);
+    const focus = opts.focus ?? undefined;
+
+    if (!players && !focus) {
+      console.log("\n  Autonomous mode — agent will decide players and focus.\n");
     }
 
     const { startAgent } = await import("./agent/agent-manager");
     await startAgent({
       players,
-      focus: opts.focus,
+      focus,
       maxExperiments: parseInt(opts.maxExperiments, 10),
       seed: parseInt(opts.seed, 10),
       quick: opts.quick ?? false,

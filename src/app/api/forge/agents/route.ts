@@ -11,16 +11,9 @@ export async function POST(request: Request) {
     const body = await request.json();
     const { players, focus, maxExperiments, seed, quick } = body;
 
-    if (!players || !Array.isArray(players) || players.length === 0) {
-      return NextResponse.json(
-        { error: "players is required (array of usernames)" },
-        { status: 400 },
-      );
-    }
-
     const result = startAgentProcess({
-      players,
-      focus,
+      players: Array.isArray(players) && players.length > 0 ? players : undefined,
+      focus: focus || undefined,
       maxExperiments,
       seed,
       quick,

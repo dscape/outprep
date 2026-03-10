@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { NewAgentDialog } from "./new-agent-dialog";
 
 interface AgentControlsProps {
   hasAgents: boolean;
@@ -12,6 +13,7 @@ interface AgentControlsProps {
 export function AgentControls({ hasAgents, hasStoppedAgents, hasRunningAgents }: AgentControlsProps) {
   const router = useRouter();
   const [loading, setLoading] = useState<string | null>(null);
+  const [showNewAgent, setShowNewAgent] = useState(false);
 
   async function handleStopAll() {
     setLoading("stop");
@@ -37,11 +39,15 @@ export function AgentControls({ hasAgents, hasStoppedAgents, hasRunningAgents }:
     }
   }
 
-  if (!hasAgents) return null;
-
   return (
     <div className="flex gap-2">
-      {hasStoppedAgents && (
+      <button
+        onClick={() => setShowNewAgent(true)}
+        className="rounded bg-emerald-800 px-3 py-1.5 text-xs font-medium text-emerald-200 hover:bg-emerald-700"
+      >
+        + New Agent
+      </button>
+      {hasAgents && hasStoppedAgents && (
         <button
           onClick={handleStartAll}
           disabled={loading !== null}
@@ -50,7 +56,7 @@ export function AgentControls({ hasAgents, hasStoppedAgents, hasRunningAgents }:
           {loading === "start" ? "Starting..." : "Start All"}
         </button>
       )}
-      {hasRunningAgents && (
+      {hasAgents && hasRunningAgents && (
         <button
           onClick={handleStopAll}
           disabled={loading !== null}
@@ -59,6 +65,7 @@ export function AgentControls({ hasAgents, hasStoppedAgents, hasRunningAgents }:
           {loading === "stop" ? "Stopping..." : "Stop All"}
         </button>
       )}
+      {showNewAgent && <NewAgentDialog onClose={() => setShowNewAgent(false)} />}
     </div>
   );
 }

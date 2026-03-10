@@ -13,9 +13,10 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadState, saveState, updateSession } from "../state/forge-state";
-import { createSandbox, destroySandbox } from "../repl/sandbox";
+import { createSandbox, destroySandbox, commitSandbox } from "../repl/sandbox";
+import type { SandboxInfo } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
-import { createForgeApi } from "../repl/forge-api";
+import { createForgeApi, type ForgeApi } from "../repl/forge-api";
 import { buildSystemPrompt, type PromptContext } from "./system-prompt";
 import { writePid, removePid } from "../pid";
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
@@ -147,7 +148,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   const initialMessage = buildInitialMessage(opts, playerData);
 
   try {
-    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts, logWriter);
+    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts, logWriter, forgeApi, sandbox);
   } catch (err) {
     log(`\n  ✗ Session error: ${err}`, "error");
     updateSession(state, sessionId, (s) => {
@@ -158,6 +159,8 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     repl.dispose();
     // Don't destroy sandbox on pause — it can be resumed
     if (session.status === "completed" || session.status === "abandoned") {
+      // Safety: commit any remaining changes before destroying worktree
+      try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
       destroySandbox(sandbox);
     }
   }
@@ -272,7 +275,7 @@ export async function resumeSession(
       maxExperiments: 20,
       seed: 42,
       quick: false,
-    }, logWriter);
+    }, logWriter, forgeApi, sandbox);
   } catch (err) {
     log(`\n  ✗ Session error: ${err}`, "error");
     updateSession(state, session.id, (s) => {
@@ -369,7 +372,9 @@ export async function runAgentLoop(
   initialMessage: string,
   costTracker: CostTracker,
   opts: ResearchOptions,
-  logWriter?: LogWriter
+  logWriter?: LogWriter,
+  forgeApi?: ForgeApi,
+  sandbox?: SandboxInfo,
 ): Promise<void> {
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
@@ -391,6 +396,7 @@ export async function runAgentLoop(
   let turnCount = 0;
   const maxTurns = opts.maxExperiments * 10; // ~10 API calls per experiment
   let knowledgeSummarized = false;
+  let convergenceFinalized = false;
 
   while (turnCount < maxTurns) {
     turnCount++;
@@ -402,8 +408,47 @@ export async function runAgentLoop(
       convergenceConfig
     );
 
-    if (convergence.shouldStop) {
-      log(`\n  ⏹ Stopping: ${convergence.reason}`);
+    if (convergence.shouldStop && !convergenceFinalized) {
+      convergenceFinalized = true;
+      log(`\n  ⏹ Convergence reached: ${convergence.reason}`);
+
+      // Sync tracked changes immediately (don't wait for agent)
+      if (forgeApi) {
+        updateSession(state, session.id, (s) => {
+          s.activeChanges = forgeApi.code.getTrackedChanges();
+        });
+      }
+
+      // Give the agent one finalization turn
+      messages.push({
+        role: "user",
+        content: [
+          `Convergence reached: ${convergence.reason}. Session is ending. Before closing:`,
+          "1. Leave a note with `forge.knowledge.note(summary, [tags])` summarizing your key findings and recommendations.",
+          "2. Generate hypotheses for FUTURE sessions with `forge.hypothesis.commit()` — what should the next agent try?",
+          "3. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
+          "4. If you achieved a significant improvement, ensure the branch is pushed with `forge.session.push()`.",
+          "5. Record a final reflection with `forge.log.reflect()` covering what was learned this session.",
+          "",
+          "After completing these steps, say 'Session complete' to end.",
+        ].join("\n"),
+      });
+      continue; // give the agent one more turn
+    }
+
+    if (convergence.shouldStop && convergenceFinalized) {
+      log(`\n  ⏹ Finalizing session: ${convergence.reason}`);
+
+      // Ensure changes are committed and pushed before marking complete
+      if (forgeApi) {
+        try {
+          const result = forgeApi.session.finalize();
+          log(`  ${result}`);
+        } catch (err) {
+          log(`  Finalization warning: ${err}`, "warn");
+        }
+      }
+
       updateSession(state, session.id, (s) => {
         s.status = "completed";
       });
@@ -620,20 +665,40 @@ export async function runAgentLoop(
       if (wantsDone && !knowledgeSummarized) {
         // Ask agent to summarize findings before closing
         knowledgeSummarized = true;
+
+        // Sync tracked changes immediately
+        if (forgeApi) {
+          updateSession(state, session.id, (s) => {
+            s.activeChanges = forgeApi.code.getTrackedChanges();
+          });
+        }
+
         messages.push({
           role: "user",
           content: [
             "Before closing, please:",
             "1. Leave a note with `forge.knowledge.note(summary, [tags])` summarizing your key findings and recommendations for future sessions.",
-            "2. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
-            "3. Create new topics with `forge.knowledge.create()` for any novel knowledge areas you discovered.",
-            "4. If you achieved a significant improvement, push the branch with `forge.session.push()` so it can be reviewed as a PR.",
+            "2. Generate hypotheses for FUTURE sessions with `forge.hypothesis.commit()` — what should the next agent try? Include at least one groundbreaking hypothesis.",
+            "3. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
+            "4. Create new topics with `forge.knowledge.create()` for any novel knowledge areas you discovered.",
+            "5. If you achieved a significant improvement, push the branch with `forge.session.push()` so it can be reviewed as a PR.",
+            "6. Record a final reflection with `forge.log.reflect()` covering what was learned this session.",
           ].join("\n"),
         });
         continue;
       }
 
       if (wantsDone) {
+        // Finalize: sync changes, commit, push
+        if (forgeApi) {
+          try {
+            const result = forgeApi.session.finalize();
+            log(`  ${result}`);
+          } catch (err) {
+            log(`  Finalization warning: ${err}`, "warn");
+          }
+        }
+
         updateSession(state, session.id, (s) => {
           s.status = "completed";
         });
