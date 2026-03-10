@@ -23,6 +23,7 @@ export function ConsoleLogViewer({
   const [connected, setConnected] = useState(false);
   const [done, setDone] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
   const bufferRef = useRef<LogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -150,6 +151,20 @@ export function ConsoleLogViewer({
             }`}
           >
             {paused ? "Resume" : "Pause"}
+          </button>
+          <button
+            onClick={() => {
+              const text = lines
+                .map((l) => `${formatTime(l.ts)} ${l.msg}`)
+                .join("\n");
+              navigator.clipboard.writeText(text).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+            className="px-3 py-1 text-xs rounded font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 transition-colors"
+          >
+            {copied ? "Copied!" : "Copy All"}
           </button>
         </div>
       </div>

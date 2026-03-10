@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { ExperimentRecord } from "@/lib/forge-types";
 import { MetricDelta } from "./MetricDelta";
+import { MarkdownContent } from "./MarkdownContent";
 
 const conclusionStyles = {
   confirmed: "bg-emerald-900/50 text-emerald-400 border-emerald-800",
@@ -18,7 +19,7 @@ const categoryStyles = {
   data: "text-emerald-400",
 };
 
-export function ExperimentCard({ experiment }: { experiment: ExperimentRecord }) {
+export function ExperimentCard({ experiment, logContent }: { experiment: ExperimentRecord; logContent?: string }) {
   const [open, setOpen] = useState(false);
   const date = new Date(experiment.timestamp).toLocaleDateString("en-US", {
     month: "short",
@@ -177,6 +178,17 @@ export function ExperimentCard({ experiment }: { experiment: ExperimentRecord })
                       )}
                     </div>
                   ))}
+                </div>
+              </div>
+            )}
+
+            {logContent && (
+              <div>
+                <p className="text-xs font-medium text-zinc-500 mb-1">
+                  Experiment Log
+                </p>
+                <div className="rounded border border-zinc-800 bg-zinc-950 p-3 text-xs">
+                  <MarkdownContent content={logContent} />
                 </div>
               </div>
             )}

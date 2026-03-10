@@ -45,7 +45,7 @@ export function SessionTabs({
     { key: "experiments", label: "Experiments", count: session.experiments.length },
     { key: "oracle", label: "Oracle", count: session.oracleConsultations.length },
     { key: "changes", label: "Changes", count: allCodeChanges.length },
-    { key: "logs", label: "Logs", count: logs.length },
+    { key: "logs", label: "Raw Logs", count: logs.length },
     { key: "console", label: "Console" },
   ];
 
@@ -88,7 +88,7 @@ export function SessionTabs({
         />
       )}
       {tab === "experiments" && (
-        <ExperimentTimeline experiments={session.experiments} />
+        <ExperimentTimeline experiments={session.experiments} logs={logs} />
       )}
       {tab === "oracle" && <OracleTab session={session} />}
       {tab === "changes" && (
@@ -208,6 +208,9 @@ function OverviewTab({
           Session has not computed a baseline yet.
         </div>
       )}
+
+      {/* Raw state (dev mode) */}
+      <RawStatePanel session={session} />
     </div>
   );
 }
@@ -320,6 +323,31 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
       <p className="text-xs font-medium text-zinc-500 mb-3">{title}</p>
       {children}
+    </div>
+  );
+}
+
+function RawStatePanel({
+  session,
+}: {
+  session: Omit<ForgeSession, "conversationHistory">;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-5 py-3 text-xs font-medium text-zinc-500 hover:text-zinc-400 transition-colors"
+      >
+        <span>Raw Session State (JSON)</span>
+        <span>{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <pre className="px-5 pb-4 text-xs font-mono text-zinc-400 overflow-x-auto max-h-[500px] overflow-y-auto">
+          {JSON.stringify(session, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }

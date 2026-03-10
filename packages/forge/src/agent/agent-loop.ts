@@ -302,6 +302,9 @@ function messageText(msg: Anthropic.MessageParam): string {
  * Prune conversation history to fit within a token budget.
  * Keeps first user message + last N turn pairs that fit.
  * Returns a pruned copy — does not mutate the original.
+ *
+ * IMPORTANT: tool_use (assistant) and tool_result (user) messages
+ * are always kept/dropped as pairs to avoid Anthropic API errors.
  */
 function pruneMessages(
   messages: Anthropic.MessageParam[],
@@ -313,15 +316,37 @@ function pruneMessages(
   const first = messages[0];
   const firstTokens = estimateTokens(messageText(first));
 
-  // Walk backwards, keeping turn pairs that fit
+  // Walk backwards in turn pairs (assistant + user) to keep tool_use/tool_result together
   const kept: Anthropic.MessageParam[] = [];
   let remaining = tokenBudget - firstTokens;
 
-  for (let i = messages.length - 1; i >= 1; i--) {
-    const tokens = estimateTokens(messageText(messages[i]));
-    if (remaining - tokens < 0 && kept.length >= 2) break;
-    remaining -= tokens;
-    kept.unshift(messages[i]);
+  let i = messages.length - 1;
+  while (i >= 1) {
+    const msg = messages[i];
+    const msgTokens = estimateTokens(messageText(msg));
+
+    // Check if this user message contains tool_result blocks (paired with previous assistant)
+    const isToolResult =
+      msg.role === "user" &&
+      Array.isArray(msg.content) &&
+      (msg.content as Anthropic.ToolResultBlockParam[]).some(
+        (b) => b.type === "tool_result"
+      );
+
+    if (isToolResult && i > 1 && messages[i - 1].role === "assistant") {
+      // Must keep/drop as a pair
+      const prevTokens = estimateTokens(messageText(messages[i - 1]));
+      const pairTokens = msgTokens + prevTokens;
+      if (remaining - pairTokens < 0 && kept.length >= 4) break;
+      remaining -= pairTokens;
+      kept.unshift(messages[i - 1], msg);
+      i -= 2;
+    } else {
+      if (remaining - msgTokens < 0 && kept.length >= 2) break;
+      remaining -= msgTokens;
+      kept.unshift(msg);
+      i -= 1;
+    }
   }
 
   return [first, ...kept];
@@ -482,13 +507,63 @@ async function runAgentLoop(
           const input = block.input as { code: string };
           log(`  $:\n${input.code}\n  ────`);
 
+          // Intercept process.stdout/stderr to capture progress writes
+          const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+          const originalStderrWrite = process.stderr.write.bind(process.stderr);
+          let pendingProgress = "";
+
+          const handleWrite = (chunk: string | Uint8Array) => {
+            const str = typeof chunk === "string" ? chunk : chunk.toString();
+            if (str.includes("\r") && !str.includes("\n")) {
+              // \r-based progress — remember latest, don't log yet
+              pendingProgress = str.replace(/\r/g, "").trim();
+            } else {
+              // Regular output — flush pending progress first, then log
+              if (pendingProgress) {
+                log(`  ${pendingProgress}`);
+                pendingProgress = "";
+              }
+              const trimmed = str.trim();
+              if (trimmed) log(`  ${trimmed}`);
+            }
+          };
+
+          process.stdout.write = ((...args: Parameters<typeof process.stdout.write>) => {
+            handleWrite(args[0]);
+            return originalStdoutWrite(...args);
+          }) as typeof process.stdout.write;
+
+          process.stderr.write = ((...args: Parameters<typeof process.stderr.write>) => {
+            handleWrite(args[0]);
+            return originalStderrWrite(...args);
+          }) as typeof process.stderr.write;
+
           const toolOutput = await handleReplTool(repl, input);
+
+          // Restore original writers + flush pending progress
+          process.stdout.write = originalStdoutWrite;
+          process.stderr.write = originalStderrWrite;
+          if (pendingProgress) {
+            log(`  ${pendingProgress}`);
+            pendingProgress = "";
+          }
+
           const formatted = formatToolOutput(toolOutput);
 
           if (toolOutput.error) {
             log(`  $:✗ ${toolOutput.error.slice(0, 200)}`, "error");
           } else {
             log(`  $:✓ (${toolOutput.durationMs}ms)`);
+          }
+
+          // Log REPL stdout (console.log output from executed code)
+          if (toolOutput.output) {
+            log(`  Output:\n${toolOutput.output}`);
+          }
+
+          // Log REPL return value
+          if (toolOutput.result && toolOutput.result !== "(undefined)") {
+            log(`  Result:\n${toolOutput.result}`);
           }
 
           toolResults.push({

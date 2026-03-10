@@ -361,6 +361,25 @@ export function createForgeApi(
         positionsEvaluated: 0,
       };
 
+      // Validate/coerce result field — agent may pass wrong shape
+      let coercedResult = partial.result;
+      if (coercedResult && !("moveAccuracy" in coercedResult)) {
+        // Agent passed a custom object or raw TestResult.metrics instead of MaiaMetrics
+        const raw = coercedResult as Record<string, unknown>;
+        if ("matchRate" in raw) {
+          // Attempt to coerce raw metrics → MaiaMetrics shape
+          coercedResult = {
+            ...emptyResult,
+            moveAccuracy: (raw.matchRate as number) ?? 0,
+            rawMetrics: coercedResult as MaiaMetrics["rawMetrics"],
+          } as MaiaMetrics;
+        } else {
+          // Unrecognized shape — fall back to empty
+          console.warn("[forge.log.record] result has wrong shape, using empty defaults");
+          coercedResult = undefined;
+        }
+      }
+
       // Fill in defaults for missing fields
       const experiment: ExperimentRecord = {
         id: partial.id ?? randomUUID(),
@@ -374,7 +393,7 @@ export function createForgeApi(
         players: partial.players ?? session.players,
         positionsEvaluated: partial.positionsEvaluated ?? 0,
         evaluationDurationMs: partial.evaluationDurationMs ?? 0,
-        result: partial.result ?? emptyResult,
+        result: coercedResult ?? emptyResult,
         delta: partial.delta ?? { moveAccuracy: 0, cplKLDivergence: 0, blunderRateDelta: 0, compositeScore: 0 },
         significance: partial.significance ?? [],
         conclusion: partial.conclusion ?? "inconclusive",
@@ -383,8 +402,14 @@ export function createForgeApi(
         oracleQueryId: partial.oracleQueryId,
       };
 
-      // Write markdown log
-      const path = writeExperimentLog(session.name, experiment);
+      // Write markdown log (non-fatal — experiment still gets recorded on failure)
+      let path = "";
+      try {
+        path = writeExperimentLog(session.name, experiment);
+      } catch (err) {
+        console.warn("[forge.log.record] markdown log failed:", (err as Error).message);
+        path = `(log write failed: ${(err as Error).message})`;
+      }
 
       // Add to session experiments
       updateSession(state, session.id, (s) => {

@@ -54,7 +54,7 @@ function formatExperiment(
   lines.push(`# Experiment ${exp.number}: ${truncate(exp.hypothesis, 80)}`);
   lines.push("");
   lines.push(
-    `**Session**: ${sessionName} | **Date**: ${exp.timestamp.split("T")[0]} | **Status**: ${conclusionLabel}`
+    `**Session**: ${sessionName} | **Date**: ${exp.timestamp?.split("T")[0] ?? "unknown"} | **Status**: ${conclusionLabel}`
   );
   lines.push("");
 
@@ -115,16 +115,16 @@ function formatExperiment(
   lines.push("### Key Metrics");
   lines.push("");
   lines.push(
-    `- **Move Accuracy**: ${(exp.result.moveAccuracy * 100).toFixed(1)}% (Δ ${formatDelta(exp.delta.moveAccuracy * 100)}pp)`
+    `- **Move Accuracy**: ${((exp.result?.moveAccuracy ?? 0) * 100).toFixed(1)}% (Δ ${formatDelta((exp.delta?.moveAccuracy ?? 0) * 100)}pp)`
   );
   lines.push(
-    `- **CPL KL Div**: ${exp.result.cplKLDivergence.toFixed(4)} (Δ ${formatDelta(exp.delta.cplKLDivergence, 4)})`
+    `- **CPL KL Div**: ${(exp.result?.cplKLDivergence ?? 0).toFixed(4)} (Δ ${formatDelta(exp.delta?.cplKLDivergence ?? 0, 4)})`
   );
   lines.push(
-    `- **Blunder Δ**: ${exp.result.blunderRateDelta.overall.toFixed(4)} (Δ ${formatDelta(exp.delta.blunderRateDelta, 4)})`
+    `- **Blunder Δ**: ${(exp.result?.blunderRateDelta?.overall ?? 0).toFixed(4)} (Δ ${formatDelta(exp.delta?.blunderRateDelta ?? 0, 4)})`
   );
   lines.push(
-    `- **Composite**: ${exp.result.compositeScore.toFixed(4)} (Δ ${formatDelta(exp.delta.compositeScore, 4)})`
+    `- **Composite**: ${(exp.result?.compositeScore ?? 0).toFixed(4)} (Δ ${formatDelta(exp.delta?.compositeScore ?? 0, 4)})`
   );
   lines.push("");
 
@@ -135,7 +135,7 @@ function formatExperiment(
   lines.push("|-------|----------|----------------|");
   for (const phase of ["opening", "middlegame", "endgame"] as const) {
     lines.push(
-      `| ${phase} | ${(exp.result.moveAccuracyByPhase[phase] * 100).toFixed(1)}% | ${exp.result.blunderRateDelta[phase].toFixed(4)} |`
+      `| ${phase} | ${((exp.result?.moveAccuracyByPhase?.[phase] ?? 0) * 100).toFixed(1)}% | ${(exp.result?.blunderRateDelta?.[phase] ?? 0).toFixed(4)} |`
     );
   }
   lines.push("");

@@ -116,21 +116,46 @@ Train/test separation is automatic: eval methods auto-detect trainGames from pla
 
 forge.code: read(file) | prompt(instruction) | diff() | revert(file?) | listModifiable() | typecheck()
   prompt(instruction) invokes Claude Code CLI to make changes. Describe what you want changed in natural language.
-forge.config: get() | set(path, value) | reset()
+forge.config: get() → BotConfig | set(path, value) | reset()
+  Config structure: { boltzmann: { temperatureBySkill: [[skill, temp], ...], multiPvCount, ... }, elo: { min, max }, skill: { min, max }, ... }
+  Always print JSON.stringify(forge.config.get(), null, 2) first to see the full structure before accessing properties.
 forge.data: load(username) | split(games, opts) | getGames(username) | listPlayers()
 forge.eval: run(testGames, opts?) | runQuick(testGames, trainGames?, n?) | baseline(testGames, trainGames?) | compare(a, b)
   All eval methods return TestResult: { label, elo, metrics, positions, resolvedConfig }
   metrics: { totalPositions, matchRate, topNRate, bookCoverage, avgActualCPL, avgBotCPL, cplDelta, byPhase }
   byPhase[phase]: { matchRate, botAvgCPL, playerAvgCPL, positionCount }
   positions[]: { isMatch, actualCPL, botCPL, phase, ... }
-  Use result.metrics.matchRate for accuracy, result.metrics.cplDelta for CPL gap, etc.
-forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile(positions) | composite(positions, rawMetrics) | significance(base, exp)
+  IMPORTANT: avgBotCPL and cplDelta can be null/NaN in quick evals — always use ?. when accessing.
+forge.metrics: accuracy(positions) | cplDistribution(positions) | blunderProfile(positions) | composite(positions, rawMetrics) → MaiaMetrics | significance(metricName, baselineValues: number[], experimentValues: number[])
+  composite() returns MaiaMetrics — this is what forge.log.record() expects as result.
+  significance() takes ARRAYS of per-position values, NOT aggregates. E.g. positions.map(p => p.isMatch ? 1 : 0).
 forge.knowledge: search(query) | read(topicId) | append(topicId, entry) | create({id, title, relevance, content}) | compact(topicId, keepRecent?) | archives(topicId)
 forge.knowledge (notes): note(content, tags?) | notes({limit?, tags?}) | searchNotes(query)
 forge.history: sessions({status?, player?}) | searchExperiments(query) | experiment(id)
-forge.oracle: ask(question, context?) | history()
-forge.log: record(experiment) | trend() | summary()
-forge.session: checkpoint() | accept() | reject() | push()`;
+forge.oracle: ask(question, context?) → { claudeInitial, chatgptResponse, claudeFinal, actionItems: string[], confidence } | history()
+forge.log: record({ hypothesis, result?, conclusion?, notes?, nextSteps?, category? }) | trend() | summary()
+  result must be MaiaMetrics (from forge.metrics.composite()). DO NOT pass custom objects.
+  conclusion: "confirmed"|"refuted"|"partial"|"inconclusive"
+forge.session: checkpoint() | accept() | reject() | push()
+
+### Recording an Experiment (MANDATORY after every eval)
+\`\`\`
+const res = await forge.eval.run(testGames);
+const maia = forge.metrics.composite(res.positions, res.metrics);
+forge.log.record({
+  hypothesis: "Reduce temperature from 130 to 35",
+  result: maia,
+  conclusion: "confirmed",
+  notes: "+4.7pp accuracy",
+  nextSteps: ["Try temperature 25"]
+});
+\`\`\`
+
+### Common Pitfalls
+- Always JSON.stringify(forge.config.get(), null, 2) before accessing config properties — do not guess the structure.
+- CPL fields (avgBotCPL, cplDelta) can be null in quick evals — use optional chaining (?.).
+- forge.log.record() result field must be MaiaMetrics from forge.metrics.composite(), NOT a custom object.
+- forge.metrics.significance() needs arrays of per-position values, not aggregate numbers.`;
 
 function buildSessionState(ctx: PromptContext): string {
   const { session, baseline } = ctx;
