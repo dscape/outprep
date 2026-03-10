@@ -33,6 +33,7 @@ export interface ResearchOptions {
   maxExperiments: number;
   seed: number;
   quick: boolean;
+  researchBias?: number;
 }
 
 /**
@@ -142,6 +143,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     baseline: session.baseline,
     focus: opts.focus,
     maxExperiments: opts.maxExperiments,
+    researchBias: opts.researchBias ?? 0.5,
   };
 
   // Initial user message
@@ -254,6 +256,7 @@ export async function resumeSession(
     baseline: session.baseline,
     focus,
     maxExperiments: 20,
+    researchBias: 0.5,
   };
 
   // Resume message
@@ -732,7 +735,11 @@ export async function runAgentLoop(
           needsReflection
             ? `- ⚠ REFLECTION DUE: ${expsSinceReflection} experiments since last reflection. Call forge.log.reflect() before continuing.`
             : "",
-          "- ⚠ Sessions with ZERO code changes receive a 0.5x leaderboard PENALTY. Use forge.code.prompt() for architectural changes.",
+          (opts.researchBias ?? 0.5) >= 0.75
+            ? "- Groundbreaking sessions earn 5x. If you haven't committed to groundbreaking yet, consider it strongly."
+            : (opts.researchBias ?? 0.5) >= 0.4
+              ? "- Stay focused on your committed hypothesis. Make code changes to avoid the 0.5x config-only penalty."
+              : "- Focus on validating your current approach thoroughly. Incremental gains compound reliably.",
           contextRefresh ? `\n## Updated Knowledge Context\n\n${contextRefresh}` : "",
         ].filter(Boolean).join("\n"),
       });
@@ -747,19 +754,70 @@ export async function runAgentLoop(
   }
 }
 
+/**
+ * Generate bias-appropriate research guidance text.
+ * bias: 0.0 = conservative, 0.5 = balanced, 1.0 = aggressive.
+ */
+function biasGuidance(bias: number): {
+  competitiveFraming: string;
+  scoringRule: string;
+  hypothesisHint: string;
+  strategyReminder: string;
+} {
+  if (bias >= 0.75) {
+    return {
+      competitiveFraming: `## COMPETITIVE OBJECTIVE: Reach #1 on the Leaderboard\n\nBefore anything else, check your standing:`,
+      scoringRule:
+        `\n**CRITICAL SCORING RULE:** Groundbreaking (exploratory) sessions earn **5x** the leaderboard score of incremental sessions. ` +
+        `If you are behind on the leaderboard, a successful groundbreaking session is the fastest path to #1. Factor this into your hypothesis commitment.\n`,
+      hypothesisHint: `  committedLevel: "<choose based on leaderboard strategy — groundbreaking earns 5x>",`,
+      strategyReminder:
+        `\n**Remember:** Groundbreaking = 5x score, but config-only sessions = 0.5x penalty. ` +
+        `The best strategy: commit to groundbreaking AND make code changes (5x). The worst: continuous + config-only (0.5x).\n`,
+    };
+  } else if (bias >= 0.4) {
+    return {
+      competitiveFraming: `## OBJECTIVE: Maximize Leaderboard Score\n\nCheck your current standing before choosing a strategy:`,
+      scoringRule:
+        `\n**SCORING:** The leaderboard rewards both consistent incremental work and bold exploratory research. ` +
+        `Groundbreaking sessions earn a 5x multiplier, but only if they produce measurable improvements — a failed groundbreaking attempt scores 5x of zero. ` +
+        `Consistent incremental gains (1x each) accumulate reliably. Choose the approach that fits your current position and available session time.\n`,
+      hypothesisHint: `  committedLevel: "<choose the level that matches your confidence and session goals>",`,
+      strategyReminder:
+        `\n**Strategy options:** ` +
+        `Groundbreaking + code changes = 5x (high risk, high reward). ` +
+        `Continuous + code changes = 1x (reliable compounding). ` +
+        `Config-only sessions = 0.5x penalty. Make at least one code change per session.\n`,
+    };
+  } else {
+    return {
+      competitiveFraming: `## OBJECTIVE: Build Reliable, Compounding Improvements\n\nCheck where you stand on the leaderboard:`,
+      scoringRule:
+        `\n**APPROACH:** Consistent incremental improvements compound over time. Each well-validated experiment adds to your score reliably. ` +
+        `Groundbreaking research earns a 5x multiplier IF it succeeds, but failed ambitious experiments produce nothing. ` +
+        `Focus on depth over breadth: thoroughly explore one lever before moving to the next. ` +
+        `Aim to run every experiment, measure carefully, and build on what works.\n`,
+      hypothesisHint: `  committedLevel: "<continuous-a or continuous-b recommended — build on what works>",`,
+      strategyReminder:
+        `\n**Key principle:** Five successful incremental sessions (1x each) beat one failed groundbreaking session (5x * 0 = 0). ` +
+        `Config-only sessions receive a 0.5x penalty. Make code changes that you can validate empirically.\n`,
+    };
+  }
+}
+
 export function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, any>): string {
   const parts: string[] = [];
+  const guidance = biasGuidance(opts.researchBias ?? 0.5);
 
   parts.push(`Start research session "${opts.name}" focused on ${opts.focus}.`);
   parts.push(`Seed: ${opts.seed}\n`);
 
-  parts.push(`## COMPETITIVE OBJECTIVE: Reach #1 on the Leaderboard\n`);
-  parts.push(`Before anything else, check your standing:`);
+  parts.push(guidance.competitiveFraming);
   parts.push("```typescript");
   parts.push(`const lb = await forge.leaderboard.get();`);
   parts.push(`console.log("Current leaderboard:", JSON.stringify(lb, null, 2));`);
   parts.push("```");
-  parts.push(`\n**CRITICAL SCORING RULE:** Groundbreaking (exploratory) sessions earn **5x** the leaderboard score of incremental sessions. If you are behind on the leaderboard, a successful groundbreaking session is the fastest path to #1. Factor this into your hypothesis commitment.\n`);
+  parts.push(guidance.scoringRule);
 
   // Show available player data
   parts.push("## Available Players (pre-downloaded and split)\n");
@@ -801,12 +859,12 @@ export function buildInitialMessage(opts: ResearchOptions, playerData: Record<st
   parts.push(`    { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
   parts.push(`    { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
   parts.push(`  ],`);
-  parts.push(`  committedLevel: "<choose based on leaderboard strategy>",`);
+  parts.push(guidance.hypothesisHint);
   parts.push(`  commitmentRationale: "Choosing this because...",`);
   parts.push(`  costOfBeingWrong: "If wrong, it means...",`);
   parts.push(`});`);
   parts.push("```");
-  parts.push(`\n**Remember:** Groundbreaking = 5x score, but config-only sessions = 0.5x penalty. The best strategy: commit to groundbreaking AND make code changes (5x). The worst: continuous + config-only (0.5x).\n`);
+  parts.push(guidance.strategyReminder);
   parts.push(`\n**Step 4: Challenge your hypothesis** — first oracle query must seek disconfirmation:`);
   parts.push("```typescript");
   parts.push(`const oracleResult = await forge.oracle.ask("What inputs would most likely make this hypothesis fail?", JSON.stringify(baseline), "adversarial")`);

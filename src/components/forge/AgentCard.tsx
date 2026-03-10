@@ -2,9 +2,16 @@ import Link from "next/link";
 import type { AgentSummary } from "@/lib/forge-types";
 import { AgentStatusBadge } from "./AgentStatusBadge";
 
+function biasLabel(bias: number): { text: string; color: string } {
+  if (bias >= 0.75) return { text: "Aggressive", color: "text-red-400" };
+  if (bias >= 0.4) return { text: "Balanced", color: "text-amber-400" };
+  return { text: "Conservative", color: "text-blue-400" };
+}
+
 export function AgentCard({ agent }: { agent: AgentSummary }) {
   const sign = agent.avgWeightedCompositeDelta > 0 ? "+" : "";
   const hours = Math.round(agent.totalTimeSeconds / 3600);
+  const bias = biasLabel(agent.config.researchBias ?? 0.5);
 
   return (
     <Link
@@ -26,6 +33,8 @@ export function AgentCard({ agent }: { agent: AgentSummary }) {
               {agent.config.players?.length
                 ? <>{agent.config.players.join(", ")} &middot; {agent.config.focus ?? "accuracy"}</>
                 : <span className="text-purple-400">Autonomous</span>}
+              {" "}&middot;{" "}
+              <span className={bias.color}>{bias.text}</span>
             </p>
           </div>
         </div>

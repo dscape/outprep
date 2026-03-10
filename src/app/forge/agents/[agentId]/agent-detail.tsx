@@ -8,10 +8,17 @@ import { StopAgentButton } from "./stop-agent-button";
 import { StartAgentButton } from "./start-agent-button";
 import { NewAgentDialog } from "../new-agent-dialog";
 
+function biasLabel(bias: number): { text: string; color: string } {
+  if (bias >= 0.75) return { text: "Aggressive", color: "text-red-400" };
+  if (bias >= 0.4) return { text: "Balanced", color: "text-amber-400" };
+  return { text: "Conservative", color: "text-blue-400" };
+}
+
 export function AgentDetailView({ agent }: { agent: AgentDetail }) {
   const sign = agent.avgWeightedCompositeDelta > 0 ? "+" : "";
   const hours = Math.round(agent.totalTimeSeconds / 3600);
   const reversedHistory = [...agent.sessionHistory].reverse();
+  const bias = biasLabel(agent.config.researchBias ?? 0.5);
 
   return (
     <div className="space-y-6">
@@ -32,6 +39,8 @@ export function AgentDetailView({ agent }: { agent: AgentDetail }) {
               {agent.config.players?.length
                 ? <>{agent.config.players.join(", ")} &middot; {agent.config.focus ?? "accuracy"}</>
                 : <span className="text-purple-400">Autonomous</span>}
+              {" "}&middot;{" "}
+              <span className={bias.color}>{bias.text}</span>
               {" "}&middot; Created {new Date(agent.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
             </p>
           </div>
@@ -204,11 +213,13 @@ function ActionBadge({ action }: { action: string }) {
   const styles: Record<string, string> = {
     start_new: "border-blue-700 text-blue-400",
     resume_session: "border-amber-700 text-amber-400",
+    join_session: "border-purple-700 text-purple-400",
     wait: "border-zinc-700 text-zinc-400",
   };
   const labels: Record<string, string> = {
     start_new: "New Session",
     resume_session: "Resumed",
+    join_session: "Joined",
     wait: "Wait",
   };
 

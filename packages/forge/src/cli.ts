@@ -637,6 +637,7 @@ agent
   .option("--max-experiments <n>", "Max experiments per session", "20")
   .option("--seed <n>", "Random seed", "42")
   .option("--quick", "Use triage-size evaluations")
+  .option("--bias <n>", "Research bias 0.0=conservative 1.0=aggressive", "0.5")
   .option("--all", "Re-start all stopped agents with their saved config")
   .option("--resume <agentId>", "Re-start a specific stopped agent by ID")
   .action(async (opts) => {
@@ -681,6 +682,8 @@ agent
       console.log("\n  Autonomous mode — agent will decide players and focus.\n");
     }
 
+    const researchBias = Math.max(0, Math.min(1, parseFloat(opts.bias)));
+
     const { startAgent } = await import("./agent/agent-manager");
     await startAgent({
       players,
@@ -688,6 +691,7 @@ agent
       maxExperiments: parseInt(opts.maxExperiments, 10),
       seed: parseInt(opts.seed, 10),
       quick: opts.quick ?? false,
+      researchBias,
     });
   });
 
@@ -751,6 +755,62 @@ agent
   });
 
 agent
+  .command("assign <agent-id> <session-id>")
+  .description("Assign an agent to a specific session")
+  .action(async (agentIdArg: string, sessionIdArg: string) => {
+    const { readAgentPid, isProcessRunning } = await import("./pid");
+    const state = loadState();
+
+    // Find agent by ID prefix or name
+    const agents = state.agents.filter(
+      (a) => a.id.startsWith(agentIdArg) || a.name.toLowerCase() === agentIdArg.toLowerCase()
+    );
+    if (agents.length === 0) {
+      console.error(`  ✗ No agent matching "${agentIdArg}".`);
+      process.exit(1);
+    }
+    if (agents.length > 1) {
+      console.error(`  ✗ Ambiguous agent "${agentIdArg}" matches ${agents.length} agents.`);
+      process.exit(1);
+    }
+    const agent = agents[0];
+
+    // Find session by ID prefix
+    const sessions = state.sessions.filter((s) => s.id.startsWith(sessionIdArg));
+    if (sessions.length === 0) {
+      console.error(`  ✗ No session matching "${sessionIdArg}".`);
+      process.exit(1);
+    }
+    if (sessions.length > 1) {
+      console.error(`  ✗ Ambiguous session "${sessionIdArg}" matches ${sessions.length} sessions.`);
+      process.exit(1);
+    }
+    const session = sessions[0];
+
+    // Check session isn't locked by a running agent
+    if (session.agentId && session.agentId !== agent.id) {
+      const ownerAgent = state.agents.find((a) => a.id === session.agentId);
+      if (ownerAgent) {
+        const pid = readAgentPid(ownerAgent.id);
+        if (pid && isProcessRunning(pid)) {
+          console.error(`  ✗ Session is currently active on running agent "${ownerAgent.name}".`);
+          process.exit(1);
+        }
+      }
+    }
+
+    // Assign
+    updateSession(state, session.id, (s) => {
+      s.agentId = agent.id;
+    });
+    updateAgent(state, agent.id, (a) => {
+      a.currentSessionId = session.id;
+    });
+
+    console.log(`\n  ✓ Assigned agent "${agent.name}" (${agent.id.slice(0, 8)}) to session "${session.name}" (${session.id.slice(0, 8)})\n`);
+  });
+
+agent
   .command("ls")
   .description("List all agents with status and ranking")
   .action(async () => {
@@ -784,10 +844,14 @@ agent
         ? state.sessions.find((s) => s.id === a.currentSessionId)?.name ?? a.currentSessionId.slice(0, 8)
         : "—";
 
+      const bias = a.config.researchBias ?? 0.5;
+      const biasLabel = bias >= 0.75 ? "aggressive" : bias >= 0.4 ? "balanced" : "conservative";
+
       console.log(
         `  ${icon} ${a.name.padEnd(15)} ` +
           `rank: ${rank.padEnd(4)} ` +
           `avg Δ: ${avgDelta.padEnd(8)} ` +
+          `bias: ${biasLabel.padEnd(13)} ` +
           `sessions: ${String(sessions).padStart(3)}  ` +
           `current: ${currentSession.slice(0, 20)}  ` +
           `$${a.totalCostUsd.toFixed(2).padStart(6)}  ` +

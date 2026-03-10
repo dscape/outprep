@@ -23,6 +23,8 @@ export interface PromptContext {
   agent?: ForgeAgent;
   /** The autonomous decision that led to this session */
   decision?: AgentDecision;
+  /** Research bias: 0.0 = conservative, 1.0 = aggressive. Default 0.5. */
+  researchBias?: number;
 }
 
 /**
@@ -60,12 +62,12 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 
   // Leaderboard (injected when agent is available)
   if (ctx.agent) {
-    const leaderboardSection = buildLeaderboardSection(ctx.agent);
+    const leaderboardSection = buildLeaderboardSection(ctx.agent, ctx.researchBias ?? 0.5);
     if (leaderboardSection) sections.push(leaderboardSection);
   }
 
   // Rules
-  sections.push(buildRules(ctx.maxExperiments));
+  sections.push(buildRules(ctx.maxExperiments, ctx.researchBias ?? 0.5));
 
   return sections.join("\n\n---\n\n");
 }
@@ -284,7 +286,7 @@ function buildPastSessionsSummary(state: ForgeState, currentSessionId: string): 
   return lines.join("\n");
 }
 
-function buildLeaderboardSection(agent: ForgeAgent): string {
+function buildLeaderboardSection(agent: ForgeAgent, researchBias: number = 0.5): string {
   // Lazy-import to avoid circular deps at module level
   let leaderboard: import("../state/types").LeaderboardEntry[] = [];
   try {
@@ -299,9 +301,25 @@ function buildLeaderboardSection(agent: ForgeAgent): string {
     ``,
     `Your name is **${agent.name}**. Your objective is to maximize your weighted average composite score and reach #1.`,
     ``,
-    `**IMPORTANT:** Breakthrough research (groundbreaking hypothesis) scores **5x** on the leaderboard.`,
-    `Check the leaderboard with \`forge.leaderboard.get()\` before deciding your next hypothesis.`,
   ];
+
+  if (researchBias >= 0.75) {
+    lines.push(
+      `**IMPORTANT:** Breakthrough research (groundbreaking hypothesis) scores **5x** on the leaderboard.`,
+      `This is the fastest path to #1. If you're behind, go bold.`,
+    );
+  } else if (researchBias >= 0.4) {
+    lines.push(
+      `**Scoring:** Groundbreaking sessions earn a 5x multiplier. Continuous sessions earn 1x.`,
+      `Both strategies can win — groundbreaking is high-variance, continuous is reliable. Choose based on your position.`,
+    );
+  } else {
+    lines.push(
+      `**Scoring:** Continuous sessions earn 1x per session. Groundbreaking earns 5x but carries high risk of producing zero gains.`,
+      `Consistent small wins accumulate. Focus on what you can validate empirically.`,
+    );
+  }
+  lines.push(`Check the leaderboard with \`forge.leaderboard.get()\` before deciding your next hypothesis.`);
 
   if (leaderboard.length > 0) {
     lines.push(``);
@@ -333,7 +351,17 @@ function buildLeaderboardSection(agent: ForgeAgent): string {
   return lines.join("\n");
 }
 
-function buildRules(maxExperiments: number): string {
+function buildRules(maxExperiments: number, researchBias: number = 0.5): string {
+  const commitHint = researchBias >= 0.75
+    ? `committedLevel: "<choose based on leaderboard strategy — groundbreaking earns 5x>",`
+    : researchBias >= 0.4
+      ? `committedLevel: "<choose the level that best fits your evidence and position>",`
+      : `committedLevel: "<continuous-a or continuous-b recommended unless you have strong evidence for groundbreaking>",`;
+
+  const h3Extra = researchBias < 0.4
+    ? `\n  Note: H3 exists to keep your thinking open, but committing to it should only happen when you have specific evidence that incremental approaches have hit a ceiling in THIS focus area. The 5x multiplier means nothing if the hypothesis is too ambitious to validate in one session.`
+    : "";
+
   return `## Rules
 
 1. **Use \`playerData\`** — data is pre-loaded and split. Use \`playerData["username"].testGames\` for eval. Train/test separation is automatic.
@@ -350,7 +378,7 @@ Before running ANY experiments, you MUST generate a hypothesis set with exactly 
 - **H3 (groundbreaking)**: A hypothesis that, if true, would make H1 and H2 irrelevant. Proposes a fundamentally different framing — not a better Boltzmann, but a reason Boltzmann is the wrong model. You should feel uncomfortable writing this one.
   - **Groundbreaking means a DIFFERENT MODEL or ARCHITECTURE**, not a more sophisticated parameterization of the same model.
   - NOT groundbreaking: phase-specific temperature scaling, per-player thresholds, multi-factor config tuning, deeper search parameters, adjusting existing knobs per context.
-  - IS groundbreaking: replacing Boltzmann with a neural policy head, switching from CPL to a learned loss function, using game-tree features instead of single-position evaluation, implementing a completely different move selection algorithm.
+  - IS groundbreaking: replacing Boltzmann with a neural policy head, switching from CPL to a learned loss function, using game-tree features instead of single-position evaluation, implementing a completely different move selection algorithm.${h3Extra}
 
 After writing all three, commit to ONE based on your strategic analysis of the leaderboard:
 \`\`\`
@@ -360,7 +388,7 @@ forge.hypothesis.commit({
     { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
     { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },
   ],
-  committedLevel: "<choose based on leaderboard strategy — groundbreaking earns 5x>",
+  ${commitHint}
   commitmentRationale: "Choosing this because..., choosing this over the others because...",
   costOfBeingWrong: "If this hypothesis is wrong, it means... and we will have spent...",
 });
@@ -413,7 +441,11 @@ forge.log.reflect({
 Sessions with ZERO code changes receive a **0.5x leaderboard penalty**. Config-only tuning has bounded upside and is penalized on the leaderboard. Use \`forge.code.prompt()\` to modify the engine — architectural changes yield larger improvements than parameter tuning.
 - At least ONE experiment per session MUST include a code change via \`forge.code.prompt()\`.
 - Config-only experiments are acceptable as follow-ups to validate code changes, not as the primary approach.
-- The scoring: groundbreaking + code changes = **5x**, continuous + code changes = **1x**, groundbreaking + config-only = **2.5x**, continuous + config-only = **0.5x**.
+${researchBias >= 0.75
+    ? `- The scoring: groundbreaking + code changes = **5x**, continuous + code changes = **1x**, groundbreaking + config-only = **2.5x**, continuous + config-only = **0.5x**. Go big.`
+    : researchBias >= 0.4
+      ? `- The scoring: groundbreaking + code changes = **5x**, continuous + code changes = **1x**, config-only = **0.5x** penalty. Choose the level that matches your confidence.`
+      : `- The scoring: continuous + code changes = **1x** (reliable). Config-only = **0.5x** penalty. Groundbreaking = **5x** but only if validated. Prioritize experiments you can complete and measure.`}
 
 ### Mandatory: Notes After Every Experiment
 After EACH experiment (success or failure), you MUST call:

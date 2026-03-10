@@ -174,10 +174,56 @@ export function createForgeApi(
   const sessionOps = createSessionOps(sandbox, session, state, codeOps, configOps);
   const oracleLimiter = createOracleLimiter();
   const surpriseTracker = createSurpriseTracker(session, state);
-  const hypothesisOps = createHypothesisOps(session, state);
+  const rawHypothesisOps = createHypothesisOps(session, state);
 
   // Mutable ref for post-experiment callback (set by agent-manager via _onExperimentRecorded)
   const callbacks: { onExperimentRecorded?: () => void } = {};
+
+  // ── Experiment prerequisites gate ──────────────────────────
+  // Prevents agents from looping on hypothesis regeneration + oracle
+  // without doing real work. First hypothesis & one oracle query per
+  // hypothesis set are ungated; subsequent calls require proof of work.
+  let oracleQueriesSinceLastHypothesis = 0;
+
+  function checkExperimentPrerequisites(): { met: boolean; message: string } {
+    if (session.experiments.length === 0) {
+      return { met: false, message: "No experiments recorded yet." };
+    }
+    const lastExp = session.experiments[session.experiments.length - 1];
+    const issues: string[] = [];
+    if (!lastExp.codeChanges || lastExp.codeChanges.length === 0)
+      issues.push("- No code changes. Use forge.code.prompt(instruction) to modify engine code.");
+    if (!lastExp.configChanges || lastExp.configChanges.length === 0)
+      issues.push("- No config changes. Use forge.config.set(path, value) to modify configuration.");
+    if (!lastExp.conclusion || lastExp.conclusion === "inconclusive")
+      issues.push("- No clear conclusion. Use forge.log.record({ ..., conclusion: 'confirmed'|'refuted'|'partial' }).");
+    if (issues.length > 0) {
+      return {
+        met: false,
+        message: `Your last experiment (${lastExp.hypothesis.slice(0, 60)}) is missing:\n${issues.join("\n")}\n\nComplete your current experiment before generating new hypotheses or consulting the oracle.`,
+      };
+    }
+    return { met: true, message: "" };
+  }
+
+  // Wrap hypothesis ops to gate 2nd+ commits behind experiment prerequisites
+  const hypothesisOps: HypothesisOps = {
+    ...rawHypothesisOps,
+    commit(input) {
+      // First hypothesis set is ungated — needed to bootstrap research
+      if ((session.hypothesisSets ?? []).length >= 1) {
+        const prereq = checkExperimentPrerequisites();
+        if (!prereq.met) {
+          throw new Error(
+            `Cannot create a new hypothesis set yet.\n${prereq.message}\n\n` +
+            `Required workflow: code changes → config changes → eval → forge.log.record() with conclusion → THEN forge.hypothesis.commit()`
+          );
+        }
+      }
+      oracleQueriesSinceLastHypothesis = 0;
+      return rawHypothesisOps.commit(input);
+    },
+  };
 
   // Infer trainGames from playerData when not explicitly provided
   function inferTrainGames(testGames: LichessGame[]): LichessGame[] | undefined {
@@ -346,6 +392,19 @@ export function createForgeApi(
   // ── Oracle namespace ──
   const oracle: OracleOps = {
     async ask(question: string, context?: string, queryType?: "adversarial" | "confirmatory" | "exploratory") {
+      // Experiment prerequisites gate: one free oracle query per hypothesis set,
+      // then requires experiment work before further queries
+      if ((session.hypothesisSets ?? []).length >= 1 && oracleQueriesSinceLastHypothesis >= 1) {
+        const prereq = checkExperimentPrerequisites();
+        if (!prereq.met) {
+          throw new Error(
+            `Cannot consult the oracle yet.\n${prereq.message}\n\n` +
+            `Run at least one experiment with code changes, config changes, and a conclusion before querying the oracle again.`
+          );
+        }
+      }
+      oracleQueriesSinceLastHypothesis++;
+
       const effectiveQueryType = queryType ?? "exploratory";
 
       // Check oracle limiter

@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import { getSession, getSessionLogs, buildActivityLog, getAgentBasicInfo } from "@/lib/forge";
+import { getSession, getSessionLogs, buildActivityLog, getAgentBasicInfo, getAgentSummaries } from "@/lib/forge";
 import { SessionLayout } from "./session-layout";
 
 export const revalidate = 0;
@@ -16,6 +16,11 @@ export default async function SessionDetailPage({
   const logs = getSessionLogs(session.name);
   const activity = buildActivityLog(session);
   const agent = session.agentId ? getAgentBasicInfo(session.agentId) : null;
+  const allAgents = getAgentSummaries().map((a) => ({
+    id: a.id,
+    name: a.name,
+    isRunning: a.isRunning,
+  }));
 
   const created = new Date(session.createdAt).toLocaleDateString("en-US", {
     month: "short",
@@ -33,6 +38,7 @@ export default async function SessionDetailPage({
       isDev={process.env.NODE_ENV === "development"}
       created={created}
       agent={agent}
+      allAgents={allAgents}
     />
   );
 }

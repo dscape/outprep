@@ -32,12 +32,55 @@ import { runAgentLoop, buildInitialMessage } from "./agent-loop";
 import { makeDecision, type DecisionResult } from "./agent-decision";
 import type { ForgeAgent, ForgeSession, AgentDecision } from "../state/types";
 
+/**
+ * Build a semantic session name from players, focus, and ELO range.
+ * e.g. "accuracy-elo1500-1800-alice+bob", "opening+endgame-elo2200-DrNykterstein"
+ */
+function buildSessionName(
+  players: string[],
+  focus: string,
+  state: { sessions: { name: string }[] },
+  playerElos?: Map<string, number>,
+): string {
+  const focusPart = focus.replace(/,/g, "+");
+  let base: string;
+
+  if (players.length === 0) {
+    base = `research-${focusPart}`;
+  } else {
+    const elos = players
+      .map((p) => playerElos?.get(p))
+      .filter((e): e is number => e != null)
+      .sort((a, b) => a - b);
+    const eloPart =
+      elos.length > 0
+        ? elos.length === 1
+          ? `${elos[0]}`
+          : `${elos[0]}-${elos[elos.length - 1]}`
+        : "unk";
+    const playerPart =
+      players.length <= 2
+        ? players.join("+")
+        : `${players[0]}+${players.length - 1}more`;
+    base = `${focusPart}-elo${eloPart}-${playerPart}`;
+  }
+
+  // Deduplicate: append -v2, -v3, etc. if name already exists
+  const existingNames = new Set(state.sessions.map((s) => s.name));
+  if (!existingNames.has(base)) return base;
+  for (let v = 2; ; v++) {
+    const candidate = `${base}-v${v}`;
+    if (!existingNames.has(candidate)) return candidate;
+  }
+}
+
 export interface AgentOptions {
   players?: string[];    // Optional — autonomous if absent
   focus?: string;        // Optional — autonomous if absent
   maxExperiments: number;
   seed: number;
   quick: boolean;
+  researchBias?: number; // 0.0 = conservative, 1.0 = aggressive, default 0.5
 }
 
 /** Whether the agent is running in autonomous mode (no fixed players/focus) */
@@ -78,6 +121,7 @@ export async function startAgent(opts: AgentOptions): Promise<void> {
       maxExperiments: opts.maxExperiments,
       seed: opts.seed,
       quick: opts.quick,
+      researchBias: opts.researchBias,
     },
     totalInputTokens: 0,
     totalOutputTokens: 0,
@@ -162,7 +206,7 @@ async function runAgentOuterLoop(
 
       if (autonomous) {
         console.log(`\n  Making autonomous decision...`);
-        const result: DecisionResult = await makeDecision(agentId, agentName);
+        const result: DecisionResult = await makeDecision(agentId, agentName, opts.researchBias ?? 0.5);
         decision = result.decision;
         decisionCost = {
           inputTokens: result.inputTokens,
@@ -223,6 +267,31 @@ async function runAgentOuterLoop(
           decision,
           opts,
         );
+      } else if (decision.action === "join_session" && decision.joinSessionId) {
+        // Reassign the session to this agent, then resume it
+        const joinState = loadState();
+        const joinSession = joinState.sessions.find((s) => s.id === decision.joinSessionId);
+        if (joinSession) {
+          console.log(`  Joining session "${joinSession.name}" (previously owned by agent ${joinSession.agentId?.slice(0, 8) ?? "none"})...`);
+          updateSession(joinState, joinSession.id, (s) => {
+            s.agentId = agentId;
+          });
+          // Use resumeAgentSession with the join session ID mapped to resumeSessionId
+          const resumeDecision: AgentDecision = {
+            ...decision,
+            action: "resume_session",
+            resumeSessionId: decision.joinSessionId,
+          };
+          result = await resumeAgentSession(
+            agentId,
+            agentName,
+            resumeDecision,
+            opts,
+          );
+        } else {
+          console.log(`  ⚠ Join target session ${decision.joinSessionId} not found. Starting new session...`);
+          result = { session: null };
+        }
       } else {
         // Download player data for this session's players
         const validPlayers = await downloadPlayers(decision.players);
@@ -343,7 +412,15 @@ async function runAgentSession(
   const state = loadState();
   const costTracker = new CostTracker();
   const sessionId = randomUUID();
-  const sessionName = `${agentName}-${Date.now()}`;
+
+  // Build player ELO map for semantic naming
+  const { loadPlayer } = await import("../data/game-store");
+  const playerElos = new Map<string, number>();
+  for (const p of players) {
+    const meta = loadPlayer(p);
+    if (meta) playerElos.set(p, meta.estimatedElo);
+  }
+  const sessionName = buildSessionName(players, focus, state, playerElos);
   const logWriter = createLogWriter(sessionName);
 
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
@@ -402,7 +479,7 @@ async function runAgentSession(
   });
 
   // Build player data
-  const { getGames, loadPlayer } = await import("../data/game-store");
+  const { getGames } = await import("../data/game-store");
   const { createSplit } = await import("../data/splits");
 
   const playerData: Record<string, {
@@ -446,19 +523,20 @@ async function runAgentSession(
     maxExperiments: opts.maxExperiments,
     agent,
     decision,
+    researchBias: opts.researchBias ?? 0.5,
   };
 
-  const initialMessage = buildInitialMessage(
-    {
-      name: sessionName,
-      players,
-      focus,
-      maxExperiments: opts.maxExperiments,
-      seed: opts.seed,
-      quick: opts.quick,
-    },
-    playerData,
-  );
+  const researchOpts = {
+    name: sessionName,
+    players,
+    focus,
+    maxExperiments: opts.maxExperiments,
+    seed: opts.seed,
+    quick: opts.quick,
+    researchBias: opts.researchBias,
+  };
+
+  const initialMessage = buildInitialMessage(researchOpts, playerData);
 
   try {
     await runAgentLoop(
@@ -469,14 +547,7 @@ async function runAgentSession(
       promptCtx,
       initialMessage,
       costTracker,
-      {
-        name: sessionName,
-        players,
-        focus,
-        maxExperiments: opts.maxExperiments,
-        seed: opts.seed,
-        quick: opts.quick,
-      },
+      researchOpts,
       logWriter,
       forgeApi,
       sandbox,
@@ -567,6 +638,7 @@ async function resumeAgentSession(
     maxExperiments: opts.maxExperiments,
     agent,
     decision,
+    researchBias: opts.researchBias ?? 0.5,
   };
 
   // Resume message
@@ -602,6 +674,7 @@ async function resumeAgentSession(
         maxExperiments: opts.maxExperiments,
         seed: opts.seed,
         quick: opts.quick,
+        researchBias: opts.researchBias,
       },
       logWriter,
       forgeApi,

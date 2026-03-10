@@ -398,17 +398,21 @@ export interface AgentConfig {
   maxExperiments: number;
   seed: number;
   quick: boolean;
+  /** Research bias: 0.0 = conservative (favor continuous), 1.0 = aggressive (favor groundbreaking). Default 0.5. */
+  researchBias?: number;
 }
 
 /* ── Agent Decision (autonomous mode) ──────────────────────── */
 
-export type AgentDecisionAction = "start_new" | "resume_session" | "wait";
+export type AgentDecisionAction = "start_new" | "resume_session" | "join_session" | "wait";
 
 export interface AgentDecision {
   action: AgentDecisionAction;
   players: string[];
   focus: string;
   resumeSessionId?: string;
+  /** Session ID to join (any existing session, not just the agent's own) */
+  joinSessionId?: string;
   reasoning: string;
 }
 

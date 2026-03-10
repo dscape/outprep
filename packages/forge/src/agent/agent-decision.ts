@@ -29,6 +29,17 @@ const VALID_FOCUS_AREAS = [
   "endgame",
 ];
 
+interface SessionSummaryForDecision {
+  sessionId: string;
+  sessionName: string;
+  focus: string;
+  players: string[];
+  experimentCount: number;
+  bestComposite: number | null;
+  status: string;
+  agentId: string | null;
+}
+
 interface DecisionContext {
   agentId: string;
   agentName: string;
@@ -36,7 +47,9 @@ interface DecisionContext {
   sessions: ForgeSession[];
   leaderboard: LeaderboardEntry[];
   notes: { tags: string[]; content: string }[];
-  resumableSessions: { sessionId: string; sessionName: string; focus: string; players: string[]; experimentCount: number; bestComposite: number | null }[];
+  resumableSessions: SessionSummaryForDecision[];
+  /** Any paused/completed session the agent could join (not just its own) */
+  availableSessions: SessionSummaryForDecision[];
   exploredFocusAreas: Map<string, number>; // focus → count of sessions
 }
 
@@ -47,7 +60,7 @@ function gatherContext(agentId: string, agentName: string): DecisionContext {
   const notes = loadNotes({ limit: 10 });
   const sandboxes = listSandboxes();
 
-  // Find paused sessions that have intact sandboxes (resumable)
+  // Find paused sessions that have intact sandboxes (resumable by this agent)
   const sandboxSessionIds = new Set(sandboxes.map((s) => s.sessionId));
   const resumableSessions = state.sessions
     .filter(
@@ -63,6 +76,29 @@ function gatherContext(agentId: string, agentName: string): DecisionContext {
       players: s.players,
       experimentCount: s.experiments.length,
       bestComposite: s.bestResult?.compositeScore ?? null,
+      status: s.status,
+      agentId: s.agentId,
+    }));
+
+  // Available sessions to join: any paused session with a sandbox (regardless of owner)
+  // Exclude sessions already in resumableSessions (agent's own)
+  const resumableIds = new Set(resumableSessions.map((s) => s.sessionId));
+  const availableSessions = state.sessions
+    .filter(
+      (s) =>
+        s.status === "paused" &&
+        sandboxSessionIds.has(s.id) &&
+        !resumableIds.has(s.id)
+    )
+    .map((s) => ({
+      sessionId: s.id,
+      sessionName: s.name,
+      focus: s.focus,
+      players: s.players,
+      experimentCount: s.experiments.length,
+      bestComposite: s.bestResult?.compositeScore ?? null,
+      status: s.status,
+      agentId: s.agentId,
     }));
 
   // Count explored focus areas across all sessions
@@ -80,11 +116,12 @@ function gatherContext(agentId: string, agentName: string): DecisionContext {
     leaderboard,
     notes: notes.map((n) => ({ tags: n.tags, content: n.content })),
     resumableSessions,
+    availableSessions,
     exploredFocusAreas,
   };
 }
 
-function buildDecisionPrompt(ctx: DecisionContext): string {
+function buildDecisionPrompt(ctx: DecisionContext, researchBias: number = 0.5): string {
   const sections: string[] = [];
 
   sections.push(
@@ -119,7 +156,7 @@ function buildDecisionPrompt(ctx: DecisionContext): string {
     sections.push("## Your Past Sessions\nThis is your first session.\n");
   }
 
-  // Resumable sessions
+  // Resumable sessions (agent's own)
   if (ctx.resumableSessions.length > 0) {
     const resumeLines = ctx.resumableSessions.map((s) => {
       const best = s.bestComposite !== null
@@ -128,7 +165,20 @@ function buildDecisionPrompt(ctx: DecisionContext): string {
       return `- ${s.sessionName} (id: ${s.sessionId}) — focus: ${s.focus}, players: ${s.players.join(", ")}, ${s.experimentCount} experiments, ${best}`;
     });
     sections.push(
-      `## Resumable Sessions (paused with intact sandboxes)\n${resumeLines.join("\n")}\n`
+      `## Your Resumable Sessions (paused with intact sandboxes)\n${resumeLines.join("\n")}\n`
+    );
+  }
+
+  // Available sessions to join (from other agents or unassigned)
+  if (ctx.availableSessions.length > 0) {
+    const joinLines = ctx.availableSessions.map((s) => {
+      const best = s.bestComposite !== null
+        ? `best composite ${s.bestComposite.toFixed(3)}`
+        : "no results yet";
+      return `- ${s.sessionName} (id: ${s.sessionId}) — focus: ${s.focus}, players: ${s.players.join(", ")}, ${s.experimentCount} experiments, ${best}`;
+    });
+    sections.push(
+      `## Available Sessions to Join\nThese are paused sessions from other agents or unassigned. You can take over and continue their work.\n${joinLines.join("\n")}\n`
     );
   }
 
@@ -164,25 +214,51 @@ function buildDecisionPrompt(ctx: DecisionContext): string {
     `## Focus Areas\nExplored: ${explored || "none"}\nUnexplored: ${unexplored.length > 0 ? unexplored.join(", ") : "all explored"}\nValid areas: ${VALID_FOCUS_AREAS.join(", ")}\n`
   );
 
-  // Decision rules
-  sections.push(`## Decision Rules
-1. If a paused session has promising unfinished work, prefer RESUMING it.
-2. Diversify: pick focus areas and players that haven't been explored much.
-3. If behind on the leaderboard, strongly consider committing to a "groundbreaking" exploratory hypothesis — groundbreaking sessions earn **5x** the leaderboard score of incremental sessions. This is the fastest way to climb to #1.
-4. You can combine multiple focus areas with commas (e.g., "accuracy,opening").
-5. If no players are available, output action "wait".
-6. Pick 1-3 players per session — don't use all players every time.
-7. Your objective is to reach **#1 on the leaderboard**. The 5x multiplier for groundbreaking (exploratory) research means a single successful groundbreaking session can outweigh five incremental sessions. Factor this into your strategy.
-8. **IMPORTANT: Config-only sessions (zero code changes) receive a 0.5x PENALTY.** Most agents default to continuous-a with config tuning — this is the weakest strategy (0.5x). A single successful groundbreaking session with code changes (5x) outweighs TEN config-only continuous sessions. Plan to make CODE changes via forge.code.prompt().
+  // Decision rules — conditioned on research bias
+  const biasRules: string[] = [
+    `1. **PREFER REUSING SESSIONS.** Before creating a new session, check if an existing session already covers the focus area and players you want. Use "resume_session" for your own sessions or "join_session" for sessions from other agents. Only create a new session ("start_new") when no existing session matches your intended work.`,
+    `2. If a paused session has promising unfinished work, prefer RESUMING or JOINING it.`,
+    `3. Diversify: pick focus areas and players that haven't been explored much.`,
+  ];
 
-Respond with ONLY valid JSON (no markdown, no explanation):
-{
-  "action": "start_new" | "resume_session" | "wait",
-  "players": ["username1", "username2"],
-  "focus": "accuracy",
-  "resumeSessionId": "session-id-here",
-  "reasoning": "Brief explanation of why this choice"
-}`);
+  if (researchBias >= 0.75) {
+    biasRules.push(
+      `4. If behind on the leaderboard, strongly consider committing to a "groundbreaking" exploratory hypothesis — groundbreaking sessions earn **5x** the leaderboard score of incremental sessions. This is the fastest way to climb to #1.`,
+    );
+  } else if (researchBias >= 0.4) {
+    biasRules.push(
+      `4. Weigh your options: groundbreaking sessions earn 5x but carry risk. Continuous sessions earn 1x but compound reliably. Choose based on your leaderboard position and what the knowledge base tells you about unexplored territory.`,
+    );
+  } else {
+    biasRules.push(
+      `4. Prefer incremental improvements that build on proven approaches. Continuous sessions earn 1x each and compound reliably. Only consider groundbreaking (5x) if you have specific evidence that incremental approaches have plateaued for this focus area.`,
+    );
+  }
+
+  biasRules.push(
+    `5. You can combine multiple focus areas with commas (e.g., "accuracy,opening").`,
+    `6. If no players are available, output action "wait".`,
+    `7. Pick 1-3 players per session — don't use all players every time.`,
+  );
+
+  if (researchBias >= 0.75) {
+    biasRules.push(
+      `8. Your objective is to reach **#1 on the leaderboard**. The 5x multiplier for groundbreaking (exploratory) research means a single successful groundbreaking session can outweigh five incremental sessions. Factor this into your strategy.`,
+      `9. **IMPORTANT: Config-only sessions (zero code changes) receive a 0.5x PENALTY.** A single successful groundbreaking session with code changes (5x) outweighs TEN config-only continuous sessions. Plan to make CODE changes via forge.code.prompt().`,
+    );
+  } else if (researchBias >= 0.4) {
+    biasRules.push(
+      `8. Your objective is to reach **#1 on the leaderboard**. Both groundbreaking (5x) and continuous (1x) strategies can succeed. Five solid continuous sessions equal one successful groundbreaking session. Choose based on what you know.`,
+      `9. **IMPORTANT: Config-only sessions receive a 0.5x PENALTY.** Always plan to make at least one code change via forge.code.prompt().`,
+    );
+  } else {
+    biasRules.push(
+      `8. Your objective is to reach **#1 on the leaderboard** through consistent, validated improvements. Five successful continuous sessions (1x each) equal one successful groundbreaking session (5x). Reliability is your edge.`,
+      `9. **IMPORTANT: Config-only sessions receive a 0.5x PENALTY.** Always plan to make at least one code change via forge.code.prompt(). Focus on code changes that are scoped enough to validate in a single session.`,
+    );
+  }
+
+  sections.push(`## Decision Rules\n${biasRules.join("\n")}\n\nRespond with ONLY valid JSON (no markdown, no explanation):\n{\n  "action": "start_new" | "resume_session" | "join_session" | "wait",\n  "players": ["username1", "username2"],\n  "focus": "accuracy",\n  "resumeSessionId": "session-id-here (for resume_session)",\n  "joinSessionId": "session-id-here (for join_session)",\n  "reasoning": "Brief explanation of why this choice"\n}`);
 
   return sections.join("\n");
 }
@@ -240,6 +316,26 @@ function validateDecision(
     );
   }
 
+  if (action === "join_session") {
+    const joinId = String(raw.joinSessionId ?? "");
+    const joinable = ctx.availableSessions.find(
+      (s) => s.sessionId === joinId
+    );
+    if (joinable) {
+      return {
+        action: "join_session",
+        players: joinable.players,
+        focus: joinable.focus,
+        joinSessionId: joinId,
+        reasoning,
+      };
+    }
+    // Fallback to start_new if session not joinable
+    console.log(
+      `  ⚠ Session ${joinId} not joinable, falling back to start_new`
+    );
+  }
+
   return {
     action: "start_new",
     players,
@@ -261,7 +357,8 @@ export interface DecisionResult {
  */
 export async function makeDecision(
   agentId: string,
-  agentName: string
+  agentName: string,
+  researchBias: number = 0.5
 ): Promise<DecisionResult> {
   const ctx = gatherContext(agentId, agentName);
 
@@ -280,7 +377,7 @@ export async function makeDecision(
     };
   }
 
-  const prompt = buildDecisionPrompt(ctx);
+  const prompt = buildDecisionPrompt(ctx, researchBias);
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
