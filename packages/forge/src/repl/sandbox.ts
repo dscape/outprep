@@ -2,10 +2,10 @@
  * Git worktree sandbox — isolates agent modifications.
  *
  * Creates a git worktree so the agent can modify any file
- * without affecting the main working tree. The real safety
- * boundary is the Anthropic Sandbox Runtime (added separately).
- * The harness runs inside the worktree, naturally resolving
- * @outprep/engine to the modified copy.
+ * without affecting the main working tree. OS-level filesystem
+ * and network restrictions are enforced by the Anthropic Sandbox
+ * Runtime (see sandbox-runtime.ts). The harness runs inside the
+ * worktree, naturally resolving @outprep/engine to the modified copy.
  */
 
 import { execSync } from "node:child_process";

@@ -13,8 +13,9 @@ import { spawn } from "node:child_process";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { SandboxInfo } from "./sandbox";
-import type { TestResult, Metrics } from "@outprep/harness";
+import type { TestResult } from "@outprep/harness";
 import type { LichessGame } from "@outprep/harness";
+import { wrapCommand } from "./sandbox-runtime";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(__dirname, "..", "..", "..", "..");
@@ -120,9 +121,13 @@ async function runWorker(
 ): Promise<TestResult> {
   const workerScript = join(__dirname, "_eval-worker.ts");
 
+  const rawCmd = `${tsxBin} ${workerScript}`;
+  const sandboxedCmd = await wrapCommand(rawCmd);
+
   return new Promise<TestResult>((resolve, reject) => {
-    const child = spawn(tsxBin, [workerScript], {
+    const child = spawn(sandboxedCmd, {
       cwd: sandbox.worktreePath,
+      shell: true,
       stdio: ["pipe", "pipe", "pipe"],
       env: {
         ...process.env,

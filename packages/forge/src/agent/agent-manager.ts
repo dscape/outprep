@@ -31,6 +31,8 @@ import { createLogWriter } from "./log-writer";
 import { runAgentLoop, buildInitialMessage } from "./agent-loop";
 import { makeDecision, type DecisionResult } from "./agent-decision";
 import { buildPlayerData, getPlayerEloMap } from "./shared";
+import { defaultPermissions } from "../tools/permissions";
+import { initSandboxRuntime, resetSandboxRuntime } from "../repl/sandbox-runtime";
 import type { ForgeAgent, ForgeSession, AgentDecision } from "../state/types";
 
 /**
@@ -552,6 +554,10 @@ async function runAgentSession(
   const sandbox = createSandbox(sessionId);
   log(`  Sandbox: ${sandbox.worktreePath}`);
 
+  // Initialize OS-level sandbox runtime for subprocess isolation
+  const permissions = defaultPermissions(sandbox.worktreePath);
+  await initSandboxRuntime(permissions);
+
   // Create session record
   const session: ForgeSession = {
     id: sessionId,
@@ -646,6 +652,7 @@ async function runAgentSession(
     });
   } finally {
     repl.dispose();
+    await resetSandboxRuntime();
     if (session.status === "completed" || session.status === "abandoned") {
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
 
@@ -704,6 +711,10 @@ async function resumeAgentSession(
     else console.log(msg);
     logWriter.log(msg, level);
   };
+
+  // Initialize OS-level sandbox runtime for subprocess isolation
+  const permissions = defaultPermissions(sandbox.worktreePath);
+  await initSandboxRuntime(permissions);
 
   log(`  Resuming session: ${session.name}`);
   log(`  Experiments so far: ${session.experiments.length}`);
@@ -776,6 +787,7 @@ async function resumeAgentSession(
     });
   } finally {
     repl.dispose();
+    await resetSandboxRuntime();
     if (session.status === "completed" || session.status === "abandoned") {
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
 

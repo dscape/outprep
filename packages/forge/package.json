@@ -11,6 +11,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.40",
     "@anthropic-ai/sdk": "^0.39.0",
     "@outprep/engine": "*",
     "@outprep/harness": "*",

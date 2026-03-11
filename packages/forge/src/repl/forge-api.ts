@@ -764,8 +764,8 @@ export function createForgeApi(
   // Wrap code.prompt to log to tool_jobs
   const wrappedCodeOps: CodeOps = {
     ...codeOps,
-    prompt(instruction: string): string {
-      return logToolJobSync("code_prompt", { instruction: instruction.slice(0, 200) }, () =>
+    prompt(instruction: string): Promise<string> {
+      return logToolJob("code_prompt", { instruction: instruction.slice(0, 200) }, () =>
         codeOps.prompt(instruction),
       );
     },

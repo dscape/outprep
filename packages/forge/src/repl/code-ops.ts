@@ -3,8 +3,9 @@
  *
  * All operations target the sandbox worktree, so modifications
  * are isolated from the main working tree. Agents may modify any
- * file within the worktree — the real safety boundary is the
- * Anthropic Sandbox Runtime.
+ * file within the worktree. OS-level filesystem and network
+ * restrictions are enforced by the Anthropic Sandbox Runtime
+ * (see sandbox-runtime.ts).
  *
  * Code modifications are delegated to Claude Code CLI (`claude -p`)
  * via the `prompt()` method instead of direct file writes.
@@ -15,6 +16,7 @@ import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { SandboxInfo } from "./sandbox";
+import { wrapCommand } from "./sandbox-runtime";
 import {
   getSandboxDiff,
   revertSandbox,
@@ -63,7 +65,7 @@ function resolveWorktreePath(sandbox: SandboxInfo, file: string): string {
 
 export interface CodeOps {
   read(file: string): string;
-  prompt(instruction: string): string;
+  prompt(instruction: string): Promise<string>;
   diff(): string;
   revert(file?: string): void;
   typecheck(): string;
@@ -78,7 +80,7 @@ export function createCodeOps(sandbox: SandboxInfo): CodeOps {
       return readFileSync(fullPath, "utf-8");
     },
 
-    prompt(instruction: string): string {
+    async prompt(instruction: string): Promise<string> {
       const fullInstruction = [
         `You are modifying a chess engine.`,
         `You may modify any file within the working directory: ${sandbox.worktreePath}`,
@@ -88,9 +90,9 @@ export function createCodeOps(sandbox: SandboxInfo): CodeOps {
 
       let output: string;
       try {
-        output = execSync(
-          `claude -p ${JSON.stringify(fullInstruction)}`,
-          {
+        const rawCmd = `claude -p ${JSON.stringify(fullInstruction)}`;
+        const sandboxedCmd = await wrapCommand(rawCmd);
+        output = execSync(sandboxedCmd, {
             cwd: sandbox.worktreePath,
             encoding: "utf-8",
             timeout: 120_000,
