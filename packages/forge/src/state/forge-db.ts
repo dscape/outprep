@@ -315,6 +315,10 @@ export function getForgeDb(): Database.Database {
     CREATE INDEX IF NOT EXISTS idx_perm_requests_status ON permission_requests(status);
   `);
 
+  // ── Migrations (idempotent — ignore "column already exists" errors) ──
+  try { _db.exec(`ALTER TABLE tool_jobs ADD COLUMN archived_at TEXT`); } catch {}
+  try { _db.exec(`ALTER TABLE tool_jobs ADD COLUMN retry_count INTEGER DEFAULT 0`); } catch {}
+
   return _db;
 }
 

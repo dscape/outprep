@@ -206,10 +206,74 @@ export function createForgeApi(
   const rawHypothesisOps = createHypothesisOps(session, state);
 
   // ── Web tools ──
-  const webTools = createWebTools();
+  const rawWebTools = createWebTools();
 
   // Mutable ref for post-experiment callback (set by agent-manager via _onExperimentRecorded)
   const callbacks: { onExperimentRecorded?: () => void } = {};
+
+  // ── Tool job logging helper ──
+  // Logs non-blocking tool calls into tool_jobs for dashboard visibility
+  function logToolJob<T>(toolName: string, input: any, run: () => Promise<T>): Promise<T> {
+    const db = getForgeDb();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+       VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0)`
+    ).run(id, session.id, session.agentId ?? null, toolName, JSON.stringify(input), now);
+    return run().then((result) => {
+      const output = typeof result === "object" ? JSON.stringify(result) : String(result);
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'completed', output = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run(output.length > 10000 ? output.slice(0, 10000) : output, now, new Date().toISOString(), id);
+      return result;
+    }).catch((err) => {
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'failed', error = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run((err as Error).message, now, new Date().toISOString(), id);
+      throw err;
+    });
+  }
+
+  function logToolJobSync<T>(toolName: string, input: any, run: () => T): T {
+    const db = getForgeDb();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+       VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0)`
+    ).run(id, session.id, session.agentId ?? null, toolName, JSON.stringify(input), now);
+    try {
+      const result = run();
+      const output = typeof result === "string" ? result : JSON.stringify(result);
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'completed', output = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run(output.length > 10000 ? output.slice(0, 10000) : output, now, new Date().toISOString(), id);
+      return result;
+    } catch (err) {
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'failed', error = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run((err as Error).message, now, new Date().toISOString(), id);
+      throw err;
+    }
+  }
+
+  // Wrapped web tools that log to tool_jobs
+  const webTools: WebTools = {
+    search(query: string) {
+      return logToolJob("web_search", { query }, () =>
+        rawWebTools.search(query).then((results) => {
+          // Store summary as output, return full results to caller
+          return results;
+        })
+      );
+    },
+    fetch(url: string, prompt?: string) {
+      return logToolJob("web_fetch", { url }, () =>
+        rawWebTools.fetch(url, prompt)
+      );
+    },
+  };
 
   // ── Experiment prerequisites gate ──────────────────────────
   // Prevents agents from looping on hypothesis regeneration + oracle
@@ -454,27 +518,34 @@ export function createForgeApi(
         console.warn(`  ⚠ ${detection.message}`);
       }
 
-      const { record, interactions } = await consultOracle({
-        question,
-        domain: "chess-engine-optimization",
-        context: context ?? "",
-        queryType: effectiveQueryType,
-      });
+      const record = await logToolJob(
+        "oracle",
+        { question: question.slice(0, 200), queryType: effectiveQueryType },
+        async () => {
+          const { record, interactions } = await consultOracle({
+            question,
+            domain: "chess-engine-optimization",
+            context: context ?? "",
+            queryType: effectiveQueryType,
+          });
 
-      // Track query in limiter
-      oracleLimiter.recordQuery(effectiveQueryType);
+          // Track query in limiter
+          oracleLimiter.recordQuery(effectiveQueryType);
 
-      // Record in session
-      updateSession(state, session.id, (s) => {
-        s.oracleConsultations.push(record);
-        if (!s.interactions) s.interactions = [];
-        s.interactions.push(...interactions);
-        for (const ix of interactions) {
-          s.totalInputTokens += ix.inputTokens;
-          s.totalOutputTokens += ix.outputTokens;
-          s.totalCostUsd += ix.costUsd;
-        }
-      });
+          // Record in session
+          updateSession(state, session.id, (s) => {
+            s.oracleConsultations.push(record);
+            if (!s.interactions) s.interactions = [];
+            s.interactions.push(...interactions);
+            for (const ix of interactions) {
+              s.totalInputTokens += ix.inputTokens;
+              s.totalOutputTokens += ix.outputTokens;
+              s.totalCostUsd += ix.costUsd;
+            }
+          });
+          return record;
+        },
+      );
       return record;
     },
     history() {
@@ -690,8 +761,18 @@ export function createForgeApi(
     },
   };
 
+  // Wrap code.prompt to log to tool_jobs
+  const wrappedCodeOps: CodeOps = {
+    ...codeOps,
+    prompt(instruction: string): string {
+      return logToolJobSync("code_prompt", { instruction: instruction.slice(0, 200) }, () =>
+        codeOps.prompt(instruction),
+      );
+    },
+  };
+
   const api: ForgeApi = {
-    code: codeOps,
+    code: wrappedCodeOps,
     config: configOps,
     eval: evalOps,
     session: sessionOps,

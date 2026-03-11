@@ -1,11 +1,12 @@
 /**
  * Forge process registry — tracks running forge CLI child processes.
  *
- * Only manages agent processes. Sessions are created/managed by agents,
- * not by users directly.
+ * Manages agent processes and the eval service. Sessions are created/managed
+ * by agents, not by users directly.
  */
 
 import { spawn, type ChildProcess } from "child_process";
+import fs from "fs";
 import path from "path";
 
 const PROJECT_ROOT = process.cwd();
@@ -193,4 +194,72 @@ export function startAllAgents(): { started: number; error?: string } {
   }
 
   return { started };
+}
+
+/* ── Eval service process management ──────────────────────── */
+
+const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
+const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
+const EVAL_PID_FILE = path.join(PIDS_DIR, "eval-service.pid");
+
+export function isEvalServiceRunning(): boolean {
+  try {
+    const raw = fs.readFileSync(EVAL_PID_FILE, "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (Number.isFinite(pid)) {
+      process.kill(pid, 0); // throws if dead
+      return true;
+    }
+  } catch {
+    // PID file not found or process is dead
+  }
+  return false;
+}
+
+export function startEvalServiceProcess(): { started: boolean; error?: string } {
+  if (isEvalServiceRunning()) {
+    return { started: true }; // already running
+  }
+
+  const child = spawn("npx", ["tsx", FORGE_CLI, "eval-service"], {
+    cwd: PROJECT_ROOT,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+
+  // Write PID file so we can track it
+  try {
+    fs.mkdirSync(PIDS_DIR, { recursive: true });
+    fs.writeFileSync(EVAL_PID_FILE, String(child.pid));
+  } catch {
+    // non-fatal
+  }
+
+  child.stderr?.on("data", (data: Buffer) => {
+    console.error(`[forge-eval-service]`, data.toString());
+  });
+
+  child.on("exit", () => {
+    try { fs.unlinkSync(EVAL_PID_FILE); } catch {}
+  });
+
+  child.unref();
+
+  return { started: true };
+}
+
+export function stopEvalServiceProcess(): boolean {
+  try {
+    const raw = fs.readFileSync(EVAL_PID_FILE, "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (Number.isFinite(pid)) {
+      process.kill(pid, "SIGINT");
+      try { fs.unlinkSync(EVAL_PID_FILE); } catch {}
+      return true;
+    }
+  } catch {
+    // not running
+  }
+  return false;
 }

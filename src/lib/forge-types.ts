@@ -149,6 +149,51 @@ export interface FeatureRequest {
   response: string | null;
 }
 
+/* ── Tool Jobs & Tasks ─────────────────────────────────────── */
+
+export type ToolJobStatus = "pending" | "running" | "completed" | "failed" | "archived";
+
+export interface ToolJob {
+  id: string;
+  session_id: string;
+  agent_id: string | null;
+  agent_name: string | null;
+  tool_name: string;
+  status: ToolJobStatus;
+  input: string | null;
+  output: string | null;
+  error: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  blocking: number;
+  archived_at: string | null;
+  retry_count: number;
+}
+
+export interface PermissionRequestRow {
+  id: string;
+  session_id: string;
+  agent_id: string | null;
+  agent_name: string | null;
+  requested_at: string;
+  permission_type: string | null;
+  details: string | null;
+  status: string;
+  responded_at: string | null;
+  response_by: string | null;
+}
+
+export interface TasksResponse {
+  toolJobs: ToolJob[];
+  permissionRequests: PermissionRequestRow[];
+  counts: {
+    pendingToolJobs: number;
+    runningToolJobs: number;
+    pendingPermissions: number;
+  };
+}
+
 /* ── Metrics ────────────────────────────────────────────────── */
 
 export interface BaselineSnapshot {

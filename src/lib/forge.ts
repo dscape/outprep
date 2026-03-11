@@ -314,9 +314,20 @@ function isAgentProcessRunning(agentId: string): boolean {
 /**
  * Check if a session is running by checking its agent's PID.
  */
-function isSessionRunning(session: { agentId?: string | null }): boolean {
+function isSessionRunning(session: { id: string; agentId?: string | null }): boolean {
   if (!session.agentId) return false;
-  return isAgentProcessRunning(session.agentId);
+  if (!isAgentProcessRunning(session.agentId)) return false;
+  // Also check that this is the agent's *current* session, not an old one
+  const db = openDb();
+  if (!db) return false;
+  try {
+    const row = db.prepare("SELECT current_session_id FROM agents WHERE id = ?").get(session.agentId) as any;
+    db.close();
+    return row?.current_session_id === session.id;
+  } catch {
+    try { db.close(); } catch {}
+    return false;
+  }
 }
 
 /**

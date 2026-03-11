@@ -212,15 +212,75 @@ async function runAgentOuterLoop(
         break;
       }
 
-      // ── Check for blocking tool jobs ───────────────────────
+      // ── Check for blocking tool jobs (with retry + circuit-breaker) ──
       {
         const { getForgeDb } = await import("../state/forge-db");
         const db = getForgeDb();
+        const MAX_RETRIES = 3;
+        const STALE_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes
+
         const blockingJobs = db.prepare(
-          `SELECT * FROM tool_jobs WHERE agent_id = ? AND blocking = 1 AND status NOT IN ('completed', 'failed') LIMIT 5`
+          `SELECT * FROM tool_jobs WHERE agent_id = ? AND blocking = 1 AND status NOT IN ('completed') LIMIT 5`
         ).all(agentId) as any[];
 
-        if (blockingJobs.length > 0) {
+        let shouldStop = false;
+        let stopReason = "";
+        let hasBlockingWork = false;
+
+        for (const job of blockingJobs) {
+          const retryCount = job.retry_count ?? 0;
+          const age = Date.now() - new Date(job.created_at).getTime();
+          const target = (() => { try { const p = JSON.parse(job.input ?? "{}"); return p.username || p.query || p.url || ""; } catch { return ""; } })();
+
+          if (job.status === "archived" || job.status === "failed") {
+            // Job failed or was archived — retry or die
+            if (retryCount >= MAX_RETRIES) {
+              shouldStop = true;
+              stopReason = `Tool '${job.tool_name}'${target ? ` for '${target}'` : ""} failed after ${MAX_RETRIES} attempts (last status: ${job.status})`;
+              break;
+            }
+            // Re-submit with incremented retry count
+            const newId = (await import("node:crypto")).randomUUID();
+            const now = new Date().toISOString();
+            db.prepare(
+              `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?, 1, ?)`
+            ).run(newId, job.session_id, agentId, job.tool_name, job.input, now, retryCount + 1);
+            console.log(`  Retrying ${job.tool_name}${target ? ` for '${target}'` : ""} (attempt ${retryCount + 2}/${MAX_RETRIES + 1})`);
+            hasBlockingWork = true;
+          } else if (job.status === "pending" && age > STALE_THRESHOLD_MS) {
+            // Stale pending job — archive and retry
+            if (retryCount >= MAX_RETRIES) {
+              shouldStop = true;
+              stopReason = `Tool '${job.tool_name}'${target ? ` for '${target}'` : ""} timed out after ${MAX_RETRIES} attempts`;
+              break;
+            }
+            // Archive the stale job
+            db.prepare(
+              `UPDATE tool_jobs SET status = 'archived', archived_at = ? WHERE id = ?`
+            ).run(new Date().toISOString(), job.id);
+            // Re-submit
+            const newId = (await import("node:crypto")).randomUUID();
+            const now = new Date().toISOString();
+            db.prepare(
+              `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+               VALUES (?, ?, ?, ?, 'pending', ?, ?, 1, ?)`
+            ).run(newId, job.session_id, agentId, job.tool_name, job.input, now, retryCount + 1);
+            console.log(`  Tool ${job.tool_name}${target ? ` for '${target}'` : ""} stale — retrying (attempt ${retryCount + 2}/${MAX_RETRIES + 1})`);
+            hasBlockingWork = true;
+          } else if (job.status === "pending" || job.status === "running") {
+            // Still working — keep waiting
+            hasBlockingWork = true;
+          }
+        }
+
+        if (shouldStop) {
+          console.error(`\n  Agent stopped: ${stopReason}`);
+          updateAgent(loadState(), agentId, (a) => { a.status = "stopped"; });
+          break;
+        }
+
+        if (hasBlockingWork) {
           const toolNames = blockingJobs.map((j: any) => j.tool_name).join(", ");
           console.log(`  Agent waiting for tools: ${toolNames}`);
           updateAgent(loadState(), agentId, (a) => { a.status = "waiting_for_tool"; });
