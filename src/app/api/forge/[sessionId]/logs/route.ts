@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import { getSession, getConsoleLogPath } from "@/lib/forge";
+import { getSession, getConsoleLogSessionId } from "@/lib/forge";
 
 export const dynamic = "force-dynamic";
 
@@ -18,11 +17,12 @@ export async function GET(
     return NextResponse.json({ error: "session not found" }, { status: 404 });
   }
 
-  const logPath = getConsoleLogPath(session.name);
-  if (!logPath) {
+  const hasLogs = getConsoleLogSessionId(session.id);
+  if (!hasLogs) {
     return NextResponse.json({ error: "no console logs" }, { status: 404 });
   }
 
+  // offset = last seen row ID (0 = start from beginning)
   const offset = parseInt(req.nextUrl.searchParams.get("offset") ?? "0", 10);
   const isActive = session.status === "active";
 
@@ -33,30 +33,37 @@ export async function GET(
         controller.enqueue(encoder.encode(`data: ${data}\n\n`));
       };
 
-      // Read existing content from offset
-      let currentOffset = offset;
-      try {
-        const stat = fs.statSync(logPath);
-        if (stat.size > currentOffset) {
-          const buf = Buffer.alloc(stat.size - currentOffset);
-          const fd = fs.openSync(logPath, "r");
-          fs.readSync(fd, buf, 0, buf.length, currentOffset);
-          fs.closeSync(fd);
-          currentOffset = stat.size;
+      const Database = require("better-sqlite3");
 
-          const lines = buf.toString("utf-8").split("\n").filter(Boolean);
-          for (const line of lines) {
-            send(line);
-          }
+      // Read existing content from offset
+      let lastId = offset;
+      try {
+        const db = new Database(
+          require("path").join(
+            process.env.FORGE_DATA_DIR || require("path").join(process.cwd(), "packages", "forge"),
+            "forge.db"
+          ),
+          { readonly: true }
+        );
+
+        const rows = db.prepare(
+          "SELECT id, timestamp, level, message FROM console_logs WHERE session_id = ? AND id > ? ORDER BY id"
+        ).all(session.id, lastId) as { id: number; timestamp: string; level: string; message: string }[];
+
+        db.close();
+
+        for (const row of rows) {
+          send(JSON.stringify({ ts: row.timestamp, level: row.level, msg: row.message }));
+          lastId = row.id;
         }
       } catch {
-        // file may not exist yet
+        // DB may not exist yet
       }
 
       if (!isActive) {
         // For completed sessions, send done and close
         controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`));
-        controller.enqueue(encoder.encode(`event: offset\ndata: ${currentOffset}\n\n`));
+        controller.enqueue(encoder.encode(`event: offset\ndata: ${lastId}\n\n`));
         controller.close();
         return;
       }
@@ -64,25 +71,30 @@ export async function GET(
       // For active sessions, poll for new content
       const interval = setInterval(() => {
         try {
-          const stat = fs.statSync(logPath);
-          if (stat.size > currentOffset) {
-            const buf = Buffer.alloc(stat.size - currentOffset);
-            const fd = fs.openSync(logPath, "r");
-            fs.readSync(fd, buf, 0, buf.length, currentOffset);
-            fs.closeSync(fd);
-            currentOffset = stat.size;
+          const db = new Database(
+            require("path").join(
+              process.env.FORGE_DATA_DIR || require("path").join(process.cwd(), "packages", "forge"),
+              "forge.db"
+            ),
+            { readonly: true }
+          );
 
-            const lines = buf.toString("utf-8").split("\n").filter(Boolean);
-            for (const line of lines) {
-              send(line);
-            }
+          const rows = db.prepare(
+            "SELECT id, timestamp, level, message FROM console_logs WHERE session_id = ? AND id > ? ORDER BY id"
+          ).all(session.id, lastId) as { id: number; timestamp: string; level: string; message: string }[];
+
+          db.close();
+
+          for (const row of rows) {
+            send(JSON.stringify({ ts: row.timestamp, level: row.level, msg: row.message }));
+            lastId = row.id;
           }
 
           // Re-check session status
           const freshSession = getSession(sessionId);
           if (!freshSession || freshSession.status !== "active") {
             controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`));
-            controller.enqueue(encoder.encode(`event: offset\ndata: ${currentOffset}\n\n`));
+            controller.enqueue(encoder.encode(`event: offset\ndata: ${lastId}\n\n`));
             clearInterval(interval);
             controller.close();
           }

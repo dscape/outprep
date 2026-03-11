@@ -92,6 +92,8 @@ export interface AgentDecision {
   reasoning: string;
 }
 
+export type AgentDisplayStatus = "running" | "stopped" | "waiting_for_tool" | "blocked_on_permission" | "dead";
+
 export interface AgentSummary {
   id: string;
   name: string;
@@ -104,6 +106,10 @@ export interface AgentSummary {
   totalCostUsd: number;
   config: AgentConfig;
   isRunning: boolean;
+  /** Rich process status: running, stopped, waiting_for_tool, blocked_on_permission, dead */
+  runStatus: AgentDisplayStatus;
+  /** Detail for the status (e.g. tool name or permission type) */
+  runStatusDetail?: string;
   rank: number | null;
   avgWeightedCompositeDelta: number;
   avgAccuracyDelta: number;

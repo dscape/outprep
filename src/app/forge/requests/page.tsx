@@ -1,5 +1,6 @@
 import { getFeatureRequests } from "@/lib/forge";
 import { FeatureRequestCard } from "@/components/forge/FeatureRequestCard";
+import { PermissionRequestList } from "@/components/forge/PermissionRequestList";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,8 @@ export default function RequestsPage() {
           </code>
         </div>
       )}
+
+      <PermissionRequestList />
     </div>
   );
 }

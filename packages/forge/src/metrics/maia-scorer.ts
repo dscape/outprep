@@ -32,6 +32,12 @@ export function computeMaiaMetrics(
   rawMetrics: Metrics,
   opts: { seed?: number } = {}
 ): MaiaMetrics {
+  if (positions.length === 0) {
+    throw new Error(
+      'Cannot compute metrics with 0 positions. Games likely lack Stockfish analysis.'
+    );
+  }
+
   const accuracy = computeMoveAccuracy(positions, opts);
   const cpl = computeCPLDistribution(positions);
   const blunders = computeBlunderProfile(positions);

@@ -23,6 +23,8 @@ import { createEvalOps, type EvalOps, type ComparisonTable } from "./eval-ops";
 import { createSessionOps, type SessionOps } from "./session-ops";
 
 import { fetchPlayer, getGames, listPlayers as listCachedPlayers } from "../data/game-store";
+import { getForgeDb } from "../state/forge-db";
+import { requestPermission, getPendingPermissions } from "../tools/permissions";
 import { createSplit } from "../data/splits";
 import { computeMoveAccuracy } from "../metrics/move-accuracy";
 import { computeCPLDistribution } from "../metrics/cpl-distribution";
@@ -40,6 +42,7 @@ import { createOracleLimiter } from "../oracle/oracle-limiter";
 import { createSurpriseTracker, type SurpriseHealthAssessment } from "../oracle/surprise-tracker";
 import { detectIncrementalPattern } from "../oracle/incremental-detector";
 import { createHypothesisOps, type HypothesisOps } from "../hypothesis/hypothesis-manager";
+import { createWebTools, type WebTools, type SearchResult } from "../tools/web-tools";
 import { writeExperimentLog } from "../log/log-formatter";
 import { computeTrend, formatTrend } from "../log/trend-tracker";
 import { randomUUID } from "node:crypto";
@@ -130,6 +133,29 @@ export interface LogOps {
   reflect(reflection: Omit<ReflectionCheckpoint, "id" | "sessionId" | "timestamp">): string;
 }
 
+export interface ToolOps {
+  /** Submit an eval job for a player (blocking -- agent waits) */
+  evalPlayer(username: string): string;
+  /** Check tool job status */
+  status(jobId: string): { status: string; output?: any; error?: string } | null;
+  /** List tool jobs for current session */
+  list(): any[];
+}
+
+export interface PermissionOps {
+  /** Request a new permission */
+  request(type: string, details: Record<string, any>): string;
+  /** List pending permission requests for current session */
+  pending(): any[];
+}
+
+export interface WebOps {
+  /** Search the web for relevant information */
+  search(query: string): Promise<SearchResult[]>;
+  /** Fetch a URL and extract text content (HTML → markdown) */
+  fetch(url: string, prompt?: string): Promise<string>;
+}
+
 export interface LeaderboardOps {
   /** View the current leaderboard (read-only) */
   get(): LeaderboardEntry[];
@@ -151,6 +177,9 @@ export interface ForgeApi {
   log: LogOps;
   history: HistoryOps;
   hypothesis: HypothesisOps;
+  web: WebOps;
+  tools: ToolOps;
+  permissions: PermissionOps;
   /** Leaderboard access (read-only, injected by agent-manager) */
   leaderboard?: LeaderboardOps;
   /** File a feature request (injected by agent-manager) */
@@ -175,6 +204,9 @@ export function createForgeApi(
   const oracleLimiter = createOracleLimiter();
   const surpriseTracker = createSurpriseTracker(session, state);
   const rawHypothesisOps = createHypothesisOps(session, state);
+
+  // ── Web tools ──
+  const webTools = createWebTools();
 
   // Mutable ref for post-experiment callback (set by agent-manager via _onExperimentRecorded)
   const callbacks: { onExperimentRecorded?: () => void } = {};
@@ -506,6 +538,20 @@ export function createForgeApi(
         }
       }
 
+      // Guard: reject experiments with too few positions for statistical validity.
+      // This catches the case where games lack Stockfish analysis (0 positions evaluated)
+      // and the agent tries to record a bogus "confirmed" result.
+      const effectivePositions = partial.positionsEvaluated
+        ?? coercedResult?.positionsEvaluated
+        ?? 0;
+      if (effectivePositions < 20) {
+        throw new Error(
+          `Cannot record experiment with only ${effectivePositions} positions evaluated. ` +
+          `Minimum 20 positions required for statistical validity. ` +
+          `Ensure player games have Stockfish analysis before running experiments.`
+        );
+      }
+
       // Auto-populate hypothesis/archetype from current hypothesis set
       const currentHypothesisSet = hypothesisOps.current();
       const autoArchetype: ExperimentArchetype =
@@ -522,7 +568,7 @@ export function createForgeApi(
         timestamp: partial.timestamp ?? new Date().toISOString(),
         hypothesis: partial.hypothesis!,
         category: partial.category ?? "parameter",
-        codeChanges: partial.codeChanges ?? codeOps.getTrackedChanges(),
+        codeChanges: partial.codeChanges ?? [...codeOps.getTrackedChanges()],
         configChanges: partial.configChanges ?? [],
         players: partial.players ?? session.players,
         positionsEvaluated: partial.positionsEvaluated ?? 0,
@@ -602,6 +648,48 @@ export function createForgeApi(
     },
   };
 
+  // ── Tools namespace ──
+  const tools: ToolOps = {
+    evalPlayer(username: string) {
+      const db = getForgeDb();
+      const id = randomUUID();
+      db.prepare(`
+        INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking)
+        VALUES (?, ?, ?, 'eval_player', 'pending', ?, ?, 1)
+      `).run(id, session.id, session.agentId ?? null, JSON.stringify({ username }), new Date().toISOString());
+      console.log(`  Submitted eval job ${id.slice(0, 8)} for player "${username}"`);
+      return id;
+    },
+    status(jobId: string) {
+      const db = getForgeDb();
+      const row = db.prepare(`SELECT status, output, error FROM tool_jobs WHERE id = ?`).get(jobId) as
+        | { status: string; output: string | null; error: string | null }
+        | undefined;
+      if (!row) return null;
+      return {
+        status: row.status,
+        ...(row.output != null ? { output: JSON.parse(row.output) } : {}),
+        ...(row.error != null ? { error: row.error } : {}),
+      };
+    },
+    list() {
+      const db = getForgeDb();
+      return db.prepare(
+        `SELECT id, tool_name, status, created_at, completed_at FROM tool_jobs WHERE session_id = ? ORDER BY created_at DESC`,
+      ).all(session.id);
+    },
+  };
+
+  // ── Permissions namespace ──
+  const permissions: PermissionOps = {
+    request(type: string, details: Record<string, any>) {
+      return requestPermission(session.id, session.agentId ?? null, type, details);
+    },
+    pending() {
+      return getPendingPermissions(session.agentId ?? undefined);
+    },
+  };
+
   const api: ForgeApi = {
     code: codeOps,
     config: configOps,
@@ -614,6 +702,9 @@ export function createForgeApi(
     log,
     history,
     hypothesis: hypothesisOps,
+    web: webTools,
+    tools,
+    permissions,
     get _onExperimentRecorded() { return callbacks.onExperimentRecorded; },
     set _onExperimentRecorded(fn: (() => void) | undefined) { callbacks.onExperimentRecorded = fn; },
     compare(a: TestResult, b: TestResult) {

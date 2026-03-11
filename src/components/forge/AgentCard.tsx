@@ -38,7 +38,7 @@ export function AgentCard({ agent }: { agent: AgentSummary }) {
             </p>
           </div>
         </div>
-        <AgentStatusBadge isRunning={agent.isRunning} />
+        <AgentStatusBadge status={agent.runStatus} detail={agent.runStatusDetail} />
       </div>
 
       <div className="grid grid-cols-4 gap-3 text-sm">

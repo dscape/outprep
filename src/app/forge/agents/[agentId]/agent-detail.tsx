@@ -33,7 +33,7 @@ export function AgentDetailView({ agent }: { agent: AgentDetail }) {
           <div>
             <div className="flex items-center gap-3">
               <h2 className="text-xl font-semibold text-zinc-100">{agent.name}</h2>
-              <AgentStatusBadge isRunning={agent.isRunning} />
+              <AgentStatusBadge status={agent.runStatus} detail={agent.runStatusDetail} />
             </div>
             <p className="text-sm text-zinc-500 mt-0.5">
               {agent.config.players?.length

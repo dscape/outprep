@@ -15,10 +15,10 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadState, saveState, updateSession, updateAgent } from "../state/forge-state";
-import { createSandbox, destroySandbox, listSandboxes, commitSandbox } from "../repl/sandbox";
+import { createSandbox, destroySandbox, listSandboxes, commitSandbox, pushBranch } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
 import { createForgeApi } from "../repl/forge-api";
-import { writePid, removePid, writeAgentPid, removeAgentPid } from "../pid";
+import { writeAgentPid, removeAgentPid, cleanStalePids } from "../pid";
 import { generateAgentName } from "./agent-names";
 import {
   recordSessionResult,
@@ -30,6 +30,7 @@ import { CostTracker } from "./cost-tracker";
 import { createLogWriter } from "./log-writer";
 import { runAgentLoop, buildInitialMessage } from "./agent-loop";
 import { makeDecision, type DecisionResult } from "./agent-decision";
+import { buildPlayerData, getPlayerEloMap } from "./shared";
 import type { ForgeAgent, ForgeSession, AgentDecision } from "../state/types";
 
 /**
@@ -147,7 +148,7 @@ export async function resumeAgent(agentId: string): Promise<void> {
     console.error(`  ✗ Agent ${agentId} not found.`);
     process.exit(1);
   }
-  if (agent.status === "running") {
+  if (agent.status === "running" || agent.status === "waiting_for_tool" || agent.status === "blocked_on_permission") {
     // Check if the process is actually alive — stale state is common after crashes
     const { readAgentPid, isProcessRunning } = await import("../pid");
     const pid = readAgentPid(agentId);
@@ -156,7 +157,7 @@ export async function resumeAgent(agentId: string): Promise<void> {
       process.exit(1);
     }
     // Stale state — process is dead, reset to stopped and continue
-    console.log(`  Agent "${agent.name}" was marked running but process is dead. Resetting...`);
+    console.log(`  Agent "${agent.name}" was marked ${agent.status} but process is dead. Resetting...`);
     updateAgent(state, agentId, (a) => {
       a.status = "stopped";
     });
@@ -185,6 +186,12 @@ async function runAgentOuterLoop(
 ): Promise<void> {
   writeAgentPid(agentId);
 
+  // Clean stale PIDs on startup
+  const stalePids = cleanStalePids();
+  if (stalePids.length > 0) {
+    console.log(`  Cleaned ${stalePids.length} stale PID file(s)`);
+  }
+
   const autonomous = isAutonomous(opts);
   let waitRetries = 0;
   const MAX_WAIT_RETRIES = 10;
@@ -195,9 +202,54 @@ async function runAgentOuterLoop(
       // Re-load state to check if agent was stopped externally
       const freshState = loadState();
       const freshAgent = freshState.agents.find((a) => a.id === agentId);
-      if (!freshAgent || freshAgent.status !== "running") {
+      if (
+        !freshAgent ||
+        (freshAgent.status !== "running" &&
+         freshAgent.status !== "waiting_for_tool" &&
+         freshAgent.status !== "blocked_on_permission")
+      ) {
         console.log(`\n  Agent "${freshAgent?.name ?? agentId}" stopped externally.`);
         break;
+      }
+
+      // ── Check for blocking tool jobs ───────────────────────
+      {
+        const { getForgeDb } = await import("../state/forge-db");
+        const db = getForgeDb();
+        const blockingJobs = db.prepare(
+          `SELECT * FROM tool_jobs WHERE agent_id = ? AND blocking = 1 AND status NOT IN ('completed', 'failed') LIMIT 5`
+        ).all(agentId) as any[];
+
+        if (blockingJobs.length > 0) {
+          const toolNames = blockingJobs.map((j: any) => j.tool_name).join(", ");
+          console.log(`  Agent waiting for tools: ${toolNames}`);
+          updateAgent(loadState(), agentId, (a) => { a.status = "waiting_for_tool"; });
+          await new Promise((r) => setTimeout(r, 30_000));
+          // Restore to running only if not externally stopped
+          const postWait = loadState().agents.find((a) => a.id === agentId);
+          if (postWait?.status === "waiting_for_tool") {
+            updateAgent(loadState(), agentId, (a) => { a.status = "running"; });
+          }
+          continue;
+        }
+
+        // Check for pending permission requests
+        const pendingPerms = db.prepare(
+          `SELECT * FROM permission_requests WHERE agent_id = ? AND status = 'pending' LIMIT 5`
+        ).all(agentId) as any[];
+
+        if (pendingPerms.length > 0) {
+          const types = pendingPerms.map((p: any) => p.permission_type).join(", ");
+          console.log(`  Agent blocked on permissions: ${types}`);
+          updateAgent(loadState(), agentId, (a) => { a.status = "blocked_on_permission"; });
+          await new Promise((r) => setTimeout(r, 30_000));
+          // Restore to running only if not externally stopped
+          const postWait = loadState().agents.find((a) => a.id === agentId);
+          if (postWait?.status === "blocked_on_permission") {
+            updateAgent(loadState(), agentId, (a) => { a.status = "running"; });
+          }
+          continue;
+        }
       }
 
       // ── Decision Step ──────────────────────────────────────
@@ -360,7 +412,12 @@ async function runAgentOuterLoop(
   } finally {
     const finalState = loadState();
     const finalAgent = finalState.agents.find((a) => a.id === agentId);
-    if (finalAgent && finalAgent.status === "running") {
+    if (
+      finalAgent &&
+      (finalAgent.status === "running" ||
+       finalAgent.status === "waiting_for_tool" ||
+       finalAgent.status === "blocked_on_permission")
+    ) {
       updateAgent(finalState, agentId, (a) => {
         a.status = "stopped";
       });
@@ -414,14 +471,9 @@ async function runAgentSession(
   const sessionId = randomUUID();
 
   // Build player ELO map for semantic naming
-  const { loadPlayer } = await import("../data/game-store");
-  const playerElos = new Map<string, number>();
-  for (const p of players) {
-    const meta = loadPlayer(p);
-    if (meta) playerElos.set(p, meta.estimatedElo);
-  }
+  const playerElos = await getPlayerEloMap(players);
   const sessionName = buildSessionName(players, focus, state, playerElos);
-  const logWriter = createLogWriter(sessionName);
+  const logWriter = createLogWriter(sessionName, sessionId);
 
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
@@ -471,7 +523,6 @@ async function runAgentSession(
   state.sessions.push(session);
   state.activeSessionId = sessionId;
   saveState(state);
-  writePid(sessionId);
 
   // Update agent's current session
   updateAgent(state, agentId, (a) => {
@@ -479,31 +530,7 @@ async function runAgentSession(
   });
 
   // Build player data
-  const { getGames } = await import("../data/game-store");
-  const { createSplit } = await import("../data/splits");
-
-  const playerData: Record<string, {
-    meta: ReturnType<typeof loadPlayer>;
-    games: ReturnType<typeof getGames>;
-    trainGames: ReturnType<typeof getGames>;
-    testGames: ReturnType<typeof getGames>;
-    split: ReturnType<typeof createSplit>["split"];
-  }> = {};
-
-  for (const username of players) {
-    const meta = loadPlayer(username);
-    const games = getGames(username);
-    if (meta && games.length > 0) {
-      const result = createSplit(games, { seed: opts.seed, trainRatio: 0.8 });
-      playerData[username] = {
-        meta,
-        games,
-        trainGames: result.trainGames,
-        testGames: result.testGames,
-        split: result.split,
-      };
-    }
-  }
+  const playerData = await buildPlayerData(players, opts.seed);
 
   // Create REPL and inject forge API
   const repl = createReplServer();
@@ -558,10 +585,24 @@ async function runAgentSession(
       s.status = "paused";
     });
   } finally {
-    removePid(sessionId);
     repl.dispose();
     if (session.status === "completed" || session.status === "abandoned") {
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
+
+      // Auto-push positive results
+      if (session.status === "completed" && session.bestResult && session.baseline) {
+        const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
+        const delta = session.bestResult.compositeScore - baselineComposite;
+        if (delta >= 0.01) {
+          try {
+            pushBranch(sandbox.branchName);
+            console.log(`  \u2713 Auto-pushed branch ${sandbox.branchName} (composite \u0394 +${delta.toFixed(4)})`);
+          } catch (err) {
+            console.log(`  \u26A0 Auto-push failed for ${sandbox.branchName}: ${err}`);
+          }
+        }
+      }
+
       destroySandbox(sandbox);
     }
   }
@@ -596,7 +637,7 @@ async function resumeAgentSession(
   }
 
   const costTracker = new CostTracker();
-  const logWriter = createLogWriter(session.name);
+  const logWriter = createLogWriter(session.name, session.id);
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
     else if (level === "warn") console.warn(msg);
@@ -609,18 +650,7 @@ async function resumeAgentSession(
 
   // Recreate REPL and rebuild player data
   const repl = createReplServer();
-  const { getGames, loadPlayer } = await import("../data/game-store");
-  const { createSplit } = await import("../data/splits");
-
-  const playerData: Record<string, any> = {};
-  for (const username of session.players) {
-    const meta = loadPlayer(username);
-    const games = getGames(username);
-    if (meta && games.length > 0) {
-      const result = createSplit(games, { seed: opts.seed, trainRatio: 0.8 });
-      playerData[username] = { meta, games, ...result };
-    }
-  }
+  const playerData = await buildPlayerData(session.players, opts.seed);
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
@@ -652,7 +682,6 @@ async function resumeAgentSession(
   updateSession(state, session.id, (s) => {
     s.status = "active";
   });
-  writePid(session.id);
 
   // Update agent's current session
   updateAgent(state, agentId, (a) => {
@@ -686,10 +715,24 @@ async function resumeAgentSession(
       s.status = "paused";
     });
   } finally {
-    removePid(session.id);
     repl.dispose();
     if (session.status === "completed" || session.status === "abandoned") {
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
+
+      // Auto-push positive results
+      if (session.status === "completed" && session.bestResult && session.baseline) {
+        const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
+        const delta = session.bestResult.compositeScore - baselineComposite;
+        if (delta >= 0.01) {
+          try {
+            pushBranch(sandbox.branchName);
+            console.log(`  \u2713 Auto-pushed branch ${sandbox.branchName} (composite \u0394 +${delta.toFixed(4)})`);
+          } catch (err) {
+            console.log(`  \u26A0 Auto-push failed for ${sandbox.branchName}: ${err}`);
+          }
+        }
+      }
+
       destroySandbox(sandbox);
     }
   }

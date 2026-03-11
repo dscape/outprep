@@ -34,7 +34,7 @@ export function OrphanedBranchToast() {
 
   return (
     <Toast
-      message={`Found ${orphaned.length} orphaned research branch${orphaned.length > 1 ? "es" : ""}. Run \`forge clean\` or remove manually:\n${orphaned.map((o) => o.command).join("\n")}`}
+      message={`Found ${orphaned.length} orphaned research branch${orphaned.length > 1 ? "es" : ""}. Run \`forge clean\` to remove them.`}
       onDismiss={() => {
         setDismissed(true);
         localStorage.setItem("forge-orphaned-dismissed", String(Date.now()));

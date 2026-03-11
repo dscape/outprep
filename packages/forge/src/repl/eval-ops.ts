@@ -303,7 +303,18 @@ export function createEvalOps(sandbox: SandboxInfo): EvalOps {
         trainGames,
       };
 
-      return runWorker(sandbox, input, timeoutMs);
+      const result = await runWorker(sandbox, input, timeoutMs);
+
+      // Guard: reject evaluations that produced 0 positions.
+      // This happens when player games lack Stockfish analysis (game.analysis is empty).
+      if (result.metrics.totalPositions === 0) {
+        throw new Error(
+          'Evaluation produced 0 positions. The player games likely lack Stockfish analysis (game.analysis is empty). ' +
+          'Import games with evaluations or use forge.tools.evalPlayer(username) to pre-compute evaluations.'
+        );
+      }
+
+      return result;
     },
 
     async runQuick(

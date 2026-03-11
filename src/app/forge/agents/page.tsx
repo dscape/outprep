@@ -7,8 +7,21 @@ export const dynamic = "force-dynamic";
 export default function AgentsPage() {
   const agents = getAgentSummaries();
 
-  const running = agents.filter((a) => a.isRunning).length;
-  const stopped = agents.filter((a) => !a.isRunning).length;
+  const running = agents.filter((a) => a.runStatus === "running").length;
+  const waiting = agents.filter((a) => a.runStatus === "waiting_for_tool").length;
+  const blocked = agents.filter((a) => a.runStatus === "blocked_on_permission").length;
+  const dead = agents.filter((a) => a.runStatus === "dead").length;
+  const stopped = agents.filter((a) => a.runStatus === "stopped").length;
+
+  const statusParts: string[] = [];
+  if (running > 0) statusParts.push(`${running} running`);
+  if (waiting > 0) statusParts.push(`${waiting} waiting`);
+  if (blocked > 0) statusParts.push(`${blocked} blocked`);
+  if (dead > 0) statusParts.push(`${dead} dead`);
+  if (stopped > 0) statusParts.push(`${stopped} stopped`);
+
+  const hasRunningAgents = running > 0 || waiting > 0 || blocked > 0;
+  const hasStoppedAgents = stopped > 0 || dead > 0;
 
   return (
     <div className="space-y-6">
@@ -16,11 +29,11 @@ export default function AgentsPage() {
         <div>
           <h2 className="text-lg font-semibold text-zinc-100">Agents</h2>
           <p className="text-sm text-zinc-500">
-            {agents.length} agent{agents.length !== 1 ? "s" : ""} &middot;{" "}
-            {running} running &middot; {stopped} stopped
+            {agents.length} agent{agents.length !== 1 ? "s" : ""}
+            {statusParts.length > 0 && ` \u00b7 ${statusParts.join(" \u00b7 ")}`}
           </p>
         </div>
-        <AgentControls hasAgents={agents.length > 0} hasStoppedAgents={stopped > 0} hasRunningAgents={running > 0} />
+        <AgentControls hasAgents={agents.length > 0} hasStoppedAgents={hasStoppedAgents} hasRunningAgents={hasRunningAgents} />
       </div>
 
       {agents.length > 0 ? (

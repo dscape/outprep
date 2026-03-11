@@ -1,8 +1,10 @@
 /**
- * forge.code.* — Engine source code operations with change tracking.
+ * forge.code.* — Source code operations with change tracking.
  *
- * All operations target the sandbox worktree's engine, so modifications
- * are isolated from the main working tree.
+ * All operations target the sandbox worktree, so modifications
+ * are isolated from the main working tree. Agents may modify any
+ * file within the worktree — the real safety boundary is the
+ * Anthropic Sandbox Runtime.
  *
  * Code modifications are delegated to Claude Code CLI (`claude -p`)
  * via the `prompt()` method instead of direct file writes.
@@ -12,9 +14,8 @@ import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { SandboxInfo, ModifiableFile } from "./sandbox";
+import type { SandboxInfo } from "./sandbox";
 import {
-  MODIFIABLE_ENGINE_FILES,
   getSandboxDiff,
   revertSandbox,
   revertFile,
@@ -54,35 +55,33 @@ function recordChange(
 
 /* ── Resolve file path ─────────────────────────────────────── */
 
-function resolveEnginePath(sandbox: SandboxInfo, file: ModifiableFile): string {
-  return join(sandbox.enginePath, file);
+function resolveWorktreePath(sandbox: SandboxInfo, file: string): string {
+  return join(sandbox.worktreePath, file);
 }
 
 /* ── Public API ────────────────────────────────────────────── */
 
 export interface CodeOps {
-  read(file: ModifiableFile): string;
+  read(file: string): string;
   prompt(instruction: string): string;
   diff(): string;
-  revert(file?: ModifiableFile): void;
+  revert(file?: string): void;
   typecheck(): string;
-  listModifiable(): string[];
   /** Access the tracked changes list (for session state sync). */
   getTrackedChanges(): CodeChange[];
 }
 
 export function createCodeOps(sandbox: SandboxInfo): CodeOps {
   return {
-    read(file: ModifiableFile): string {
-      const fullPath = resolveEnginePath(sandbox, file);
+    read(file: string): string {
+      const fullPath = resolveWorktreePath(sandbox, file);
       return readFileSync(fullPath, "utf-8");
     },
 
     prompt(instruction: string): string {
-      const fileList = MODIFIABLE_ENGINE_FILES.join(", ");
       const fullInstruction = [
-        `You are modifying a chess engine. Only modify these files: ${fileList}.`,
-        `Working directory: ${sandbox.enginePath}`,
+        `You are modifying a chess engine.`,
+        `You may modify any file within the working directory: ${sandbox.worktreePath}`,
         ``,
         instruction,
       ].join("\n");
@@ -92,7 +91,7 @@ export function createCodeOps(sandbox: SandboxInfo): CodeOps {
         output = execSync(
           `claude -p ${JSON.stringify(fullInstruction)}`,
           {
-            cwd: sandbox.enginePath,
+            cwd: sandbox.worktreePath,
             encoding: "utf-8",
             timeout: 120_000,
             maxBuffer: 10 * 1024 * 1024,
@@ -122,7 +121,7 @@ export function createCodeOps(sandbox: SandboxInfo): CodeOps {
       return getSandboxDiff(sandbox);
     },
 
-    revert(file?: ModifiableFile): void {
+    revert(file?: string): void {
       if (file) {
         revertFile(sandbox, file);
         // Remove tracked changes for this file
@@ -138,10 +137,6 @@ export function createCodeOps(sandbox: SandboxInfo): CodeOps {
 
     typecheck(): string {
       return typecheckSandbox(sandbox);
-    },
-
-    listModifiable(): string[] {
-      return [...MODIFIABLE_ENGINE_FILES];
     },
 
     getTrackedChanges(): CodeChange[] {

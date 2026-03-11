@@ -361,7 +361,7 @@ export interface ReflectionCheckpoint {
 
 /* ── Agents ─────────────────────────────────────────────────── */
 
-export type AgentStatus = "running" | "stopped";
+export type AgentStatus = "running" | "stopped" | "waiting_for_tool" | "blocked_on_permission";
 
 export interface ForgeAgent {
   id: string;

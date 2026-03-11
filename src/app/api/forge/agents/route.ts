@@ -9,7 +9,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { players, focus, maxExperiments, seed, quick } = body;
+    const { players, focus, maxExperiments, seed, quick, researchBias } = body;
 
     const result = startAgentProcess({
       players: Array.isArray(players) && players.length > 0 ? players : undefined,
@@ -17,6 +17,7 @@ export async function POST(request: Request) {
       maxExperiments,
       seed,
       quick,
+      researchBias: researchBias ?? undefined,
     });
 
     if (result.error) {

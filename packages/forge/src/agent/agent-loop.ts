@@ -13,17 +13,18 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadState, saveState, updateSession } from "../state/forge-state";
-import { createSandbox, destroySandbox, commitSandbox } from "../repl/sandbox";
+import { createSandbox, destroySandbox, commitSandbox, pushBranch } from "../repl/sandbox";
 import type { SandboxInfo } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
 import { createForgeApi, type ForgeApi } from "../repl/forge-api";
 import { buildSystemPrompt, type PromptContext } from "./system-prompt";
-import { writePid, removePid } from "../pid";
+
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
 import { CostTracker, CLAUDE_INPUT_COST_PER_1K, CLAUDE_OUTPUT_COST_PER_1K } from "./cost-tracker";
 import { checkConvergence, DEFAULT_CONVERGENCE } from "./convergence";
 import { createLogWriter, type LogWriter } from "./log-writer";
+import { buildPlayerData } from "./shared";
 import type { ForgeSession, ForgeState, ConversationMessage } from "../state/types";
 
 export interface ResearchOptions {
@@ -50,7 +51,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   const state = loadState();
   const costTracker = new CostTracker();
   const sessionId = randomUUID();
-  const logWriter = createLogWriter(opts.name);
+  const logWriter = createLogWriter(opts.name, sessionId);
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
     else if (level === "warn") console.warn(msg);
@@ -100,37 +101,12 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   state.sessions.push(session);
   state.activeSessionId = sessionId;
   saveState(state);
-  writePid(sessionId);
 
   // Create REPL and inject forge API (playerData passed after construction below)
   const repl = createReplServer();
 
   // Pre-inject playerData so the agent has immediate access
-  const { getGames, loadPlayer } = await import("../data/game-store");
-  const { createSplit } = await import("../data/splits");
-
-  const playerData: Record<string, {
-    meta: ReturnType<typeof loadPlayer>;
-    games: ReturnType<typeof getGames>;
-    trainGames: ReturnType<typeof getGames>;
-    testGames: ReturnType<typeof getGames>;
-    split: ReturnType<typeof createSplit>["split"];
-  }> = {};
-
-  for (const username of opts.players ?? []) {
-    const meta = loadPlayer(username);
-    const games = getGames(username);
-    if (meta && games.length > 0) {
-      const result = createSplit(games, { seed: opts.seed, trainRatio: 0.8 });
-      playerData[username] = {
-        meta,
-        games,
-        trainGames: result.trainGames,
-        testGames: result.testGames,
-        split: result.split,
-      };
-    }
-  }
+  const playerData = await buildPlayerData(opts.players ?? [], opts.seed);
   repl.inject("playerData", playerData);
 
   // Create forge API with playerData ref so eval auto-injects trainGames
@@ -157,12 +133,26 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
       s.status = "paused";
     });
   } finally {
-    removePid(sessionId);
     repl.dispose();
     // Don't destroy sandbox on pause — it can be resumed
     if (session.status === "completed" || session.status === "abandoned") {
       // Safety: commit any remaining changes before destroying worktree
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
+
+      // Auto-push positive results
+      if (session.status === "completed" && session.bestResult && session.baseline) {
+        const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
+        const delta = session.bestResult.compositeScore - baselineComposite;
+        if (delta >= 0.01) {
+          try {
+            pushBranch(sandbox.branchName);
+            console.log(`  \u2713 Auto-pushed branch ${sandbox.branchName} (composite \u0394 +${delta.toFixed(4)})`);
+          } catch (err) {
+            console.log(`  \u26A0 Auto-push failed for ${sandbox.branchName}: ${err}`);
+          }
+        }
+      }
+
       destroySandbox(sandbox);
     }
   }
@@ -208,7 +198,7 @@ export async function resumeSession(
 
   const client = new Anthropic({ apiKey });
   const costTracker = new CostTracker();
-  const logWriter = createLogWriter(session.name);
+  const logWriter = createLogWriter(session.name, session.id);
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
     else if (level === "warn") console.warn(msg);
@@ -232,18 +222,7 @@ export async function resumeSession(
   // Recreate REPL, rebuild playerData, and inject forge API
   const repl = createReplServer();
 
-  const { getGames, loadPlayer } = await import("../data/game-store");
-  const { createSplit } = await import("../data/splits");
-
-  const playerData: Record<string, any> = {};
-  for (const username of session.players) {
-    const meta = loadPlayer(username);
-    const games = getGames(username);
-    if (meta && games.length > 0) {
-      const result = createSplit(games, { seed: 42, trainRatio: 0.8 });
-      playerData[username] = { meta, games, ...result };
-    }
-  }
+  const playerData = await buildPlayerData(session.players);
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
@@ -269,7 +248,6 @@ export async function resumeSession(
   updateSession(state, session.id, (s) => {
     s.status = "active";
   });
-  writePid(session.id);
 
   try {
     await runAgentLoop(client, repl, session, state, promptCtx, resumeMessage, costTracker, {
@@ -285,7 +263,6 @@ export async function resumeSession(
       s.status = "paused";
     });
   } finally {
-    removePid(session.id);
     repl.dispose();
     logWriter.close();
   }

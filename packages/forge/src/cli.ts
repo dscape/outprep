@@ -372,27 +372,29 @@ program
       ? opts.players.split(",").map((s: string) => s.trim())
       : positionalPlayers.flatMap((s: string) => s.split(",").map((p) => p.trim()));
 
-    const playerData: Record<string, any> = {};
+    let playerData: Record<string, any> = {};
     if (playerList.length > 0) {
-      const { fetchPlayer, getGames, loadPlayer } = await import("./data/game-store");
-      const { createSplit } = await import("./data/splits");
+      const { fetchPlayer, getGames } = await import("./data/game-store");
+      const { buildPlayerData } = await import("./agent/shared");
       const seed = parseInt(opts.seed, 10);
 
+      // Download players first (buildPlayerData only reads local data)
+      const fetched: string[] = [];
       for (const username of playerList) {
         try {
           console.log(`  Loading ${username}...`);
           await fetchPlayer(username);
-          const meta = loadPlayer(username);
           const games = getGames(username);
           if (games.length > 0) {
-            const result = createSplit(games, { seed, trainRatio: 0.8 });
-            playerData[username] = { meta, games, ...result };
+            fetched.push(username);
             console.log(`  ✓ ${username}: ${games.length} games`);
           }
         } catch (err) {
           console.error(`  ✗ ${username}: ${err}`);
         }
       }
+
+      playerData = await buildPlayerData(fetched, seed);
     }
 
     const repl = createReplServer();
@@ -463,75 +465,105 @@ program
 
 program
   .command("clean")
-  .description("Remove sessions and their sandboxes")
-  .option("--all", "Remove all sessions without prompting")
+  .description("Clean stale PIDs and remove orphaned/completed session sandboxes")
+  .option("--all", "Also remove all non-running sessions and their worktrees")
   .option("--id <session-id>", "Remove a specific session by ID prefix")
   .action(async (opts) => {
+    const { cleanStalePids, readAgentPid, isProcessRunning } = await import("./pid");
     const state = loadState();
     const { destroySandbox, listSandboxes } = await import("./repl/sandbox");
+
+    // Always clean stale PIDs first
+    const stalePids = cleanStalePids();
+    if (stalePids.length > 0) {
+      console.log(`\n  Cleaned ${stalePids.length} stale PID file(s): ${stalePids.join(", ")}`);
+    }
+
     const sandboxes = listSandboxes();
 
     // Detect orphaned sandboxes (worktrees with no matching session in state)
     const sessionIds = new Set(state.sessions.map((s) => s.id));
     const orphans = sandboxes.filter((s) => !sessionIds.has(s.sessionId));
 
-    if (state.sessions.length === 0 && orphans.length === 0) {
-      console.log("\n  No sessions to clean.\n");
-      return;
-    }
-
-    let toRemove: typeof state.sessions;
+    // Helper: is a session currently being worked on by a live agent?
+    const isSessionLive = (session: typeof state.sessions[0]) => {
+      if (session.status !== "active") return false;
+      if (!session.agentId) return false;
+      const pid = readAgentPid(session.agentId);
+      return pid !== null && isProcessRunning(pid);
+    };
 
     if (opts.id) {
-      // Remove a specific session by ID prefix
-      toRemove = state.sessions.filter((s) => s.id.startsWith(opts.id));
+      // Remove a specific session
+      const toRemove = state.sessions.filter((s) => s.id.startsWith(opts.id));
       if (toRemove.length === 0) {
         console.error(`  ✗ No session matching "${opts.id}"`);
         process.exit(1);
       }
-    } else if (opts.all) {
-      toRemove = [...state.sessions];
-    } else {
-      // Show sessions and let user confirm
-      if (state.sessions.length > 0) {
-        console.log("\n  Sessions:");
-        for (const s of state.sessions) {
-          const exps = s.experiments.length;
-          const best = s.bestResult
-            ? `best: ${(s.bestResult.moveAccuracy * 100).toFixed(1)}%`
-            : "no results";
-          console.log(
-            `  ${s.id.slice(0, 8)}  ${s.name.padEnd(25)} ${s.status.padEnd(10)} ${exps} exps  ${best}`
-          );
+      const session = toRemove[0];
+      if (isSessionLive(session)) {
+        console.error(`  ✗ Session "${session.name}" is currently active with a running agent. Stop the agent first.`);
+        process.exit(1);
+      }
+      const sandbox = sandboxes.find((s) => s.sessionId === session.id);
+      if (sandbox) {
+        try {
+          destroySandbox(sandbox);
+          console.log(`  ✓ Removed sandbox for ${session.name} (${session.id.slice(0, 8)})`);
+        } catch (err) {
+          console.error(`  ✗ Failed to remove sandbox: ${err}`);
         }
       }
-
-      if (orphans.length > 0) {
-        console.log(`\n  Orphaned sandboxes (no matching session in state): ${orphans.length}`);
-        for (const o of orphans) {
-          console.log(`  ${o.sessionId.slice(0, 8)}  branch: ${o.branchName}`);
-        }
-      }
-
-      // Use readline for confirmation
-      const readline = await import("node:readline");
-      const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-      const total = state.sessions.length + orphans.length;
-      const answer = await new Promise<string>((resolve) => {
-        rl.question(`\n  Remove ${total} session(s)/sandbox(es)? (y/N): `, resolve);
-      });
-      rl.close();
-
-      if (answer.toLowerCase() !== "y") {
-        console.log("  Cancelled.\n");
-        return;
-      }
-      toRemove = [...state.sessions];
+      state.sessions = state.sessions.filter((s) => s.id !== session.id);
+      if (state.activeSessionId === session.id) state.activeSessionId = null;
+      saveState(state);
+      console.log(`  ✓ Removed session "${session.name}"\n`);
+      return;
     }
 
-    // Remove sandboxes (worktrees + branches)
+    // Default mode (no --all): only clean orphaned sandboxes
+    // --all mode: also remove non-running sessions
+    const removable = opts.all ? state.sessions.filter((s) => !isSessionLive(s)) : [];
+
+    if (removable.length === 0 && orphans.length === 0) {
+      console.log("\n  Nothing to clean.\n");
+      return;
+    }
+
+    // Show what will be cleaned
+    if (removable.length > 0) {
+      console.log(`\n  Removable sessions (${removable.length}):`);
+      for (const s of removable) {
+        console.log(`    ${s.id.slice(0, 8)}  ${s.name.padEnd(25)} ${s.status}`);
+      }
+    }
+    if (orphans.length > 0) {
+      console.log(`\n  Orphaned sandboxes (${orphans.length}):`);
+      for (const o of orphans) {
+        console.log(`    ${o.sessionId.slice(0, 8)}  branch: ${o.branchName}`);
+      }
+    }
+
+    // Prompt for confirmation
+    const readline = await import("node:readline");
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    const total = removable.length + orphans.length;
+    const label = removable.length > 0
+      ? `${total} session(s)/sandbox(es)`
+      : `${orphans.length} orphaned sandbox(es)`;
+    const answer = await new Promise<string>((resolve) => {
+      rl.question(`\n  Remove ${label}? (y/N): `, resolve);
+    });
+    rl.close();
+    if (answer.toLowerCase() !== "y") {
+      console.log("  Cancelled.\n");
+      return;
+    }
+
     let cleaned = 0;
-    for (const session of toRemove) {
+
+    // Remove sandboxes for removable sessions (only with --all)
+    for (const session of removable) {
       const sandbox = sandboxes.find((s) => s.sessionId === session.id);
       if (sandbox) {
         try {
@@ -544,28 +576,28 @@ program
       cleaned++;
     }
 
-    // Remove orphaned sandboxes
-    if (!opts.id) {
-      for (const orphan of orphans) {
-        try {
-          destroySandbox(orphan);
-          console.log(`  ✓ Removed orphaned sandbox ${orphan.sessionId.slice(0, 8)} (${orphan.branchName})`);
-        } catch (err) {
-          console.error(`  ✗ Failed to remove orphaned sandbox ${orphan.sessionId.slice(0, 8)}: ${err}`);
-        }
-        cleaned++;
+    // Remove orphaned sandboxes (always)
+    for (const orphan of orphans) {
+      try {
+        destroySandbox(orphan);
+        console.log(`  ✓ Removed orphaned sandbox ${orphan.sessionId.slice(0, 8)} (${orphan.branchName})`);
+      } catch (err) {
+        console.error(`  ✗ Failed to remove orphaned sandbox: ${err}`);
       }
+      cleaned++;
     }
 
-    // Remove from state
-    const removeIds = new Set(toRemove.map((s) => s.id));
-    state.sessions = state.sessions.filter((s) => !removeIds.has(s.id));
-    if (removeIds.has(state.activeSessionId ?? "")) {
-      state.activeSessionId = null;
+    // Update state: remove cleaned sessions (only with --all)
+    if (removable.length > 0) {
+      const removeIds = new Set(removable.map((s) => s.id));
+      state.sessions = state.sessions.filter((s) => !removeIds.has(s.id));
+      if (removeIds.has(state.activeSessionId ?? "")) {
+        state.activeSessionId = null;
+      }
+      saveState(state);
     }
-    saveState(state);
 
-    console.log(`\n  Cleaned ${cleaned} session(s).\n`);
+    console.log(`\n  Cleaned ${cleaned} item(s).\n`);
   });
 
 /* ── ls ─────────────────────────────────────────────────── */
@@ -574,7 +606,7 @@ program
   .command("ls")
   .description("List all sessions with live running status")
   .action(async () => {
-    const { readPid, isProcessRunning } = await import("./pid");
+    const { readAgentPid, isProcessRunning } = await import("./pid");
     const state = loadState();
 
     if (state.sessions.length === 0) {
@@ -596,8 +628,12 @@ program
               : "✗";
 
       const isActive = session.id === state.activeSessionId;
-      const pid = readPid(session.id);
-      const running = pid !== null && isProcessRunning(pid);
+      // Check if the session's agent is running
+      let running = false;
+      if (session.agentId) {
+        const agentPid = readAgentPid(session.agentId);
+        running = agentPid !== null && isProcessRunning(agentPid);
+      }
 
       const best = session.bestResult
         ? `${(session.bestResult.moveAccuracy * 100).toFixed(1)}%`
@@ -919,6 +955,101 @@ program
     await program.parseAsync(["node", "forge", "repl", "--session", active.id], {
       from: "user",
     });
+  });
+
+/* ── eval-player ────────────────────────────────────────── */
+
+program
+  .command("eval-player [username]")
+  .description("Submit a Stockfish evaluation job for a player's games")
+  .option("--all", "Submit eval jobs for all players with unevaluated games")
+  .action(async (username: string | undefined, opts: { all?: boolean }) => {
+    const {
+      submitEvalJob,
+      submitEvalJobsForAll,
+    } = await import("./tools/eval-service");
+
+    if (opts.all) {
+      console.log("\n  Submitting eval jobs for all unevaluated players...\n");
+      const jobIds = submitEvalJobsForAll();
+      if (jobIds.length > 0) {
+        console.log(`\n  Submitted ${jobIds.length} eval job(s).`);
+        console.log("  Run `forge eval-service` to process them.\n");
+      } else {
+        console.log();
+      }
+      return;
+    }
+
+    if (!username) {
+      console.error("  ✗ Specify a username or use --all.");
+      process.exit(1);
+    }
+
+    console.log();
+    const jobId = submitEvalJob(username);
+    console.log(`  Job ID: ${jobId}`);
+    console.log("  Run `forge eval-service` to process it.\n");
+  });
+
+/* ── eval-service ───────────────────────────────────────── */
+
+program
+  .command("eval-service")
+  .description("Start the background eval queue processor (runs until killed)")
+  .action(async () => {
+    console.log("\n  Forge Eval Service");
+    console.log("  ════════════════════════════════════════\n");
+    const { startEvalService } = await import("./tools/eval-service");
+    await startEvalService();
+  });
+
+/* ── eval-status ────────────────────────────────────────── */
+
+program
+  .command("eval-status")
+  .description("Show pending/running/completed eval jobs")
+  .option("--status <status>", "Filter by status (pending/running/completed/failed)")
+  .action(async (opts: { status?: string }) => {
+    const { listEvalJobs } = await import("./tools/eval-service");
+    const jobs = listEvalJobs(opts.status);
+
+    if (jobs.length === 0) {
+      console.log("\n  No eval jobs found.\n");
+      return;
+    }
+
+    console.log("\n  Eval Jobs");
+    console.log("  ════════════════════════════════════════");
+
+    for (const job of jobs) {
+      const input = JSON.parse(job.input);
+      const icon =
+        job.status === "completed"
+          ? "✓"
+          : job.status === "running"
+            ? "▶"
+            : job.status === "failed"
+              ? "✗"
+              : "·";
+
+      let detail = "";
+      if (job.output) {
+        try {
+          const out = JSON.parse(job.output);
+          detail = `  ${out.gamesProcessed ?? 0} games, ${out.positionsEvaluated ?? 0} positions`;
+        } catch { /* ignore parse errors */ }
+      }
+      if (job.error) {
+        detail = `  ${job.error.slice(0, 60)}`;
+      }
+
+      const created = job.created_at?.slice(0, 19) ?? "";
+      console.log(
+        `  ${icon} ${job.id.slice(0, 8)}  ${(input.username ?? "?").padEnd(20)} ${job.status.padEnd(10)} ${created}${detail}`
+      );
+    }
+    console.log();
   });
 
 program.parse();

@@ -54,7 +54,7 @@ export function SessionTabs({
     { key: "hypotheses", label: "Hypotheses", count: session.hypothesisSets?.length ?? 0 },
     { key: "oracle", label: "Oracle", count: session.oracleConsultations.length },
     { key: "changes", label: "Changes", count: allCodeChanges.length },
-    { key: "logs", label: "Raw Logs", count: logs.length },
+    { key: "logs", label: "Research Logs", count: logs.length },
     { key: "console", label: "Console" },
   ];
 
@@ -97,7 +97,12 @@ export function SessionTabs({
         />
       )}
       {tab === "experiments" && (
-        <ExperimentTimeline experiments={session.experiments} logs={logs} />
+        <ExperimentTimeline
+          experiments={session.experiments}
+          logs={logs}
+          session={session}
+          onSeeInConsole={navigateToConsole}
+        />
       )}
       {tab === "hypotheses" && <HypothesesTab session={session} />}
       {tab === "oracle" && <OracleTab session={session} />}

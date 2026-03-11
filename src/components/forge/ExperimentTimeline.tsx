@@ -1,12 +1,16 @@
-import type { ExperimentRecord } from "@/lib/forge-types";
+import type { ExperimentRecord, ForgeSession } from "@/lib/forge-types";
 import { ExperimentCard } from "./ExperimentCard";
 
 export function ExperimentTimeline({
   experiments,
   logs,
+  session,
+  onSeeInConsole,
 }: {
   experiments: ExperimentRecord[];
   logs?: { filename: string; content: string }[];
+  session?: Partial<ForgeSession>;
+  onSeeInConsole?: (ts: string) => void;
 }) {
   if (experiments.length === 0) {
     return (
@@ -34,6 +38,8 @@ export function ExperimentTimeline({
           key={exp.id}
           experiment={exp}
           logContent={logByNumber.get(exp.number)}
+          session={session}
+          onSeeInConsole={onSeeInConsole}
         />
       ))}
     </div>

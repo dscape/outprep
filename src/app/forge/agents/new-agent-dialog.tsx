@@ -20,6 +20,7 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
   const [selectedPlayers, setSelectedPlayers] = useState<Set<string>>(new Set());
   const [focus, setFocus] = useState("accuracy");
   const [loadingPlayers, setLoadingPlayers] = useState(false);
+  const [researchBias, setResearchBias] = useState(0.5);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -53,8 +54,8 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
     try {
       const body =
         mode === "autonomous"
-          ? {}
-          : { players: [...selectedPlayers], focus };
+          ? { researchBias }
+          : { players: [...selectedPlayers], focus, researchBias };
 
       const res = await fetch("/api/forge/agents", {
         method: "POST",
@@ -109,6 +110,42 @@ export function NewAgentDialog({ onClose }: { onClose: () => void }) {
           >
             Fixed
           </button>
+        </div>
+
+        {/* Research Strategy */}
+        <div className="mb-4">
+          <label className="block text-xs font-medium text-zinc-400 mb-2">Research Strategy</label>
+          <div className="flex gap-1 rounded-md bg-zinc-800 p-1">
+            {([
+              { value: 0.0, label: "Conservative", desc: "Careful, incremental changes" },
+              { value: 0.5, label: "Balanced", desc: "Mix of safe and bold experiments" },
+              { value: 1.0, label: "Aggressive", desc: "Bold, high-risk experiments" },
+            ] as const).map((opt) => (
+              <button
+                key={opt.value}
+                onClick={() => setResearchBias(opt.value)}
+                className={`flex-1 rounded px-2 py-1.5 text-xs font-medium transition-colors ${
+                  researchBias === opt.value
+                    ? opt.value === 0.0
+                      ? "bg-blue-900/50 text-blue-300"
+                      : opt.value === 1.0
+                      ? "bg-red-900/50 text-red-300"
+                      : "bg-amber-900/50 text-amber-300"
+                    : "text-zinc-500 hover:text-zinc-300"
+                }`}
+                title={opt.desc}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-1 text-[10px] text-zinc-600">
+            {researchBias === 0.0
+              ? "Careful, incremental improvements with strong evidence"
+              : researchBias === 1.0
+              ? "Bold, high-risk experiments seeking breakthroughs"
+              : "Balanced mix of safe and bold experiments"}
+          </p>
         </div>
 
         {mode === "autonomous" ? (

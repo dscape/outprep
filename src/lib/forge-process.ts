@@ -27,6 +27,7 @@ export interface StartAgentOpts {
   maxExperiments?: number;
   seed?: number;
   quick?: boolean;
+  researchBias?: number;
 }
 
 const runningAgents = new Map<string, RunningProcess>();
@@ -45,6 +46,7 @@ export function startAgentProcess(opts: StartAgentOpts): { agentId: string; erro
   if (opts.maxExperiments) args.push("--max-experiments", String(opts.maxExperiments));
   if (opts.seed) args.push("--seed", String(opts.seed));
   if (opts.quick) args.push("--quick");
+  if (opts.researchBias != null) args.push("--bias", String(opts.researchBias));
 
   const child = spawn("npx", args, {
     cwd: PROJECT_ROOT,
@@ -78,6 +80,7 @@ export function startAgentProcess(opts: StartAgentOpts): { agentId: string; erro
   return { agentId: tempId };
 }
 
+// NOTE: Duplicates packages/forge/src/agent/shared.ts — kept separate for Next.js build compatibility
 export function stopAgentProcess(agentId: string): boolean {
   const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
   const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
@@ -147,18 +150,47 @@ export function startAllAgents(): { started: number; error?: string } {
     return { started: 0, error: "ANTHROPIC_API_KEY is not configured." };
   }
 
-  const args = ["tsx", FORGE_CLI, "agent", "start", "--all"];
+  const fs = require("fs");
+  const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
+  const DB_PATH = path.join(FORGE_ROOT, "forge.db");
+  const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
 
-  const child = spawn("npx", args, {
-    cwd: PROJECT_ROOT,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    detached: false,
+  // Read agents from SQLite
+  let agents: { id: string; name: string; status: string }[] = [];
+  try {
+    if (!fs.existsSync(DB_PATH)) {
+      return { started: 0, error: "No forge database found." };
+    }
+    const Database = require("better-sqlite3");
+    const db = new Database(DB_PATH, { readonly: true });
+    agents = db.prepare("SELECT id, name, status FROM agents").all() as any[];
+    db.close();
+  } catch {
+    return { started: 0, error: "Could not read forge database." };
+  }
+
+  // Find stopped agents (not currently running)
+  const stopped = agents.filter((a) => {
+    if (a.status === "running") {
+      // Check if actually alive
+      try {
+        const raw = fs.readFileSync(path.join(PIDS_DIR, `agent-${a.id}.pid`), "utf-8");
+        const pid = parseInt(raw.trim(), 10);
+        if (Number.isFinite(pid)) {
+          process.kill(pid, 0);
+          return false; // actually running
+        }
+      } catch { /* no pid file or dead process */ }
+    }
+    return true;
   });
 
-  child.stderr?.on("data", (data: Buffer) => {
-    console.error(`[forge-agent:start-all]`, data.toString());
-  });
+  // Start each agent as a separate process
+  let started = 0;
+  for (const a of stopped) {
+    const result = startSingleAgent(a.id);
+    if (result.started) started++;
+  }
 
-  return { started: 1 };
+  return { started };
 }

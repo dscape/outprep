@@ -45,7 +45,7 @@ export function createSessionOps(
     checkpoint(): string {
       // Sync tracked changes into the session
       updateSession(state, session.id, (s) => {
-        s.activeChanges = codeOps.getTrackedChanges();
+        s.activeChanges = [...codeOps.getTrackedChanges()];
       });
 
       // Commit the sandbox worktree
@@ -70,7 +70,7 @@ export function createSessionOps(
     accept(): string {
       // Sync final state
       updateSession(state, session.id, (s) => {
-        s.activeChanges = codeOps.getTrackedChanges();
+        s.activeChanges = [...codeOps.getTrackedChanges()];
         s.status = "completed";
       });
 
@@ -139,7 +139,7 @@ export function createSessionOps(
     finalize(): string {
       // 1. Sync tracked code changes into the session
       updateSession(state, session.id, (s) => {
-        s.activeChanges = codeOps.getTrackedChanges();
+        s.activeChanges = [...codeOps.getTrackedChanges()];
       });
 
       // 2. Commit any uncommitted changes in the sandbox

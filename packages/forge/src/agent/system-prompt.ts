@@ -12,6 +12,7 @@
 import type { ForgeSession, ForgeState, BaselineSnapshot, ForgeAgent, AgentDecision } from "../state/types";
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { formatTrend, computeTrend } from "../log/trend-tracker";
+import { getLeaderboard } from "../state/leaderboard-db";
 
 export interface PromptContext {
   session: ForgeSession;
@@ -126,8 +127,10 @@ Globals: \`forge\`, \`playerData\`. No \`require\`/\`import\`. Use \`await\` for
 Do NOT call \`forge.data.load()\` for players already in \`playerData\`.
 Train/test separation is automatic: eval methods auto-detect trainGames from playerData when you pass playerData[username].testGames.
 
-forge.code: read(file) | prompt(instruction) | diff() | revert(file?) | listModifiable() | typecheck()
-  prompt(instruction) invokes Claude Code CLI to make changes. Describe what you want changed in natural language.
+forge.code: read(file) | prompt(instruction) | diff() | revert(file?) | typecheck()
+  read(file) reads any file by path relative to the worktree root.
+  prompt(instruction) invokes Claude Code CLI to make changes. You may modify any file within the sandbox worktree. Describe what you want changed in natural language.
+  revert(file?) reverts a specific file (relative path) or all changes if no argument is given.
 forge.config: get() → BotConfig | set(path, value) | reset()
   Config structure: { boltzmann: { temperatureBySkill: [[skill, temp], ...], multiPvCount, ... }, elo: { min, max }, skill: { min, max }, ... }
   Always print JSON.stringify(forge.config.get(), null, 2) first to see the full structure before accessing properties.
@@ -155,7 +158,38 @@ forge.log: record({ hypothesis, result?, conclusion?, notes?, nextSteps?, catego
   conclusion: "confirmed"|"refuted"|"partial"|"inconclusive"
   kill({ hypothesisSetId, description, abandonmentPoint, reason, firstOracleType, surpriseRateAtAbandonment, experimentsCompleted })
   reflect({ afterExperimentNumber, ruledOut, surpriseRateAnalysis, unexpectedResultDescription, currentSurpriseRate })
+forge.web: search(query) | fetch(url, prompt?)
+  search(query) searches the web and returns top results: { title, url, snippet }[]
+  fetch(url) fetches a URL and extracts text content (HTML → markdown, truncated to ~10k chars)
+  Use web search to find chess programming techniques, Stockfish documentation, academic papers, and evaluation function approaches.
 forge.session: checkpoint() | accept() | reject() | push()
+
+## Tool Management
+
+- \`forge.tools.evalPlayer(username)\` — Submit a Stockfish evaluation job for a player's games. Returns job ID. The agent will block (wait) until the job completes.
+- \`forge.tools.status(jobId)\` — Check job status (pending/running/completed/failed) and retrieve output/error.
+- \`forge.tools.list()\` — List all tool jobs for the current session (id, tool_name, status, timestamps).
+
+## Permissions
+
+- \`forge.permissions.request(type, details)\` — Request additional permissions (e.g., network access to a new domain, filesystem write access). Returns request ID. The agent will block until the request is approved or rejected by an admin.
+- \`forge.permissions.pending()\` — List pending permission requests for the current session/agent.
+
+### Web Research
+
+You can search the web and fetch content to inform your research:
+
+- \`forge.web.search(query)\` — Search for chess programming resources, papers, and techniques
+- \`forge.web.fetch(url)\` — Fetch and extract content from a URL
+
+After finding useful information, add it to the knowledge base:
+\`forge.knowledge.create({ id, title, relevance, content })\`
+
+Use web search to:
+- Find chess programming techniques and algorithms
+- Look up Stockfish source code documentation
+- Research evaluation function approaches
+- Find academic papers on chess AI
 
 ### Recording an Experiment (MANDATORY after every eval)
 \`\`\`
@@ -287,10 +321,8 @@ function buildPastSessionsSummary(state: ForgeState, currentSessionId: string): 
 }
 
 function buildLeaderboardSection(agent: ForgeAgent, researchBias: number = 0.5): string {
-  // Lazy-import to avoid circular deps at module level
   let leaderboard: import("../state/types").LeaderboardEntry[] = [];
   try {
-    const { getLeaderboard } = require("../state/leaderboard-db");
     leaderboard = getLeaderboard();
   } catch {
     // SQLite not available (e.g., first run)
@@ -370,6 +402,7 @@ function buildRules(maxExperiments: number, researchBias: number = 0.5): string 
 4. **Typecheck after code changes** with \`forge.code.typecheck()\` before running eval.
 5. **Revert failed experiments** before trying the next one.
 6. **Checkpoint regularly** with \`forge.session.checkpoint()\` (every 2-3 experiments).
+7. **MINIMUM SAMPLE SIZE**: Every experiment must evaluate at least 20 positions. If a player's games lack Stockfish analysis (0 positions evaluated), you must first request pre-computation with \`forge.tools.evalPlayer(username)\` or choose a different player whose games have evaluations. Never record an experiment with 0 positions — this indicates missing analysis data, not a valid result.
 
 ### Mandatory: Hypothesis Generation Before Experiments
 Before running ANY experiments, you MUST generate a hypothesis set with exactly 3 hypotheses:
@@ -458,8 +491,8 @@ Before trying something new, run:
 \`forge.knowledge.search(topic)\`, \`forge.knowledge.notes({ tags: [topic] })\`, \`forge.history.searchExperiments(topic)\`
 Don't repeat failed experiments.
 
-### Push When Ready
-When you have achieved a statistically significant improvement, push the research branch for PR review with \`forge.session.push()\`.
-Push criteria: (a) composite score improved >= 0.01 over baseline, (b) improvement is statistically significant (p < 0.05), (c) no regressions in other metrics > 0.02, (d) typecheck passes.
-You have full autonomy to decide when the research is ready to be reviewed.`;
+### Auto-Push on Positive Results
+When a session completes with a composite score improvement >= 0.01 over baseline, the branch is **automatically pushed** to GitHub for PR review.
+You do NOT need to call \`forge.session.push()\` manually — focus on making the best possible improvement.
+If you want to push early (e.g., checkpoint a promising direction), you can still use \`forge.session.push()\` at any time.`;
 }

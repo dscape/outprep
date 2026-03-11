@@ -13,7 +13,7 @@ export default async function SessionDetailPage({
   const session = getSession(sessionId);
   if (!session) notFound();
 
-  const logs = getSessionLogs(session.name);
+  const logs = getSessionLogs(session.id);
   const activity = buildActivityLog(session);
   const agent = session.agentId ? getAgentBasicInfo(session.agentId) : null;
   const allAgents = getAgentSummaries().map((a) => ({

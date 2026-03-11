@@ -58,6 +58,26 @@ npm run forge -- attach
 
 # Ask the oracle (Claude → ChatGPT → Claude pipeline)
 npm run forge -- oracle "What temperature curve works best for 1500 Elo?"
+
+# Pre-compute Stockfish evaluations for a player's games
+npm run forge -- eval-player DrNykterstein
+npm run forge -- eval-player --all        # all unevaluated players
+
+# Start the background evaluation queue service
+npm run forge -- eval-service
+
+# Check eval job status
+npm run forge -- eval-status
+
+# Clean up stale PIDs and orphaned worktrees
+npm run forge -- clean
+
+# Agent management
+npm run forge -- agent start --players "Fins" --focus accuracy
+npm run forge -- agent start              # autonomous mode
+npm run forge -- agent ls                 # list agents with status
+npm run forge -- agent stop <agentId>     # stop a specific agent
+npm run forge -- agent stop --all         # stop all agents
 ```
 
 ## Key Metrics
@@ -74,43 +94,86 @@ npm run forge -- oracle "What temperature curve works best for 1500 Elo?"
 ```
 src/
 ├── cli.ts              # Entry point (commander)
+├── pid.ts              # Agent PID file management
 ├── agent/              # Autonomous research loop (Claude)
-│   ├── agent-loop.ts   # Main orchestration
+│   ├── agent-manager.ts # Outer loop — agent lifecycle, leaderboard
+│   ├── agent-loop.ts   # Inner loop — single session orchestration
+│   ├── agent-decision.ts # Autonomous decision-making between sessions
+│   ├── shared.ts       # Shared agent utilities (stop, status, player data)
 │   ├── system-prompt.ts
 │   ├── convergence.ts
 │   ├── cost-tracker.ts
+│   ├── log-writer.ts   # Dual-write to JSONL + SQLite
 │   └── tool-handler.ts
 ├── repl/               # Sandboxed eval environment
-│   ├── forge-api.ts    # forge.* API surface
+│   ├── forge-api.ts    # forge.* API surface (30+ methods)
 │   ├── eval-ops.ts     # forge.eval.run(), baseline()
 │   ├── _eval-worker.ts # Subprocess for harness evals
-│   ├── code-ops.ts     # forge.code.patch(), read()
+│   ├── code-ops.ts     # forge.code.prompt(), read()
 │   ├── config-ops.ts   # forge.config.get(), set()
-│   ├── session-ops.ts
-│   └── sandbox.ts      # Git worktree sandbox
+│   ├── session-ops.ts  # forge.session.push(), accept()
+│   ├── repl-server.ts  # Persistent TypeScript VM
+│   └── sandbox.ts      # Git worktree lifecycle + pushBranch()
+├── tools/              # Agent tool infrastructure
+│   ├── eval-service.ts # Background Stockfish eval queue
+│   ├── web-tools.ts    # Web search & fetch for agents
+│   └── permissions.ts  # Session permission management
 ├── metrics/            # Maia-aligned scoring
 │   ├── maia-scorer.ts  # Composite scorer + baseline
 │   ├── move-accuracy.ts
 │   ├── cpl-distribution.ts
 │   ├── blunder-profile.ts
 │   └── significance.ts # Bootstrap CI, permutation tests
-├── data/               # Player data & caching
-│   ├── game-store.ts   # Lichess download + local cache
+├── data/               # Player data & caching (SQLite-backed)
+│   ├── game-store.ts   # Lichess download + SQLite store
 │   ├── splits.ts       # Deterministic train/test splits
 │   └── eval-cache.ts   # Position eval cache (SQLite)
-├── state/              # Session persistence
+├── state/              # Persistence (SQLite)
 │   ├── types.ts
-│   └── forge-state.ts
+│   ├── forge-db.ts     # Central SQLite database (forge.db)
+│   ├── forge-state.ts  # Session/agent CRUD (SQLite-backed)
+│   └── leaderboard-db.ts
 ├── oracle/             # Multi-model consultation
 │   ├── oracle.ts
+│   ├── oracle-limiter.ts
+│   ├── surprise-tracker.ts
+│   ├── incremental-detector.ts
 │   └── clients.ts
+├── hypothesis/         # 3-hypothesis framework
+│   └── hypothesis-manager.ts
 ├── knowledge/          # Topic-based knowledge base
-│   └── index.ts
+│   ├── index.ts
+│   ├── topics/         # Curated research topics (markdown)
+│   └── notes/          # Agent research notes
 └── log/                # Experiment logging & trends
     ├── log-formatter.ts
     ├── trend-tracker.ts
     └── experiment-log.ts
 ```
+
+## Data Storage
+
+All persistent state is stored in **SQLite** (`forge.db`) with WAL mode for concurrent access:
+
+- **Sessions & agents** — replaces the old `forge-state.json`
+- **Player games & metadata** — replaces `data/games/*.json` files
+- **Pre-computed evaluations** — Stockfish evals cached per position
+- **Console logs** — dual-written to JSONL (streaming) + SQLite (querying)
+- **Tool jobs** — eval queue, blocking jobs for agent orchestration
+- **Permission requests** — agent permission request/approval flow
+
+The leaderboard has its own SQLite database (`leaderboard.db`) to prevent agent tampering.
+
+## Agent Architecture
+
+Agents run in a two-level loop:
+
+1. **Outer loop** (`agent-manager.ts`): Cycles sessions, makes autonomous decisions about what to research next, manages agent lifecycle and leaderboard
+2. **Inner loop** (`agent-loop.ts`): Runs a single research session — hypothesis → code changes → eval → record results
+
+Each session gets its own **git worktree** (sandbox). Worktrees persist across agent restarts — if an agent dies, its worktree stays intact for resumption. PIDs track agent processes only, not sessions.
+
+Positive results (composite delta ≥ 0.01, statistically significant) are **automatically pushed** to GitHub.
 
 ## Train/Test Methodology
 
