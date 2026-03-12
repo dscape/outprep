@@ -404,7 +404,7 @@ export interface AgentConfig {
 
 /* ── Agent Decision (autonomous mode) ──────────────────────── */
 
-export type AgentDecisionAction = "start_new" | "resume_session" | "join_session" | "wait";
+export type AgentDecisionAction = "start_new" | "resume_session" | "join_session" | "review_paper" | "wait";
 
 export interface AgentDecision {
   action: AgentDecisionAction;
@@ -413,6 +413,8 @@ export interface AgentDecision {
   resumeSessionId?: string;
   /** Session ID to join (any existing session, not just the agent's own) */
   joinSessionId?: string;
+  /** Paper ID to review (for review_paper action) */
+  reviewPaperId?: string;
   reasoning: string;
 }
 
@@ -442,6 +444,12 @@ export interface FeatureRequest {
   status: "open" | "accepted" | "rejected" | "implemented";
   response: string | null;
 }
+
+/* ── Papers (re-exported from papers module) ─────────────── */
+
+export type {
+  Paper, PaperStatus, PaperReview, ReviewRecommendation, AdjudicationResult,
+} from "../papers/paper-types";
 
 /* ── Top-Level Forge State ────────────────────────────────── */
 

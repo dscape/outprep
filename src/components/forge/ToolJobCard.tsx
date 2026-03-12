@@ -108,6 +108,7 @@ export function ToolJobCard({ job, compact }: { job: ToolJob; compact?: boolean 
     job.blocking === 1 && !["completed", "failed", "archived"].includes(job.status);
   const parsedInput = job.input ? (() => { try { return JSON.parse(job.input!); } catch { return job.input; } })() : null;
   const parsedOutput = job.output ? (() => { try { return JSON.parse(job.output!); } catch { return job.output; } })() : null;
+  const parsedProgress = job.progress ? (() => { try { return JSON.parse(job.progress!) as { gamesProcessed: number; totalGames: number; positionsEvaluated: number; currentGameId?: string; updatedAt?: string }; } catch { return null; } })() : null;
   const target = extractTarget(job.input);
   const stale = isStale(job);
   const isPending = job.status === "pending" || job.status === "running";
@@ -193,6 +194,11 @@ export function ToolJobCard({ job, compact }: { job: ToolJob; compact?: boolean 
                 {" · "}waiting {formatWaiting(job.created_at)}
               </span>
             )}
+            {job.status === "running" && parsedProgress && (
+              <span className="text-emerald-400">
+                {" · "}{parsedProgress.gamesProcessed}/{parsedProgress.totalGames} games
+              </span>
+            )}
             {job.started_at && job.completed_at && (
               <> · {formatDuration(job.started_at, job.completed_at)}</>
             )}
@@ -215,6 +221,38 @@ export function ToolJobCard({ job, compact }: { job: ToolJob; compact?: boolean 
               <pre className="text-xs text-zinc-400 bg-zinc-800/50 rounded p-2 overflow-x-auto">
                 {typeof parsedInput === "string" ? parsedInput : JSON.stringify(parsedInput, null, 2)}
               </pre>
+            </div>
+          )}
+          {parsedProgress && (job.status === "running" || job.status === "pending") && (
+            <div>
+              <p className="text-[10px] font-medium text-zinc-500 mb-1">Progress</p>
+              <div className="bg-zinc-800/50 rounded p-2">
+                <div className="flex items-center justify-between text-xs text-zinc-400 mb-1">
+                  <span>{parsedProgress.gamesProcessed}/{parsedProgress.totalGames} games</span>
+                  <span>{parsedProgress.positionsEvaluated} positions</span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-700">
+                  <div
+                    className="h-full bg-emerald-500 transition-[width] duration-500"
+                    style={{ width: `${parsedProgress.totalGames > 0 ? Math.round((parsedProgress.gamesProcessed / parsedProgress.totalGames) * 100) : 0}%` }}
+                  />
+                </div>
+                {parsedProgress.updatedAt && (
+                  <p className="text-[10px] text-zinc-600 mt-1">
+                    Last update: {formatWaiting(parsedProgress.updatedAt)} ago
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+          {stale && !parsedProgress && (
+            <div>
+              <p className="text-[10px] font-medium text-red-400 mb-1">Diagnostic</p>
+              <p className="text-xs text-red-300/70 bg-red-900/20 rounded p-2">
+                {job.status === "pending"
+                  ? `Queued for ${formatWaiting(job.created_at)} — the eval service has not picked up this job yet. Check the service status above.`
+                  : `Running for ${formatWaiting(job.started_at ?? job.created_at)} with no progress updates. The eval service may be stuck.`}
+              </p>
             </div>
           )}
           {job.status === "completed" && parsedOutput && (

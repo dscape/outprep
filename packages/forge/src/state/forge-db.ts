@@ -313,11 +313,63 @@ export function getForgeDb(): Database.Database {
     );
     CREATE INDEX IF NOT EXISTS idx_perm_requests_session ON permission_requests(session_id);
     CREATE INDEX IF NOT EXISTS idx_perm_requests_status ON permission_requests(status);
+
+    -- Papers (scientific publication lifecycle)
+    CREATE TABLE IF NOT EXISTS papers (
+      id TEXT PRIMARY KEY,
+      session_id TEXT NOT NULL,
+      agent_id TEXT NOT NULL,
+      agent_name TEXT NOT NULL,
+      title TEXT NOT NULL,
+      abstract TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      submission_count INTEGER DEFAULT 1,
+      composite_delta REAL DEFAULT 0,
+      branch_name TEXT,
+      git_path TEXT,
+      references_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      submitted_at TEXT,
+      accepted_at TEXT,
+      rejected_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_papers_session ON papers(session_id);
+    CREATE INDEX IF NOT EXISTS idx_papers_agent ON papers(agent_id);
+    CREATE INDEX IF NOT EXISTS idx_papers_status ON papers(status);
+
+    -- Paper reviews (peer review records)
+    CREATE TABLE IF NOT EXISTS paper_reviews (
+      id TEXT PRIMARY KEY,
+      paper_id TEXT NOT NULL,
+      reviewer_agent_id TEXT NOT NULL,
+      reviewer_agent_name TEXT NOT NULL,
+      round INTEGER NOT NULL DEFAULT 1,
+      summary TEXT,
+      strengths TEXT,
+      weaknesses TEXT,
+      questions TEXT,
+      recommendation TEXT NOT NULL,
+      detailed_comments TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_paper_reviews_paper ON paper_reviews(paper_id);
+    CREATE INDEX IF NOT EXISTS idx_paper_reviews_reviewer ON paper_reviews(reviewer_agent_id);
+
+    -- Paper references (citation graph)
+    CREATE TABLE IF NOT EXISTS paper_references (
+      citing_paper_id TEXT NOT NULL,
+      cited_paper_id TEXT NOT NULL,
+      PRIMARY KEY(citing_paper_id, cited_paper_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_paper_refs_cited ON paper_references(cited_paper_id);
   `);
 
   // ── Migrations (idempotent — ignore "column already exists" errors) ──
   try { _db.exec(`ALTER TABLE tool_jobs ADD COLUMN archived_at TEXT`); } catch {}
   try { _db.exec(`ALTER TABLE tool_jobs ADD COLUMN retry_count INTEGER DEFAULT 0`); } catch {}
+  try { _db.exec(`ALTER TABLE tool_jobs ADD COLUMN progress TEXT`); } catch {}
 
   return _db;
 }

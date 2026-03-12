@@ -80,7 +80,7 @@ export interface AgentConfig {
 
 /* ── Agent Decision (autonomous mode) ──────────────────────── */
 
-export type AgentDecisionAction = "start_new" | "resume_session" | "join_session" | "wait";
+export type AgentDecisionAction = "start_new" | "resume_session" | "join_session" | "review_paper" | "wait";
 
 export interface AgentDecision {
   action: AgentDecisionAction;
@@ -89,6 +89,8 @@ export interface AgentDecision {
   resumeSessionId?: string;
   /** Session ID to join (any existing session, not just the agent's own) */
   joinSessionId?: string;
+  /** Paper ID to review (for review_paper action) */
+  reviewPaperId?: string;
   reasoning: string;
 }
 
@@ -169,6 +171,7 @@ export interface ToolJob {
   blocking: number;
   archived_at: string | null;
   retry_count: number;
+  progress: string | null;
 }
 
 export interface PermissionRequestRow {
@@ -409,4 +412,45 @@ export interface SessionSummary {
   agentName: string | null;
   /** True when the agent process is actually running (PID alive) */
   isRunning: boolean;
+}
+
+/* ── Papers & Peer Review ──────────────────────────────────── */
+
+export type PaperStatus = "draft" | "submitted" | "under_review" | "accepted" | "rejected" | "abandoned";
+export type ReviewRecommendation = "accept" | "revise" | "reject";
+
+export interface PaperSummary {
+  id: string;
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  title: string;
+  abstract: string;
+  status: PaperStatus;
+  submissionCount: number;
+  compositeDelta: number;
+  branchName: string;
+  reviewCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PaperReviewSummary {
+  id: string;
+  paperId: string;
+  reviewerAgentName: string;
+  recommendation: ReviewRecommendation;
+  summary: string;
+  createdAt: string;
+}
+
+export interface PapersResponse {
+  papers: PaperSummary[];
+  counts: {
+    total: number;
+    submitted: number;
+    accepted: number;
+    rejected: number;
+    abandoned: number;
+  };
 }

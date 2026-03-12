@@ -13,6 +13,10 @@ import type { ForgeSession, ForgeState, BaselineSnapshot, ForgeAgent, AgentDecis
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { formatTrend, computeTrend } from "../log/trend-tracker";
 import { getLeaderboard } from "../state/leaderboard-db";
+import { listPapers } from "../papers/paper-db";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface PromptContext {
   session: ForgeSession;
@@ -49,6 +53,14 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     const knowledge = buildKnowledgeContext(area);
     if (knowledge) sections.push(knowledge);
   }
+
+  // Research process documentation (RESEARCH.md)
+  const researchDoc = loadResearchDoc();
+  if (researchDoc) sections.push(researchDoc);
+
+  // Published research papers (literature review)
+  const literature = buildLiteratureSection();
+  if (literature) sections.push(literature);
 
   // Inter-agent notes from previous sessions
   const notes = buildNotesContext(5);
@@ -175,6 +187,18 @@ forge.session: checkpoint() | accept() | reject() | push()
 - \`forge.permissions.request(type, details)\` — Request additional permissions (e.g., network access to a new domain, filesystem write access). Returns request ID. The agent will block until the request is approved or rejected by an admin.
 - \`forge.permissions.pending()\` — List pending permission requests for the current session/agent.
 
+## Research Papers
+
+- \`forge.papers.list({ status? })\` — List papers. Status: draft, submitted, under_review, accepted, rejected, abandoned.
+- \`forge.papers.get(paperId)\` — Read a paper's full content by ID.
+- \`forge.papers.search(query)\` — Search papers by keyword across titles, abstracts, and content.
+- \`forge.papers.reviews(paperId)\` — Get peer reviews for a paper.
+- \`forge.papers.cite(paperId)\` — Record that your current work references this paper. **Always cite relevant prior work.**
+- \`forge.papers.citedBy(paperId)\` — Find papers that cite a given paper.
+- \`forge.papers.current()\` — Get the paper from your current session (if generated).
+
+Before starting experiments, review existing papers to avoid re-exploring known territory.
+
 ### Web Research
 
 You can search the web and fetch content to inform your research:
@@ -209,6 +233,48 @@ forge.log.record({
 - CPL fields (avgBotCPL, cplDelta) can be null in quick evals — use optional chaining (?.).
 - forge.log.record() result field must be MaiaMetrics from forge.metrics.composite(), NOT a custom object.
 - forge.metrics.significance() needs arrays of per-position values, not aggregate numbers.`;
+
+/* ── Research Process Document ─────────────────────────────── */
+
+const __spDirname = dirname(fileURLToPath(import.meta.url));
+
+function loadResearchDoc(): string | null {
+  try {
+    const researchPath = join(__spDirname, "..", "..", "RESEARCH.md");
+    const content = readFileSync(researchPath, "utf-8");
+    return `## Research Process\n\n${content}`;
+  } catch {
+    return null;
+  }
+}
+
+/* ── Literature Section (Published Papers) ─────────────────── */
+
+function buildLiteratureSection(): string | null {
+  try {
+    const acceptedPapers = listPapers({ status: "accepted" });
+    const submittedPapers = listPapers({ status: "submitted" });
+    const papers = [...acceptedPapers, ...submittedPapers];
+
+    if (papers.length === 0) return null;
+
+    const lines: string[] = ["## Published Research Papers\n"];
+    lines.push("Review these before starting experiments. Cite relevant papers via `forge.papers.cite(id)`.\n");
+
+    for (const paper of papers.slice(-10)) {
+      lines.push(`### [${paper.id.slice(0, 8)}] ${paper.title}`);
+      lines.push(`Author: ${paper.agentName} | Status: ${paper.status} | Δ: ${paper.compositeDelta >= 0 ? "+" : ""}${paper.compositeDelta.toFixed(4)}`);
+      lines.push(`Abstract: ${paper.abstract.slice(0, 300)}`);
+      lines.push(`Branch: ${paper.branchName}\n`);
+    }
+
+    return lines.join("\n");
+  } catch {
+    return null;
+  }
+}
+
+/* ── Session State ──────────────────────────────────────────── */
 
 function buildSessionState(ctx: PromptContext): string {
   const { session, baseline, decision } = ctx;

@@ -4,17 +4,42 @@
  * Wraps @anthropic-ai/sandbox-runtime to enforce OS-level filesystem
  * and network restrictions on agent subprocesses (eval workers, claude -p).
  * Translates SessionPermissions into SandboxRuntimeConfig.
+ *
+ * The package is loaded lazily via dynamic import so the agent process
+ * doesn't crash if the package can't be resolved (e.g. monorepo hoisting).
  */
 
-import {
-  SandboxManager,
-  type SandboxRuntimeConfig,
-} from "@anthropic-ai/sandbox-runtime";
 import type { SessionPermissions } from "../tools/permissions";
+
+/* ── Minimal type for the subset of SandboxManager we use ─ */
+
+interface SandboxManagerAPI {
+  isSupportedPlatform(): boolean;
+  initialize(config: Record<string, unknown>): Promise<void>;
+  wrapWithSandbox(command: string): Promise<string>;
+  reset(): Promise<void>;
+}
 
 /* ── State ──────────────────────────────────────────────── */
 
 let initialized = false;
+
+/* ── Lazy loader for optional sandbox dependency ────────── */
+
+let _mgr: SandboxManagerAPI | null = null;
+let _loadAttempted = false;
+
+async function getSandboxManager(): Promise<SandboxManagerAPI | null> {
+  if (_loadAttempted) return _mgr;
+  _loadAttempted = true;
+  try {
+    const mod = await import("@anthropic-ai/sandbox-runtime");
+    _mgr = mod.SandboxManager as SandboxManagerAPI;
+  } catch {
+    _mgr = null;
+  }
+  return _mgr;
+}
 
 /* ── Sensitive paths denied from reads ──────────────────── */
 
@@ -31,7 +56,7 @@ const SENSITIVE_READ_PATHS = [
 
 /* ── Config translation ─────────────────────────────────── */
 
-function toSandboxConfig(perms: SessionPermissions): SandboxRuntimeConfig {
+function toSandboxConfig(perms: SessionPermissions): Record<string, unknown> {
   return {
     filesystem: {
       denyRead: SENSITIVE_READ_PATHS,
@@ -57,14 +82,20 @@ function toSandboxConfig(perms: SessionPermissions): SandboxRuntimeConfig {
 export async function initSandboxRuntime(
   perms: SessionPermissions,
 ): Promise<void> {
-  if (!SandboxManager.isSupportedPlatform()) {
+  const mgr = await getSandboxManager();
+  if (!mgr) {
+    console.warn("  ⚠ Sandbox runtime: package not available, running without sandbox");
+    return;
+  }
+
+  if (!mgr.isSupportedPlatform()) {
     console.warn("  ⚠ Sandbox runtime: platform not supported, running without sandbox");
     return;
   }
 
   const config = toSandboxConfig(perms);
   try {
-    await SandboxManager.initialize(config);
+    await mgr.initialize(config);
     initialized = true;
     console.log("  ✓ Sandbox runtime initialized");
   } catch (err) {
@@ -80,7 +111,9 @@ export async function initSandboxRuntime(
 export async function wrapCommand(command: string): Promise<string> {
   if (!initialized) return command;
   try {
-    return await SandboxManager.wrapWithSandbox(command);
+    const mgr = await getSandboxManager();
+    if (!mgr) return command;
+    return await mgr.wrapWithSandbox(command);
   } catch {
     return command;
   }
@@ -99,7 +132,8 @@ export function isSandboxAvailable(): boolean {
 export async function resetSandboxRuntime(): Promise<void> {
   if (!initialized) return;
   try {
-    await SandboxManager.reset();
+    const mgr = await getSandboxManager();
+    if (mgr) await mgr.reset();
   } catch {
     // ignore cleanup errors
   }

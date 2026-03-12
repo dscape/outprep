@@ -25,6 +25,10 @@ export class NodeStockfishAdapter implements ChessEngine {
     const sfPath = require.resolve("stockfish/bin/stockfish-18-single.js");
     const wasmDir = dirname(sfPath);
 
+    // The stockfish module's factory overwrites module.exports on first call,
+    // corrupting the require cache for subsequent calls. Clear it each time.
+    delete require.cache[sfPath];
+
     // Double-factory pattern: outerFactory() → innerFactory(opts) → Promise<module>
     const outerFactory = require(sfPath);
     const innerFactory = outerFactory();

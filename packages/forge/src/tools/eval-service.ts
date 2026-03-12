@@ -123,36 +123,28 @@ function extractPositionsFromGame(game: LichessGame, username: string): ChessPos
 /* ── Stockfish evaluation ────────────────────────────────── */
 
 /**
- * Evaluate a batch of positions using Stockfish at the specified depth.
- * Initializes a single Stockfish instance, evaluates all positions
- * sequentially, then disposes the engine.
+ * Evaluate a batch of positions using an already-initialized Stockfish engine.
+ * The caller is responsible for engine lifecycle (init/dispose).
  */
-async function evaluatePositions(positions: ChessPosition[], depth: number = 18): Promise<EvalResult[]> {
+async function evaluatePositions(engine: NodeStockfishAdapter, positions: ChessPosition[], depth: number = 18): Promise<EvalResult[]> {
   if (positions.length === 0) return [];
-
-  const engine = new NodeStockfishAdapter();
-  await engine.init();
 
   const results: EvalResult[] = [];
 
-  try {
-    for (const pos of positions) {
-      try {
-        const candidate = await engine.evaluate(pos.fen, depth);
-        results.push({
-          ...pos,
-          evalScore: candidate.score,
-          bestMove: candidate.uci,
-          depth: candidate.depth,
-        });
-      } catch (err) {
-        // Skip positions that Stockfish can't evaluate (e.g., already checkmate)
-        // but continue with the rest
-        console.warn(`    Warning: could not evaluate position: ${(err as Error).message}`);
-      }
+  for (const pos of positions) {
+    try {
+      const candidate = await engine.evaluate(pos.fen, depth);
+      results.push({
+        ...pos,
+        evalScore: candidate.score,
+        bestMove: candidate.uci,
+        depth: candidate.depth,
+      });
+    } catch (err) {
+      // Skip positions that Stockfish can't evaluate (e.g., already checkmate)
+      // but continue with the rest
+      console.warn(`    Warning: could not evaluate position: ${(err as Error).message}`);
     }
-  } finally {
-    engine.dispose();
   }
 
   return results;
@@ -205,6 +197,23 @@ async function processEvalJob(job: EvalJob): Promise<void> {
     let totalPositions = 0;
     let gamesProcessed = 0;
 
+    // Prepare progress writer
+    const updateProgress = db.prepare(
+      `UPDATE tool_jobs SET progress = ? WHERE id = ?`
+    );
+
+    // Write initial progress so the UI can show "0/N games" immediately
+    updateProgress.run(
+      JSON.stringify({
+        gamesProcessed: 0,
+        totalGames: games.length,
+        positionsEvaluated: 0,
+        currentGameId: null,
+        updatedAt: new Date().toISOString(),
+      }),
+      job.id,
+    );
+
     // Prepare statements for batch inserts
     const insertEval = db.prepare(`
       INSERT OR IGNORE INTO player_evaluations (username, game_id, fen, move_number, phase, eval_score, best_move, depth)
@@ -214,46 +223,65 @@ async function processEvalJob(job: EvalJob): Promise<void> {
       `UPDATE player_games SET has_eval = 1 WHERE username = ? AND game_id = ?`
     );
 
-    for (const row of games) {
-      try {
-        const game = JSON.parse(row.game_data) as LichessGame;
-        const positions = extractPositionsFromGame(game, username);
+    // Single engine instance for the entire job — avoids repeated init/dispose
+    // and the stockfish require-cache corruption bug
+    const engine = new NodeStockfishAdapter();
+    await engine.init();
 
-        if (positions.length > 0) {
-          // Evaluate with Stockfish
-          const evaluations = await evaluatePositions(positions);
+    try {
+      for (const row of games) {
+        try {
+          const game = JSON.parse(row.game_data) as LichessGame;
+          const positions = extractPositionsFromGame(game, username);
 
-          // Store evaluations in a transaction
-          const insertMany = db.transaction(() => {
-            for (const evalResult of evaluations) {
-              insertEval.run(
-                username,
-                row.game_id,
-                evalResult.fen,
-                evalResult.moveNumber,
-                evalResult.phase,
-                evalResult.evalScore,
-                evalResult.bestMove,
-                evalResult.depth
-              );
-            }
+          if (positions.length > 0) {
+            // Evaluate with Stockfish
+            const evaluations = await evaluatePositions(engine, positions);
+
+            // Store evaluations in a transaction
+            const insertMany = db.transaction(() => {
+              for (const evalResult of evaluations) {
+                insertEval.run(
+                  username,
+                  row.game_id,
+                  evalResult.fen,
+                  evalResult.moveNumber,
+                  evalResult.phase,
+                  evalResult.evalScore,
+                  evalResult.bestMove,
+                  evalResult.depth
+                );
+              }
+              markEvaled.run(username, row.game_id);
+            });
+            insertMany();
+
+            totalPositions += evaluations.length;
+          } else {
+            // No positions extractable — still mark to avoid re-processing
             markEvaled.run(username, row.game_id);
-          });
-          insertMany();
+          }
 
-          totalPositions += evaluations.length;
-        } else {
-          // No positions extractable — still mark to avoid re-processing
-          markEvaled.run(username, row.game_id);
+          gamesProcessed++;
+          if (gamesProcessed % 5 === 0 || gamesProcessed === games.length) {
+            updateProgress.run(
+              JSON.stringify({
+                gamesProcessed,
+                totalGames: games.length,
+                positionsEvaluated: totalPositions,
+                currentGameId: row.game_id,
+                updatedAt: new Date().toISOString(),
+              }),
+              job.id,
+            );
+            console.log(`    ... ${gamesProcessed}/${games.length} games, ${totalPositions} positions`);
+          }
+        } catch (err) {
+          console.warn(`    Warning: error processing game ${row.game_id}: ${(err as Error).message}`);
         }
-
-        gamesProcessed++;
-        if (gamesProcessed % 10 === 0) {
-          console.log(`    ... ${gamesProcessed}/${games.length} games, ${totalPositions} positions`);
-        }
-      } catch (err) {
-        console.warn(`    Warning: error processing game ${row.game_id}: ${(err as Error).message}`);
       }
+    } finally {
+      engine.dispose();
     }
 
     // Mark job as completed

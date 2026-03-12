@@ -48,6 +48,7 @@ export async function GET(request: NextRequest) {
     const db = new Database(DB_PATH);
     try { db.exec(`ALTER TABLE tool_jobs ADD COLUMN archived_at TEXT`); } catch {}
     try { db.exec(`ALTER TABLE tool_jobs ADD COLUMN retry_count INTEGER DEFAULT 0`); } catch {}
+    try { db.exec(`ALTER TABLE tool_jobs ADD COLUMN progress TEXT`); } catch {}
 
     // ── Auto-archive orphaned tasks ──
     // Find agents with pending/running blocking jobs, check if alive

@@ -34,6 +34,12 @@ import { buildPlayerData, getPlayerEloMap } from "./shared";
 import { defaultPermissions } from "../tools/permissions";
 import { initSandboxRuntime, resetSandboxRuntime } from "../repl/sandbox-runtime";
 import type { ForgeAgent, ForgeSession, AgentDecision } from "../state/types";
+import { generatePaper } from "../papers/paper-generator";
+import { generateReview } from "../papers/paper-reviewer";
+import { adjudicateReviews } from "../papers/paper-adjudicator";
+import { getPaper, updatePaper, insertReview, getReviewsForPaper, getReviewCountForPaper } from "../papers/paper-db";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 /**
  * Build a semantic session name from players, focus, and ELO range.
@@ -314,6 +320,27 @@ async function runAgentOuterLoop(
         }
       }
 
+      // ── Bootstrap: discover players if none exist ──────────
+      if (autonomous) {
+        const { listPlayers } = await import("../data/game-store");
+        if (listPlayers().length === 0) {
+          console.log(`\n  No players in database. Bootstrapping via web search...`);
+          const bootstrapped = await bootstrapPlayers(agentId);
+          if (bootstrapped.length === 0) {
+            console.log(`  Bootstrap failed — no players discovered. Retrying in 60s...`);
+            waitRetries++;
+            if (waitRetries >= MAX_WAIT_RETRIES) {
+              console.log(`\n  Bootstrap failed after ${MAX_WAIT_RETRIES} retries. Agent stopping.`);
+              break;
+            }
+            await new Promise((r) => setTimeout(r, 60_000));
+            continue;
+          }
+          console.log(`  Bootstrapped ${bootstrapped.length} player(s): ${bootstrapped.join(", ")}`);
+          waitRetries = 0;
+        }
+      }
+
       // ── Decision Step ──────────────────────────────────────
       let decision: AgentDecision;
       let decisionCost = { inputTokens: 0, outputTokens: 0, costUsd: 0 };
@@ -370,6 +397,27 @@ async function runAgentOuterLoop(
       console.log(`  Agent "${agentName}" — Session #${sessionNumber}`);
       console.log(`  Action: ${decision.action} | Players: ${decision.players.join(", ")} | Focus: ${decision.focus}`);
       console.log(`  ══════════════════════════════════════════\n`);
+
+      // ── Handle review_paper (lightweight — no full session for peer review)
+      if (decision.action === "review_paper" && decision.reviewPaperId) {
+        const handled = await handlePaperReview(agentId, agentName, decision.reviewPaperId);
+        if (handled) {
+          // Peer review completed (not author's paper) — continue to next decision
+          continue;
+        }
+        // Author's own paper needing revision → fall through to start a new session
+        // with the paper's branch as the starting point
+        console.log(`  Starting revision session for paper ${decision.reviewPaperId}...`);
+        const paperForRevision = getPaper(decision.reviewPaperId);
+        if (paperForRevision) {
+          decision = {
+            action: "start_new",
+            players: decision.players,
+            focus: decision.focus || "accuracy",
+            reasoning: `Revision session for paper "${paperForRevision.title}" — addressing reviewer feedback`,
+          };
+        }
+      }
 
       // ── Execute decision ───────────────────────────────────
       let result: { session: ForgeSession | null };
@@ -517,6 +565,179 @@ async function downloadPlayers(usernames: string[]): Promise<string[]> {
 }
 
 /**
+ * Bootstrap player data when none exists.
+ * Searches the web for Lichess usernames + hits the Lichess leaderboard API,
+ * then fetches player profiles/games. Logs steps as tool_jobs for dashboard.
+ */
+async function bootstrapPlayers(agentId: string): Promise<string[]> {
+  const { createWebTools } = await import("../tools/web-tools");
+  const { fetchPlayer, getGames } = await import("../data/game-store");
+  const { getForgeDb } = await import("../state/forge-db");
+  const { randomUUID } = await import("node:crypto");
+
+  const webTools = createWebTools();
+  const db = getForgeDb();
+
+  function logJob(toolName: string, input: unknown): string {
+    const id = randomUUID();
+    db.prepare(
+      `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+       VALUES (?, 'bootstrap', ?, ?, 'running', ?, ?, 0, 0)`
+    ).run(id, agentId, toolName, JSON.stringify(input), new Date().toISOString());
+    return id;
+  }
+
+  function completeJob(id: string, output: string) {
+    db.prepare(
+      `UPDATE tool_jobs SET status = 'completed', output = ?, completed_at = ? WHERE id = ?`
+    ).run(output.slice(0, 10000), new Date().toISOString(), id);
+  }
+
+  function failJob(id: string, error: string) {
+    db.prepare(
+      `UPDATE tool_jobs SET status = 'failed', error = ?, completed_at = ? WHERE id = ?`
+    ).run(error, new Date().toISOString(), id);
+  }
+
+  // ── Step 1: Discover usernames via web search ──
+
+  const queries = [
+    "lichess player 1500 rating profile site:lichess.org/@",
+    "lichess 1200 elo player rapid site:lichess.org/@",
+    "lichess intermediate player classical games site:lichess.org/@",
+  ];
+
+  const discovered = new Map<string, number | null>(); // username → rating hint
+  const PROFILE_RE = /lichess\.org\/@\/([A-Za-z0-9_-]{2,20})/g;
+  const EXCLUDED = new Set([
+    "lichess", "api", "team", "tournament", "swiss", "broadcast", "tv", "forum",
+  ]);
+
+  for (const query of queries) {
+    const jobId = logJob("bootstrap_search", { query });
+    try {
+      console.log(`    Searching: "${query}"`);
+      const results = await webTools.search(query);
+      const found: string[] = [];
+      for (const r of results) {
+        const text = `${r.url} ${r.snippet} ${r.title}`;
+        let match: RegExpExecArray | null;
+        PROFILE_RE.lastIndex = 0;
+        while ((match = PROFILE_RE.exec(text)) !== null) {
+          const name = match[1];
+          if (!EXCLUDED.has(name.toLowerCase()) && !discovered.has(name)) {
+            discovered.set(name, null);
+            found.push(name);
+          }
+        }
+      }
+      completeJob(jobId, JSON.stringify({ results: results.length, usernames: found }));
+      console.log(`    Found ${found.length} username(s)`);
+    } catch (err) {
+      failJob(jobId, (err as Error).message);
+      console.warn(`    Search failed: ${(err as Error).message}`);
+    }
+  }
+
+  // ── Step 2: Lichess rating-capped tournaments for diverse Elo ──
+  //
+  // Fetch players from active rating-capped arenas (≤1500, ≤2000, etc.)
+  // instead of the top leaderboard, to get lower-rated players that are
+  // more valuable for Maia-style research.
+
+  const jobId2 = logJob("bootstrap_tournament", { source: "lichess arena API" });
+  try {
+    console.log(`    Fetching Lichess tournaments for diverse-rated players...`);
+    const res = await fetch("https://lichess.org/api/tournament", {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (res.ok) {
+      const data = await res.json() as {
+        started?: { id: string; fullName: string; nbPlayers: number }[];
+      };
+      // Find rating-capped tournaments with enough players
+      const capped = (data.started ?? [])
+        .filter((t) => /≤\d+/.test(t.fullName) && t.nbPlayers >= 20)
+        .sort((a, b) => b.nbPlayers - a.nbPlayers)
+        .slice(0, 3);
+
+      let totalFound = 0;
+      for (const t of capped) {
+        try {
+          const tRes = await fetch(
+            `https://lichess.org/api/tournament/${t.id}/results?nb=10`,
+            { headers: { Accept: "application/x-ndjson" }, signal: AbortSignal.timeout(10_000) },
+          );
+          if (tRes.ok) {
+            const lines = (await tRes.text()).trim().split("\n").filter(Boolean);
+            for (const line of lines) {
+              const p = JSON.parse(line) as { username: string; rating: number };
+              if (p.username && !EXCLUDED.has(p.username.toLowerCase()) && !discovered.has(p.username)) {
+                discovered.set(p.username, p.rating);
+                totalFound++;
+              }
+            }
+          }
+        } catch { /* skip individual tournament failures */ }
+      }
+      completeJob(jobId2, JSON.stringify({ tournaments: capped.length, players: totalFound }));
+      console.log(`    Tournaments: ${totalFound} player(s) from ${capped.length} arena(s)`);
+    } else {
+      failJob(jobId2, `HTTP ${res.status}`);
+    }
+  } catch (err) {
+    failJob(jobId2, (err as Error).message);
+    console.warn(`    Tournament fetch failed: ${(err as Error).message}`);
+  }
+
+  if (discovered.size === 0) {
+    console.log("    No usernames discovered.");
+    return [];
+  }
+
+  // ── Step 3: Select diverse candidates, preferring lower-rated players ──
+  //
+  // Lower-rated players (1200-2000) are more valuable for Maia-style
+  // research since Stockfish depth differences matter less and human
+  // move patterns are more distinctive.
+
+  const entries = Array.from(discovered.entries());
+  // Sort: known ratings first (ascending — lower rated first), unknown last
+  entries.sort((a, b) => {
+    if (a[1] != null && b[1] != null) return a[1] - b[1];
+    if (a[1] != null) return -1;
+    if (b[1] != null) return 1;
+    return 0;
+  });
+  const candidates = entries.slice(0, 5).map(([name]) => name);
+  console.log(`    Candidates: ${candidates.join(", ")}`);
+
+  const valid: string[] = [];
+  for (const username of candidates) {
+    const jobId = logJob("bootstrap_fetch_player", { username });
+    try {
+      console.log(`    Fetching ${username} from Lichess...`);
+      const data = await fetchPlayer(username);
+      const games = getGames(username);
+      if (games.length === 0) {
+        failJob(jobId, "0 games found");
+        console.log(`    [${username}] 0 games — skipped`);
+      } else {
+        completeJob(jobId, JSON.stringify({ elo: data.estimatedElo, games: games.length }));
+        console.log(`    [${username}] ✓ ${games.length} games (Elo: ${data.estimatedElo})`);
+        valid.push(username);
+      }
+    } catch (err) {
+      failJob(jobId, (err as Error).message);
+      console.warn(`    [${username}] Failed: ${(err as Error).message}`);
+    }
+  }
+
+  return valid;
+}
+
+/**
  * Run a single NEW research session for an agent.
  */
 async function runAgentSession(
@@ -656,19 +877,8 @@ async function runAgentSession(
     if (session.status === "completed" || session.status === "abandoned") {
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
 
-      // Auto-push positive results
-      if (session.status === "completed" && session.bestResult && session.baseline) {
-        const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
-        const delta = session.bestResult.compositeScore - baselineComposite;
-        if (delta >= 0.01) {
-          try {
-            pushBranch(sandbox.branchName);
-            console.log(`  \u2713 Auto-pushed branch ${sandbox.branchName} (composite \u0394 +${delta.toFixed(4)})`);
-          } catch (err) {
-            console.log(`  \u26A0 Auto-push failed for ${sandbox.branchName}: ${err}`);
-          }
-        }
-      }
+      // Generate paper and push branch
+      await generateAndPushPaper(session, sandbox, agentId, agentName);
 
       destroySandbox(sandbox);
     }
@@ -791,19 +1001,8 @@ async function resumeAgentSession(
     if (session.status === "completed" || session.status === "abandoned") {
       try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
 
-      // Auto-push positive results
-      if (session.status === "completed" && session.bestResult && session.baseline) {
-        const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
-        const delta = session.bestResult.compositeScore - baselineComposite;
-        if (delta >= 0.01) {
-          try {
-            pushBranch(sandbox.branchName);
-            console.log(`  \u2713 Auto-pushed branch ${sandbox.branchName} (composite \u0394 +${delta.toFixed(4)})`);
-          } catch (err) {
-            console.log(`  \u26A0 Auto-push failed for ${sandbox.branchName}: ${err}`);
-          }
-        }
-      }
+      // Generate paper and push branch
+      await generateAndPushPaper(session, sandbox, agentId, agentName);
 
       destroySandbox(sandbox);
     }
@@ -863,6 +1062,126 @@ function injectAgentExtensions(
   forgeApi._onExperimentRecorded = () => {
     recordSessionToLeaderboard(agentId, agentName, session, sessionStartedAt);
   };
+}
+
+/**
+ * Generate a research paper, write it to the sandbox, and push the branch.
+ * Called after session completion (both new and resumed sessions).
+ */
+async function generateAndPushPaper(
+  session: ForgeSession,
+  sandbox: { worktreePath: string; branchName: string },
+  agentId: string,
+  agentName: string,
+): Promise<void> {
+  try {
+    console.log(`  📝 Generating research paper...`);
+    const paper = await generatePaper(session, agentId, agentName, sandbox.branchName);
+
+    // Write paper.md to the git worktree
+    writeFileSync(join(sandbox.worktreePath, "paper.md"), paper.content, "utf-8");
+    commitSandbox(sandbox as any, `forge: add research paper "${paper.title}"`);
+
+    // Determine status based on improvement
+    const baselineComposite = session.baseline?.aggregate?.compositeScore ?? 0;
+    const bestComposite = session.bestResult?.compositeScore ?? 0;
+    const delta = bestComposite - baselineComposite;
+
+    if (delta > 0) {
+      updatePaper(paper.id, { status: "submitted", submittedAt: new Date().toISOString() });
+      console.log(`  📄 Paper "${paper.title}" submitted for review (Δ +${delta.toFixed(4)})`);
+    } else {
+      updatePaper(paper.id, { status: "abandoned" });
+      console.log(`  📄 Paper "${paper.title}" auto-abandoned (no improvement)`);
+    }
+
+    // Always push — paper + code need to be on the remote
+    try {
+      pushBranch(sandbox.branchName);
+      console.log(`  ✓ Pushed branch ${sandbox.branchName}`);
+    } catch (pushErr) {
+      console.log(`  ⚠ Push failed for ${sandbox.branchName}: ${pushErr}`);
+    }
+  } catch (paperErr) {
+    console.warn(`  ⚠ Paper generation failed: ${paperErr}`);
+
+    // Fallback: push positive results without paper
+    if (session.status === "completed" && session.bestResult && session.baseline) {
+      const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
+      const delta = session.bestResult.compositeScore - baselineComposite;
+      if (delta >= 0.01) {
+        try {
+          pushBranch(sandbox.branchName);
+          console.log(`  ✓ Auto-pushed branch ${sandbox.branchName} (composite Δ +${delta.toFixed(4)})`);
+        } catch (err) {
+          console.log(`  ⚠ Auto-push failed for ${sandbox.branchName}: ${err}`);
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Handle a "review_paper" decision. If the agent is NOT the author,
+ * generate a peer review. If both reviews are in, adjudicate.
+ * Returns true if a review was performed (no full session needed).
+ */
+async function handlePaperReview(
+  agentId: string,
+  agentName: string,
+  paperId: string,
+): Promise<boolean> {
+  const paper = getPaper(paperId);
+  if (!paper) {
+    console.log(`  ⚠ Paper ${paperId} not found.`);
+    return false;
+  }
+
+  // ── Author's own paper needing revision → needs a full session
+  if (paper.agentId === agentId) {
+    console.log(`  📝 Paper "${paper.title}" is your own — starting revision session...`);
+    return false; // Caller will handle as a full session
+  }
+
+  // ── Peer review by a different agent
+  const existingReviews = getReviewCountForPaper(paper.id, paper.submissionCount);
+  if (existingReviews >= 2) {
+    console.log(`  ⚠ Paper "${paper.title}" already has 2 reviews for round ${paper.submissionCount}.`);
+    return true;
+  }
+
+  console.log(`  🔍 Reviewing paper "${paper.title}" by ${paper.agentName}...`);
+
+  // Update paper status
+  if (paper.status === "submitted") {
+    updatePaper(paper.id, { status: "under_review" });
+  }
+
+  const review = await generateReview(paper, agentId, agentName, paper.submissionCount);
+  insertReview(review);
+
+  console.log(`  ✓ Review submitted: ${review.recommendation} (${review.strengths.length} strengths, ${review.weaknesses.length} weaknesses)`);
+
+  // Check if we now have 2 reviews → adjudicate
+  const allReviews = getReviewsForPaper(paper.id, paper.submissionCount);
+  if (allReviews.length >= 2) {
+    const result = adjudicateReviews(allReviews);
+    console.log(`  📋 Adjudication: ${result.outcome} — ${result.reason}`);
+
+    if (result.outcome === "accepted") {
+      updatePaper(paper.id, { status: "accepted", acceptedAt: new Date().toISOString() });
+    } else if (result.outcome === "rejected") {
+      updatePaper(paper.id, { status: "rejected", rejectedAt: new Date().toISOString() });
+    } else if (result.outcome === "needs_revision") {
+      if (paper.submissionCount >= 3) {
+        updatePaper(paper.id, { status: "rejected", rejectedAt: new Date().toISOString() });
+        console.log(`  ⛔ Paper rejected after 3 submissions.`);
+      }
+      // Otherwise, paper stays "under_review" — author picks it up via decision step
+    }
+  }
+
+  return true;
 }
 
 function recordSessionToLeaderboard(

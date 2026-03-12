@@ -46,14 +46,41 @@ function groupByAgent(jobs: ToolJob[]): AgentGroup[] {
   });
 }
 
+interface EvalServiceInfo {
+  running: boolean;
+  pid: number | null;
+  pidAlive: boolean;
+  activeJobId: string | null;
+  activeJobProgress: { gamesProcessed: number; totalGames: number; positionsEvaluated: number; updatedAt?: string } | null;
+  queueDepth: number;
+  lastCompletedAt: string | null;
+  lastError: string | null;
+}
+
+function formatElapsed(iso: string): string {
+  const elapsed = Date.now() - new Date(iso).getTime();
+  const seconds = Math.round(elapsed / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ${minutes % 60}m`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ${hours % 24}h`;
+}
+
 function EvalServiceBanner({ staleCount }: { staleCount: number }) {
   const [evalRunning, setEvalRunning] = useState<boolean | null>(null);
+  const [serviceInfo, setServiceInfo] = useState<EvalServiceInfo | null>(null);
   const [starting, setStarting] = useState(false);
 
   const checkStatus = useCallback(() => {
     fetch("/api/forge/eval-service")
       .then((r) => r.json())
-      .then((d) => setEvalRunning(d.running))
+      .then((d) => {
+        setEvalRunning(d.running);
+        setServiceInfo(d);
+      })
       .catch(() => setEvalRunning(null));
   }, []);
 
@@ -77,36 +104,40 @@ function EvalServiceBanner({ staleCount }: { staleCount: number }) {
     setStarting(false);
   }
 
-  if (staleCount === 0 && evalRunning !== false) return null;
+  // Derive process state from PID, not from DB activity
+  const processAlive = serviceInfo?.pidAlive ?? false;
+  const processDead = serviceInfo ? !serviceInfo.pidAlive : evalRunning === false;
+
+  if (staleCount === 0 && !processDead) return null;
 
   return (
     <div className={`rounded-lg border p-3 flex items-start gap-3 ${
-      evalRunning === false
+      processDead
         ? "border-red-800/60 bg-red-900/20"
         : "border-amber-800/60 bg-amber-900/20"
     }`}>
       <span className={`text-lg leading-none mt-0.5 ${
-        evalRunning === false ? "text-red-400" : "text-amber-400"
+        processDead ? "text-red-400" : "text-amber-400"
       }`}>!</span>
       <div className="flex-1">
         <div className="flex items-center justify-between gap-3">
           <div>
             <p className={`text-sm font-medium ${
-              evalRunning === false ? "text-red-300" : "text-amber-300"
+              processDead ? "text-red-300" : "text-amber-300"
             }`}>
-              {evalRunning === false
+              {processDead
                 ? `Eval service is not running — ${staleCount} stale job${staleCount !== 1 ? "s" : ""}`
                 : `${staleCount} stale job${staleCount !== 1 ? "s" : ""}`}
             </p>
             <p className={`text-xs mt-0.5 ${
-              evalRunning === false ? "text-red-400/70" : "text-amber-400/70"
+              processDead ? "text-red-400/70" : "text-amber-400/70"
             }`}>
-              {evalRunning === false
+              {processDead
                 ? "Jobs are piling up with no processor. Start the eval service to begin processing."
                 : "Jobs have been pending for over 5 minutes. The eval service may be overloaded."}
             </p>
           </div>
-          {evalRunning === false && (
+          {processDead ? (
             <button
               onClick={handleStart}
               disabled={starting}
@@ -114,8 +145,7 @@ function EvalServiceBanner({ staleCount }: { staleCount: number }) {
             >
               {starting ? "Starting..." : "Start Eval Service"}
             </button>
-          )}
-          {evalRunning === true && (
+          ) : processAlive ? (
             <span className="inline-flex items-center gap-1.5 shrink-0 rounded-full bg-emerald-900/50 px-2.5 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800/50">
               <span className="relative flex h-2 w-2">
                 <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
@@ -123,8 +153,34 @@ function EvalServiceBanner({ staleCount }: { staleCount: number }) {
               </span>
               Service Running
             </span>
-          )}
+          ) : null}
         </div>
+        {staleCount > 0 && serviceInfo && (
+          <div className="mt-2 pt-2 border-t border-amber-800/30 space-y-1">
+            <div className="flex items-center gap-3 text-[10px] flex-wrap">
+              <span className="text-zinc-500">
+                Queue: {serviceInfo.queueDepth} pending
+              </span>
+              {serviceInfo.lastCompletedAt && (
+                <span className="text-zinc-500">
+                  Last completed: {formatElapsed(serviceInfo.lastCompletedAt)} ago
+                </span>
+              )}
+            </div>
+            {serviceInfo.activeJobProgress && (
+              <p className={`text-[10px] ${processDead ? "text-red-300" : "text-amber-300"}`}>
+                {processDead ? "Stuck" : "Processing"}: {serviceInfo.activeJobProgress.gamesProcessed}/
+                {serviceInfo.activeJobProgress.totalGames} games
+                {" "}({serviceInfo.activeJobProgress.positionsEvaluated} positions)
+              </p>
+            )}
+            {serviceInfo.lastError && (
+              <p className="text-[10px] text-red-400 truncate">
+                Last error: {serviceInfo.lastError}
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

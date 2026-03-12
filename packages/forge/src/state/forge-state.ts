@@ -618,7 +618,11 @@ export function loadState(): ForgeState {
     db.prepare("SELECT COUNT(*) as cnt FROM sessions").get() as { cnt: number }
   ).cnt;
 
-  if (sessionCount === 0) {
+  const agentCount = (
+    db.prepare("SELECT COUNT(*) as cnt FROM agents").get() as { cnt: number }
+  ).cnt;
+
+  if (sessionCount === 0 && agentCount === 0) {
     const legacy = migrateFromJson();
     if (legacy) {
       // Persist the legacy state into SQLite and return it

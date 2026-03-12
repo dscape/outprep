@@ -43,6 +43,7 @@ import { createSurpriseTracker, type SurpriseHealthAssessment } from "../oracle/
 import { detectIncrementalPattern } from "../oracle/incremental-detector";
 import { createHypothesisOps, type HypothesisOps } from "../hypothesis/hypothesis-manager";
 import { createWebTools, type WebTools, type SearchResult } from "../tools/web-tools";
+import { createPapersOps, type PapersOps } from "./papers-ops";
 import { writeExperimentLog } from "../log/log-formatter";
 import { computeTrend, formatTrend } from "../log/trend-tracker";
 import { randomUUID } from "node:crypto";
@@ -180,6 +181,8 @@ export interface ForgeApi {
   web: WebOps;
   tools: ToolOps;
   permissions: PermissionOps;
+  /** Scientific paper catalog (search, cite, read) */
+  papers: PapersOps;
   /** Leaderboard access (read-only, injected by agent-manager) */
   leaderboard?: LeaderboardOps;
   /** File a feature request (injected by agent-manager) */
@@ -771,6 +774,8 @@ export function createForgeApi(
     },
   };
 
+  const papersOps = createPapersOps(session);
+
   const api: ForgeApi = {
     code: wrappedCodeOps,
     config: configOps,
@@ -786,6 +791,7 @@ export function createForgeApi(
     web: webTools,
     tools,
     permissions,
+    papers: papersOps,
     get _onExperimentRecorded() { return callbacks.onExperimentRecorded; },
     set _onExperimentRecorded(fn: (() => void) | undefined) { callbacks.onExperimentRecorded = fn; },
     compare(a: TestResult, b: TestResult) {
