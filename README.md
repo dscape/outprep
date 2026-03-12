@@ -116,8 +116,8 @@ npm run harness:compare -- results/a.json results/b.json
 Autonomous research agent that iteratively improves bot accuracy. Forge uses Claude to propose code/config changes, evaluates them against held-out test games, and keeps what works. Each research session runs in an isolated git worktree.
 
 ```bash
-# Copy the env template and add your Anthropic API key (+ optional OpenAI key for oracle)
-cp packages/forge/.env.example packages/forge/.env
+# Add your Anthropic API key to .env (required for forge)
+# ANTHROPIC_API_KEY=sk-ant-...
 
 # Start a research session targeting a player's accuracy
 npm run forge -- research --players "username" --focus accuracy

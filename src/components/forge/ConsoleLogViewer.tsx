@@ -20,16 +20,21 @@ export function ConsoleLogViewer({
 }) {
   const [lines, setLines] = useState<LogEntry[]>([]);
   const [paused, setPaused] = useState(false);
+  const [stayInPlace, setStayInPlace] = useState(false);
   const [connected, setConnected] = useState(false);
   const [done, setDone] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [collapsedEntries, setCollapsedEntries] = useState<Set<number>>(new Set());
   const bufferRef = useRef<LogEntry[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lineRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const pausedRef = useRef(paused);
+  const stayInPlaceRef = useRef(stayInPlace);
 
   pausedRef.current = paused;
+  stayInPlaceRef.current = stayInPlace;
 
   const scrollToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -42,9 +47,11 @@ export function ConsoleLogViewer({
         setLines((prev) => [...prev, ...bufferRef.current]);
         bufferRef.current = [];
       }
-      scrollToBottom();
+      if (!stayInPlace) {
+        scrollToBottom();
+      }
     }
-  }, [paused, scrollToBottom]);
+  }, [paused, stayInPlace, scrollToBottom]);
 
   // Scroll to the closest line matching highlightTs
   useEffect(() => {
@@ -79,9 +86,11 @@ export function ConsoleLogViewer({
           bufferRef.current.push(entry);
         } else {
           setLines((prev) => [...prev, entry]);
-          requestAnimationFrame(() => {
-            bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-          });
+          if (!stayInPlaceRef.current) {
+            requestAnimationFrame(() => {
+              bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+            });
+          }
         }
       } catch {
         // skip malformed lines
@@ -119,6 +128,31 @@ export function ConsoleLogViewer({
     }
   };
 
+  const isCollapsible = (msg: string) => msg.split("\n").length > 3;
+
+  const toggleCollapse = (index: number) => {
+    setCollapsedEntries((prev) => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  const collapseAll = () => {
+    const toCollapse = new Set<number>();
+    lines.forEach((entry, i) => {
+      if (isCollapsible(entry.msg)) toCollapse.add(i);
+    });
+    setCollapsedEntries(toCollapse);
+  };
+
+  const expandAll = () => {
+    setCollapsedEntries(new Set());
+  };
+
+  const hasCollapsible = lines.some((entry) => isCollapsible(entry.msg));
+
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-950 overflow-hidden">
       {/* Header */}
@@ -151,6 +185,43 @@ export function ConsoleLogViewer({
           >
             {paused ? "Resume" : "Pause"}
           </button>
+          <button
+            onClick={() => {
+              const next = !stayInPlace;
+              setStayInPlace(next);
+              if (!next) scrollToBottom();
+            }}
+            className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
+              stayInPlace
+                ? "bg-blue-900/40 text-blue-400 hover:bg-blue-900/60"
+                : "bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+            }`}
+            title={stayInPlace ? "Click to resume auto-scroll to bottom" : "Click to pin scroll position"}
+          >
+            {stayInPlace ? "\u{1F4CC} Pinned" : "Stay in Place"}
+          </button>
+          {hasCollapsible && (
+            <button
+              onClick={collapsedEntries.size > 0 ? expandAll : collapseAll}
+              className="px-3 py-1 text-xs rounded font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 transition-colors"
+            >
+              {collapsedEntries.size > 0 ? "Expand All" : "Collapse All"}
+            </button>
+          )}
+          <button
+            onClick={() => {
+              const text = lines
+                .map((l) => `${formatTime(l.ts)} ${l.msg}`)
+                .join("\n");
+              navigator.clipboard.writeText(text).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+            className="px-3 py-1 text-xs rounded font-medium bg-zinc-800 text-zinc-400 hover:bg-zinc-700 transition-colors"
+          >
+            {copied ? "Copied!" : "Copy All"}
+          </button>
         </div>
       </div>
 
@@ -165,26 +236,54 @@ export function ConsoleLogViewer({
         {lines.length === 0 && done && (
           <p className="text-zinc-600">No console output recorded.</p>
         )}
-        {lines.map((entry, i) => (
-          <div
-            key={i}
-            ref={(el) => {
-              if (el) lineRefs.current.set(i, el);
-            }}
-            className={`flex gap-2 ${
-              highlightIdx === i
-                ? "bg-amber-900/30 border-l-2 border-amber-400 pl-2 -ml-2"
-                : ""
-            }`}
-          >
-            <span className="text-zinc-600 shrink-0 select-none">
-              {formatTime(entry.ts)}
-            </span>
-            <pre className={`${levelColor(entry.level)} whitespace-pre-wrap break-all`}>
-              {entry.msg}
-            </pre>
-          </div>
-        ))}
+        {lines.map((entry, i) => {
+          const collapsible = isCollapsible(entry.msg);
+          const collapsed = collapsedEntries.has(i);
+          const msgLines = entry.msg.split("\n");
+          const lineCount = msgLines.length;
+
+          return (
+            <div
+              key={i}
+              ref={(el) => {
+                if (el) lineRefs.current.set(i, el);
+              }}
+              className={`flex gap-2 ${
+                highlightIdx === i
+                  ? "bg-amber-900/30 border-l-2 border-amber-400 pl-2 -ml-2"
+                  : ""
+              }`}
+            >
+              {/* Collapse caret */}
+              <span
+                className={`shrink-0 select-none w-3 text-center ${
+                  collapsible
+                    ? "text-zinc-500 cursor-pointer hover:text-zinc-300"
+                    : "text-transparent"
+                }`}
+                onClick={() => collapsible && toggleCollapse(i)}
+                role={collapsible ? "button" : undefined}
+                tabIndex={collapsible ? 0 : undefined}
+                onKeyDown={(e) => {
+                  if (collapsible && (e.key === "Enter" || e.key === " ")) {
+                    e.preventDefault();
+                    toggleCollapse(i);
+                  }
+                }}
+              >
+                {collapsible ? (collapsed ? "\u25B6" : "\u25BC") : "\u00B7"}
+              </span>
+              <span className="text-zinc-600 shrink-0 select-none">
+                {formatTime(entry.ts)}
+              </span>
+              <pre className={`${levelColor(entry.level)} whitespace-pre-wrap break-all`}>
+                {collapsed
+                  ? `${msgLines[0]} \u2026 (+${lineCount - 1} lines)`
+                  : entry.msg}
+              </pre>
+            </div>
+          );
+        })}
         <div ref={bottomRef} />
       </div>
 

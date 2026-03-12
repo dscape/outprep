@@ -1,12 +1,14 @@
-import { getSessionSummaries, isForgeAvailable } from "@/lib/forge";
+import { getSessionSummaries, getLeaderboard, isForgeAvailable } from "@/lib/forge";
 import { SessionCard } from "@/components/forge/SessionCard";
-import { NewSessionButton } from "@/components/forge/NewSessionButton";
+import { Leaderboard } from "@/components/forge/Leaderboard";
+import { OrphanedBranchToast } from "@/components/forge/OrphanedBranchToast";
 
 export const revalidate = 0;
 
 export default function ForgeSessionsPage() {
   const forgeAvailable = isForgeAvailable();
   const sessions = getSessionSummaries();
+  const leaderboard = getLeaderboard();
 
   const totalExperiments = sessions.reduce((n, s) => n + s.experimentCount, 0);
   const totalCost = sessions.reduce((n, s) => n + s.totalCostUsd, 0);
@@ -18,10 +20,7 @@ export default function ForgeSessionsPage() {
 
   return (
     <div>
-      {/* Header with New Session button */}
-      <div className="flex items-center justify-end mb-4">
-        <NewSessionButton />
-      </div>
+      <OrphanedBranchToast />
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
@@ -35,6 +34,13 @@ export default function ForgeSessionsPage() {
         />
       </div>
 
+      {leaderboard.length > 0 && (
+        <div className="rounded-lg border border-zinc-700 bg-zinc-900/50 p-5 mb-8">
+          <h3 className="text-sm font-semibold text-zinc-100 mb-3">Agent Leaderboard</h3>
+          <Leaderboard entries={leaderboard} />
+        </div>
+      )}
+
       {sessions.length === 0 ? (
         <div className="text-center py-16 text-zinc-500">
           {!forgeAvailable ? (
@@ -47,11 +53,10 @@ export default function ForgeSessionsPage() {
             </p>
           ) : (
             <p>
-              No forge sessions found. Run{" "}
+              No sessions yet. Start an agent with{" "}
               <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-zinc-300">
-                npm run forge -- research
-              </code>{" "}
-              to start.
+                forge agent start
+              </code>
             </p>
           )}
         </div>

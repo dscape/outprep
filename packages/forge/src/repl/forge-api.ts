@@ -9,8 +9,11 @@
 import type { SandboxInfo } from "./sandbox";
 import type {
   ForgeSession, ForgeState, MaiaMetrics, OracleRecord,
-  SessionStatus, ExperimentRecord,
+  SessionStatus, ExperimentRecord, ExperimentArchetype,
+  KillSignalRecord, ReflectionCheckpoint, OracleSurpriseEntry,
+  HypothesisSet, LeaderboardEntry,
 } from "../state/types";
+import type { AgentStats } from "../state/leaderboard-db";
 import type { TestResult, PositionResult, Metrics } from "@outprep/harness";
 import type { LichessGame } from "@outprep/harness";
 
@@ -20,6 +23,8 @@ import { createEvalOps, type EvalOps, type ComparisonTable } from "./eval-ops";
 import { createSessionOps, type SessionOps } from "./session-ops";
 
 import { fetchPlayer, getGames, listPlayers as listCachedPlayers } from "../data/game-store";
+import { getForgeDb } from "../state/forge-db";
+import { requestPermission, getPendingPermissions } from "../tools/permissions";
 import { createSplit } from "../data/splits";
 import { computeMoveAccuracy } from "../metrics/move-accuracy";
 import { computeCPLDistribution } from "../metrics/cpl-distribution";
@@ -33,6 +38,12 @@ import {
   type Topic, type TopicArchive, type AgentNote,
 } from "../knowledge/index";
 import { consultOracle } from "../oracle/oracle";
+import { createOracleLimiter } from "../oracle/oracle-limiter";
+import { createSurpriseTracker, type SurpriseHealthAssessment } from "../oracle/surprise-tracker";
+import { detectIncrementalPattern } from "../oracle/incremental-detector";
+import { createHypothesisOps, type HypothesisOps } from "../hypothesis/hypothesis-manager";
+import { createWebTools, type WebTools, type SearchResult } from "../tools/web-tools";
+import { createPapersOps, type PapersOps } from "./papers-ops";
 import { writeExperimentLog } from "../log/log-formatter";
 import { computeTrend, formatTrend } from "../log/trend-tracker";
 import { randomUUID } from "node:crypto";
@@ -105,14 +116,52 @@ export interface HistoryOps {
 }
 
 export interface OracleOps {
-  ask(question: string, context?: string): Promise<OracleRecord>;
+  ask(question: string, context?: string, queryType?: "adversarial" | "confirmatory" | "exploratory"): Promise<OracleRecord>;
   history(): OracleRecord[];
+  /** Get current surprise rate and health assessment */
+  surpriseRate(): SurpriseHealthAssessment;
+  /** Record the agent's surprise/expectation after an oracle result */
+  recordSurprise(oracleId: string, priorExpectation: string, wasSurprising: boolean, explanation?: string): void;
 }
 
 export interface LogOps {
   record(experiment: Partial<import("../state/types").ExperimentRecord> & { hypothesis: string }): string;
   trend(): ReturnType<typeof computeTrend>;
   summary(): string;
+  /** Record a kill signal when abandoning an experiment or hypothesis */
+  kill(signal: Omit<KillSignalRecord, "id" | "timestamp">): string;
+  /** Record a reflection checkpoint */
+  reflect(reflection: Omit<ReflectionCheckpoint, "id" | "sessionId" | "timestamp">): string;
+}
+
+export interface ToolOps {
+  /** Submit an eval job for a player (blocking -- agent waits) */
+  evalPlayer(username: string): string;
+  /** Check tool job status */
+  status(jobId: string): { status: string; output?: any; error?: string } | null;
+  /** List tool jobs for current session */
+  list(): any[];
+}
+
+export interface PermissionOps {
+  /** Request a new permission */
+  request(type: string, details: Record<string, any>): string;
+  /** List pending permission requests for current session */
+  pending(): any[];
+}
+
+export interface WebOps {
+  /** Search the web for relevant information */
+  search(query: string): Promise<SearchResult[]>;
+  /** Fetch a URL and extract text content (HTML → markdown) */
+  fetch(url: string, prompt?: string): Promise<string>;
+}
+
+export interface LeaderboardOps {
+  /** View the current leaderboard (read-only) */
+  get(): LeaderboardEntry[];
+  /** View your own stats */
+  me(): AgentStats | null;
 }
 
 /* ── Full API type ─────────────────────────────────────────── */
@@ -128,6 +177,18 @@ export interface ForgeApi {
   oracle: OracleOps;
   log: LogOps;
   history: HistoryOps;
+  hypothesis: HypothesisOps;
+  web: WebOps;
+  tools: ToolOps;
+  permissions: PermissionOps;
+  /** Scientific paper catalog (search, cite, read) */
+  papers: PapersOps;
+  /** Leaderboard access (read-only, injected by agent-manager) */
+  leaderboard?: LeaderboardOps;
+  /** File a feature request (injected by agent-manager) */
+  request?: (title: string, description: string, category: string) => string;
+  /** Callback fired after each experiment is recorded (injected by agent-manager) */
+  _onExperimentRecorded?: () => void;
   compare(a: TestResult, b: TestResult): ComparisonTable;
 }
 
@@ -143,6 +204,125 @@ export function createForgeApi(
   const configOps = createConfigOps(sandbox);
   const rawEvalOps = createEvalOps(sandbox);
   const sessionOps = createSessionOps(sandbox, session, state, codeOps, configOps);
+  const oracleLimiter = createOracleLimiter();
+  const surpriseTracker = createSurpriseTracker(session, state);
+  const rawHypothesisOps = createHypothesisOps(session, state);
+
+  // ── Web tools ──
+  const rawWebTools = createWebTools();
+
+  // Mutable ref for post-experiment callback (set by agent-manager via _onExperimentRecorded)
+  const callbacks: { onExperimentRecorded?: () => void } = {};
+
+  // ── Tool job logging helper ──
+  // Logs non-blocking tool calls into tool_jobs for dashboard visibility
+  function logToolJob<T>(toolName: string, input: any, run: () => Promise<T>): Promise<T> {
+    const db = getForgeDb();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+       VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0)`
+    ).run(id, session.id, session.agentId ?? null, toolName, JSON.stringify(input), now);
+    return run().then((result) => {
+      const output = typeof result === "object" ? JSON.stringify(result) : String(result);
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'completed', output = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run(output.length > 10000 ? output.slice(0, 10000) : output, now, new Date().toISOString(), id);
+      return result;
+    }).catch((err) => {
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'failed', error = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run((err as Error).message, now, new Date().toISOString(), id);
+      throw err;
+    });
+  }
+
+  function logToolJobSync<T>(toolName: string, input: any, run: () => T): T {
+    const db = getForgeDb();
+    const id = randomUUID();
+    const now = new Date().toISOString();
+    db.prepare(
+      `INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking, retry_count)
+       VALUES (?, ?, ?, ?, 'running', ?, ?, 0, 0)`
+    ).run(id, session.id, session.agentId ?? null, toolName, JSON.stringify(input), now);
+    try {
+      const result = run();
+      const output = typeof result === "string" ? result : JSON.stringify(result);
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'completed', output = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run(output.length > 10000 ? output.slice(0, 10000) : output, now, new Date().toISOString(), id);
+      return result;
+    } catch (err) {
+      db.prepare(
+        `UPDATE tool_jobs SET status = 'failed', error = ?, started_at = ?, completed_at = ? WHERE id = ?`
+      ).run((err as Error).message, now, new Date().toISOString(), id);
+      throw err;
+    }
+  }
+
+  // Wrapped web tools that log to tool_jobs
+  const webTools: WebTools = {
+    search(query: string) {
+      return logToolJob("web_search", { query }, () =>
+        rawWebTools.search(query).then((results) => {
+          // Store summary as output, return full results to caller
+          return results;
+        })
+      );
+    },
+    fetch(url: string, prompt?: string) {
+      return logToolJob("web_fetch", { url }, () =>
+        rawWebTools.fetch(url, prompt)
+      );
+    },
+  };
+
+  // ── Experiment prerequisites gate ──────────────────────────
+  // Prevents agents from looping on hypothesis regeneration + oracle
+  // without doing real work. First hypothesis & one oracle query per
+  // hypothesis set are ungated; subsequent calls require proof of work.
+  let oracleQueriesSinceLastHypothesis = 0;
+
+  function checkExperimentPrerequisites(): { met: boolean; message: string } {
+    if (session.experiments.length === 0) {
+      return { met: false, message: "No experiments recorded yet." };
+    }
+    const lastExp = session.experiments[session.experiments.length - 1];
+    const issues: string[] = [];
+    if (!lastExp.codeChanges || lastExp.codeChanges.length === 0)
+      issues.push("- No code changes. Use forge.code.prompt(instruction) to modify engine code.");
+    if (!lastExp.configChanges || lastExp.configChanges.length === 0)
+      issues.push("- No config changes. Use forge.config.set(path, value) to modify configuration.");
+    if (!lastExp.conclusion || lastExp.conclusion === "inconclusive")
+      issues.push("- No clear conclusion. Use forge.log.record({ ..., conclusion: 'confirmed'|'refuted'|'partial' }).");
+    if (issues.length > 0) {
+      return {
+        met: false,
+        message: `Your last experiment (${lastExp.hypothesis.slice(0, 60)}) is missing:\n${issues.join("\n")}\n\nComplete your current experiment before generating new hypotheses or consulting the oracle.`,
+      };
+    }
+    return { met: true, message: "" };
+  }
+
+  // Wrap hypothesis ops to gate 2nd+ commits behind experiment prerequisites
+  const hypothesisOps: HypothesisOps = {
+    ...rawHypothesisOps,
+    commit(input) {
+      // First hypothesis set is ungated — needed to bootstrap research
+      if ((session.hypothesisSets ?? []).length >= 1) {
+        const prereq = checkExperimentPrerequisites();
+        if (!prereq.met) {
+          throw new Error(
+            `Cannot create a new hypothesis set yet.\n${prereq.message}\n\n` +
+            `Required workflow: code changes → config changes → eval → forge.log.record() with conclusion → THEN forge.hypothesis.commit()`
+          );
+        }
+      }
+      oracleQueriesSinceLastHypothesis = 0;
+      return rawHypothesisOps.commit(input);
+    },
+  };
 
   // Infer trainGames from playerData when not explicitly provided
   function inferTrainGames(testGames: LichessGame[]): LichessGame[] | undefined {
@@ -310,28 +490,80 @@ export function createForgeApi(
 
   // ── Oracle namespace ──
   const oracle: OracleOps = {
-    async ask(question: string, context?: string) {
-      const { record, interactions } = await consultOracle({
-        question,
-        domain: "chess-engine-optimization",
-        context: context ?? "",
-      });
-      // Record in session
-      updateSession(state, session.id, (s) => {
-        s.oracleConsultations.push(record);
-        if (!s.interactions) s.interactions = [];
-        s.interactions.push(...interactions);
-        // Update aggregate cost from oracle interactions
-        for (const ix of interactions) {
-          s.totalInputTokens += ix.inputTokens;
-          s.totalOutputTokens += ix.outputTokens;
-          s.totalCostUsd += ix.costUsd;
+    async ask(question: string, context?: string, queryType?: "adversarial" | "confirmatory" | "exploratory") {
+      // Experiment prerequisites gate: one free oracle query per hypothesis set,
+      // then requires experiment work before further queries
+      if ((session.hypothesisSets ?? []).length >= 1 && oracleQueriesSinceLastHypothesis >= 1) {
+        const prereq = checkExperimentPrerequisites();
+        if (!prereq.met) {
+          throw new Error(
+            `Cannot consult the oracle yet.\n${prereq.message}\n\n` +
+            `Run at least one experiment with code changes, config changes, and a conclusion before querying the oracle again.`
+          );
         }
-      });
+      }
+      oracleQueriesSinceLastHypothesis++;
+
+      const effectiveQueryType = queryType ?? "exploratory";
+
+      // Check oracle limiter
+      const currentHypothesis = hypothesisOps.current();
+      const archetype: ExperimentArchetype =
+        currentHypothesis?.committedLevel === "groundbreaking" ? "exploratory" : "incremental";
+      const limiterCheck = oracleLimiter.canQuery(effectiveQueryType);
+      if (!limiterCheck.allowed) {
+        throw new Error(`Oracle query blocked: ${limiterCheck.reason}`);
+      }
+
+      // Detect incremental tuning pattern
+      const detection = detectIncrementalPattern(session.oracleConsultations, session.experiments);
+      if (detection.detected) {
+        console.warn(`  ⚠ ${detection.message}`);
+      }
+
+      const record = await logToolJob(
+        "oracle",
+        { question: question.slice(0, 200), queryType: effectiveQueryType },
+        async () => {
+          const { record, interactions } = await consultOracle({
+            question,
+            domain: "chess-engine-optimization",
+            context: context ?? "",
+            queryType: effectiveQueryType,
+          });
+
+          // Track query in limiter
+          oracleLimiter.recordQuery(effectiveQueryType);
+
+          // Record in session
+          updateSession(state, session.id, (s) => {
+            s.oracleConsultations.push(record);
+            if (!s.interactions) s.interactions = [];
+            s.interactions.push(...interactions);
+            for (const ix of interactions) {
+              s.totalInputTokens += ix.inputTokens;
+              s.totalOutputTokens += ix.outputTokens;
+              s.totalCostUsd += ix.costUsd;
+            }
+          });
+          return record;
+        },
+      );
       return record;
     },
     history() {
       return session.oracleConsultations;
+    },
+    surpriseRate() {
+      return surpriseTracker.getHealthAssessment();
+    },
+    recordSurprise(oracleId: string, priorExpectation: string, wasSurprising: boolean, explanation?: string) {
+      surpriseTracker.record({
+        oracleId,
+        priorExpectation,
+        wasSurprising,
+        surpriseExplanation: explanation,
+      });
     },
   };
 
@@ -361,6 +593,47 @@ export function createForgeApi(
         positionsEvaluated: 0,
       };
 
+      // Validate/coerce result field — agent may pass wrong shape
+      let coercedResult = partial.result;
+      if (coercedResult && !("moveAccuracy" in coercedResult)) {
+        // Agent passed a custom object or raw TestResult.metrics instead of MaiaMetrics
+        const raw = coercedResult as Record<string, unknown>;
+        if ("matchRate" in raw) {
+          // Attempt to coerce raw metrics → MaiaMetrics shape
+          coercedResult = {
+            ...emptyResult,
+            moveAccuracy: (raw.matchRate as number) ?? 0,
+            rawMetrics: coercedResult as MaiaMetrics["rawMetrics"],
+          } as MaiaMetrics;
+        } else {
+          // Unrecognized shape — fall back to empty
+          console.warn("[forge.log.record] result has wrong shape, using empty defaults");
+          coercedResult = undefined;
+        }
+      }
+
+      // Guard: reject experiments with too few positions for statistical validity.
+      // This catches the case where games lack Stockfish analysis (0 positions evaluated)
+      // and the agent tries to record a bogus "confirmed" result.
+      const effectivePositions = partial.positionsEvaluated
+        ?? coercedResult?.positionsEvaluated
+        ?? 0;
+      if (effectivePositions < 20) {
+        throw new Error(
+          `Cannot record experiment with only ${effectivePositions} positions evaluated. ` +
+          `Minimum 20 positions required for statistical validity. ` +
+          `Ensure player games have Stockfish analysis before running experiments.`
+        );
+      }
+
+      // Auto-populate hypothesis/archetype from current hypothesis set
+      const currentHypothesisSet = hypothesisOps.current();
+      const autoArchetype: ExperimentArchetype =
+        currentHypothesisSet?.committedLevel === "groundbreaking" ? "exploratory" : "incremental";
+
+      // Notify oracle limiter that an eval has run (burn-in complete)
+      oracleLimiter.completeBurnIn();
+
       // Fill in defaults for missing fields
       const experiment: ExperimentRecord = {
         id: partial.id ?? randomUUID(),
@@ -369,22 +642,31 @@ export function createForgeApi(
         timestamp: partial.timestamp ?? new Date().toISOString(),
         hypothesis: partial.hypothesis!,
         category: partial.category ?? "parameter",
-        codeChanges: partial.codeChanges ?? [],
+        codeChanges: partial.codeChanges ?? [...codeOps.getTrackedChanges()],
         configChanges: partial.configChanges ?? [],
         players: partial.players ?? session.players,
         positionsEvaluated: partial.positionsEvaluated ?? 0,
         evaluationDurationMs: partial.evaluationDurationMs ?? 0,
-        result: partial.result ?? emptyResult,
+        result: coercedResult ?? emptyResult,
         delta: partial.delta ?? { moveAccuracy: 0, cplKLDivergence: 0, blunderRateDelta: 0, compositeScore: 0 },
         significance: partial.significance ?? [],
         conclusion: partial.conclusion ?? "inconclusive",
         notes: partial.notes ?? "",
         nextSteps: partial.nextSteps ?? [],
         oracleQueryId: partial.oracleQueryId,
+        archetype: partial.archetype ?? autoArchetype,
+        hypothesisSetId: partial.hypothesisSetId ?? currentHypothesisSet?.id,
+        hypothesisLevel: partial.hypothesisLevel ?? currentHypothesisSet?.committedLevel,
       };
 
-      // Write markdown log
-      const path = writeExperimentLog(session.name, experiment);
+      // Write markdown log (non-fatal — experiment still gets recorded on failure)
+      let path = "";
+      try {
+        path = writeExperimentLog(session.name, experiment);
+      } catch (err) {
+        console.warn("[forge.log.record] markdown log failed:", (err as Error).message);
+        path = `(log write failed: ${(err as Error).message})`;
+      }
 
       // Add to session experiments
       updateSession(state, session.id, (s) => {
@@ -399,6 +681,9 @@ export function createForgeApi(
         }
       });
 
+      // Notify agent-manager to update leaderboard incrementally
+      try { callbacks.onExperimentRecorded?.(); } catch { /* non-fatal */ }
+
       return path;
     },
     trend() {
@@ -408,10 +693,91 @@ export function createForgeApi(
       const trend = computeTrend(session.experiments);
       return formatTrend(trend);
     },
+    kill(signal: Omit<KillSignalRecord, "id" | "timestamp">) {
+      const record: KillSignalRecord = {
+        ...signal,
+        id: randomUUID(),
+        timestamp: new Date().toISOString(),
+      };
+      updateSession(state, session.id, (s) => {
+        if (!s.killSignals) s.killSignals = [];
+        s.killSignals.push(record);
+      });
+      console.log(`  Kill signal recorded: ${signal.description.slice(0, 80)}`);
+      return record.id;
+    },
+    reflect(input: Omit<ReflectionCheckpoint, "id" | "sessionId" | "timestamp">) {
+      const checkpoint: ReflectionCheckpoint = {
+        ...input,
+        id: randomUUID(),
+        sessionId: session.id,
+        timestamp: new Date().toISOString(),
+      };
+      updateSession(state, session.id, (s) => {
+        if (!s.reflections) s.reflections = [];
+        s.reflections.push(checkpoint);
+      });
+      console.log(`  Reflection checkpoint recorded after experiment #${input.afterExperimentNumber}`);
+      return checkpoint.id;
+    },
   };
 
-  return {
-    code: codeOps,
+  // ── Tools namespace ──
+  const tools: ToolOps = {
+    evalPlayer(username: string) {
+      const db = getForgeDb();
+      const id = randomUUID();
+      db.prepare(`
+        INSERT INTO tool_jobs (id, session_id, agent_id, tool_name, status, input, created_at, blocking)
+        VALUES (?, ?, ?, 'eval_player', 'pending', ?, ?, 1)
+      `).run(id, session.id, session.agentId ?? null, JSON.stringify({ username }), new Date().toISOString());
+      console.log(`  Submitted eval job ${id.slice(0, 8)} for player "${username}"`);
+      return id;
+    },
+    status(jobId: string) {
+      const db = getForgeDb();
+      const row = db.prepare(`SELECT status, output, error FROM tool_jobs WHERE id = ?`).get(jobId) as
+        | { status: string; output: string | null; error: string | null }
+        | undefined;
+      if (!row) return null;
+      return {
+        status: row.status,
+        ...(row.output != null ? { output: JSON.parse(row.output) } : {}),
+        ...(row.error != null ? { error: row.error } : {}),
+      };
+    },
+    list() {
+      const db = getForgeDb();
+      return db.prepare(
+        `SELECT id, tool_name, status, created_at, completed_at FROM tool_jobs WHERE session_id = ? ORDER BY created_at DESC`,
+      ).all(session.id);
+    },
+  };
+
+  // ── Permissions namespace ──
+  const permissions: PermissionOps = {
+    request(type: string, details: Record<string, any>) {
+      return requestPermission(session.id, session.agentId ?? null, type, details);
+    },
+    pending() {
+      return getPendingPermissions(session.agentId ?? undefined);
+    },
+  };
+
+  // Wrap code.prompt to log to tool_jobs
+  const wrappedCodeOps: CodeOps = {
+    ...codeOps,
+    prompt(instruction: string): Promise<string> {
+      return logToolJob("code_prompt", { instruction: instruction.slice(0, 200) }, () =>
+        codeOps.prompt(instruction),
+      );
+    },
+  };
+
+  const papersOps = createPapersOps(session);
+
+  const api: ForgeApi = {
+    code: wrappedCodeOps,
     config: configOps,
     eval: evalOps,
     session: sessionOps,
@@ -421,8 +787,16 @@ export function createForgeApi(
     oracle,
     log,
     history,
+    hypothesis: hypothesisOps,
+    web: webTools,
+    tools,
+    permissions,
+    papers: papersOps,
+    get _onExperimentRecorded() { return callbacks.onExperimentRecorded; },
+    set _onExperimentRecorded(fn: (() => void) | undefined) { callbacks.onExperimentRecorded = fn; },
     compare(a: TestResult, b: TestResult) {
       return evalOps.compare(a, b);
     },
   };
+  return api;
 }

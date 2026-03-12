@@ -27,7 +27,18 @@ export interface OracleQuery {
   question: string;
   domain: string;
   context: string;
+  queryType?: "adversarial" | "confirmatory" | "exploratory";
 }
+
+const ADVERSARIAL_PREAMBLE = `IMPORTANT: Your primary role in this query is to find weaknesses and failure modes. The researcher is asking you to CHALLENGE their hypothesis, not confirm it. Focus on:
+1. What inputs or scenarios would make this hypothesis fail?
+2. What assumptions are being made that might be wrong?
+3. What alternative explanations exist for the observed results?
+4. What edge cases have not been considered?
+
+Be skeptical. The researcher WANTS you to find problems.
+
+`;
 
 const ORACLE_SYSTEM_PROMPT = `You are an expert in chess engine optimization, specifically in building bots that mimic human playing styles. You have deep knowledge of:
 
@@ -102,9 +113,13 @@ export async function consultOracle(
   }
 
   // Step 1: Claude initial analysis
-  console.log("  Oracle: Step 1/3 — Claude analyzing...");
+  const effectiveSystemPrompt = query.queryType === "adversarial"
+    ? ADVERSARIAL_PREAMBLE + ORACLE_SYSTEM_PROMPT
+    : ORACLE_SYSTEM_PROMPT;
+
+  console.log(`  Oracle: Step 1/3 — Claude analyzing... [${query.queryType ?? "exploratory"}]`);
   const claudeInitialResult = await askClaude({
-    systemPrompt: ORACLE_SYSTEM_PROMPT,
+    systemPrompt: effectiveSystemPrompt,
     userMessage: `Domain: ${query.domain}${contextBlock}\n\nQuestion: ${query.question}`,
   });
   const claudeInitial = claudeInitialResult.text;
@@ -236,6 +251,7 @@ export async function consultOracle(
       claudeFinal,
       actionItems,
       confidence,
+      queryType: query.queryType,
     },
     interactions,
   };

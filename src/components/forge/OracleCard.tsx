@@ -10,6 +10,12 @@ const confidenceStyles = {
   low: "bg-red-900/50 text-red-400 border-red-800",
 };
 
+const queryTypeStyles: Record<string, string> = {
+  adversarial: "bg-red-900/50 text-red-400 border-red-800",
+  confirmatory: "bg-emerald-900/50 text-emerald-400 border-emerald-800",
+  exploratory: "bg-blue-900/50 text-blue-400 border-blue-800",
+};
+
 export function OracleCard({ oracle }: { oracle: OracleRecord }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const date = new Date(oracle.timestamp).toLocaleDateString("en-US", {
@@ -29,11 +35,20 @@ export function OracleCard({ oracle }: { oracle: OracleRecord }) {
           <p className="text-sm font-medium text-zinc-100">{oracle.question}</p>
           <p className="text-xs text-zinc-500 mt-1">{date}</p>
         </div>
-        <span
-          className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${confidenceStyles[oracle.confidence]}`}
-        >
-          {oracle.confidence}
-        </span>
+        <div className="flex items-center gap-2">
+          {oracle.queryType && (
+            <span
+              className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${queryTypeStyles[oracle.queryType] ?? queryTypeStyles.exploratory}`}
+            >
+              {oracle.queryType}
+            </span>
+          )}
+          <span
+            className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium ${confidenceStyles[oracle.confidence]}`}
+          >
+            {oracle.confidence}
+          </span>
+        </div>
       </div>
 
       {/* Collapsible sections */}

@@ -1,10 +1,11 @@
 /**
- * Git worktree sandbox — isolates engine code modifications.
+ * Git worktree sandbox — isolates agent modifications.
  *
- * Creates a git worktree so the agent can modify engine files
- * without affecting the main working tree. The harness runs
- * inside the worktree, naturally resolving @outprep/engine
- * to the modified copy.
+ * Creates a git worktree so the agent can modify any file
+ * without affecting the main working tree. OS-level filesystem
+ * and network restrictions are enforced by the Anthropic Sandbox
+ * Runtime (see sandbox-runtime.ts). The harness runs inside the
+ * worktree, naturally resolving @outprep/engine to the modified copy.
  */
 
 import { execSync } from "node:child_process";
@@ -103,21 +104,34 @@ export function commitSandbox(sandbox: SandboxInfo, message: string): string {
 }
 
 /**
- * Revert all changes in the sandbox engine back to baseline.
+ * Push a branch to the remote origin.
+ * Used for auto-pushing positive experiment results.
+ */
+export function pushBranch(branchName: string): void {
+  execSync(`git push -u origin "${branchName}"`, {
+    cwd: REPO_ROOT,
+    stdio: "pipe",
+    timeout: 60_000,
+  });
+}
+
+/**
+ * Revert all changes in the sandbox worktree back to baseline.
  */
 export function revertSandbox(sandbox: SandboxInfo): void {
   execSync("git checkout -- .", {
-    cwd: sandbox.enginePath,
+    cwd: sandbox.worktreePath,
     stdio: "pipe",
   });
 }
 
 /**
- * Revert a specific file in the sandbox engine.
+ * Revert a specific file in the sandbox worktree.
+ * @param relativePath — path relative to the worktree root.
  */
 export function revertFile(sandbox: SandboxInfo, relativePath: string): void {
   execSync(`git checkout -- "${relativePath}"`, {
-    cwd: sandbox.enginePath,
+    cwd: sandbox.worktreePath,
     stdio: "pipe",
   });
 }
@@ -169,6 +183,14 @@ export function acceptSandbox(sandbox: SandboxInfo): string {
  * Destroy the sandbox worktree and delete the branch.
  */
 export function destroySandbox(sandbox: SandboxInfo): void {
+  // Safety: never destroy a worktree outside the sessions directory
+  if (!sandbox.worktreePath.startsWith(SESSIONS_DIR)) {
+    throw new Error(
+      `Refusing to destroy sandbox at "${sandbox.worktreePath}" — ` +
+        `path is outside sessions directory "${SESSIONS_DIR}"`
+    );
+  }
+
   try {
     // Remove the worktree
     execSync(`git worktree remove "${sandbox.worktreePath}" --force`, {
@@ -217,6 +239,10 @@ export function listSandboxes(): SandboxInfo[] {
         const branch = branchLine.replace("branch refs/heads/", "");
 
         if (branch.startsWith("research/") || branch.startsWith("forge/")) {
+          // Only include worktrees inside the sessions directory —
+          // never match the root repo or other external worktrees
+          if (!worktreePath.startsWith(SESSIONS_DIR)) continue;
+
           const sessionId = branch.replace(/^(research|forge)\//, "");
           sandboxes.push({
             sessionId,
@@ -235,19 +261,3 @@ export function listSandboxes(): SandboxInfo[] {
   }
 }
 
-/**
- * The list of engine files the forge is allowed to modify.
- */
-export const MODIFIABLE_ENGINE_FILES = [
-  "src/move-selector.ts",
-  "src/bot-controller.ts",
-  "src/move-style.ts",
-  "src/error-profile.ts",
-  "src/phase-detector.ts",
-  "src/complexity.ts",
-  "src/opening-trie.ts",
-  "src/config.ts",
-  "src/types.ts",
-] as const;
-
-export type ModifiableFile = (typeof MODIFIABLE_ENGINE_FILES)[number];

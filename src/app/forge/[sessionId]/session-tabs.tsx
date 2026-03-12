@@ -14,8 +14,14 @@ import { ErrorRateByPhaseChart } from "@/components/forge/charts/ErrorRateByPhas
 import { ConsoleLogViewer } from "@/components/forge/ConsoleLogViewer";
 import { ActivityTimeline } from "@/components/forge/ActivityTimeline";
 import { DiffViewer } from "@/components/forge/DiffViewer";
+import { HypothesisCard } from "@/components/forge/HypothesisCard";
+import { SurpriseRateIndicator } from "@/components/forge/SurpriseRateIndicator";
+import { ReflectionCard } from "@/components/forge/ReflectionCard";
+import { KillSignalCard } from "@/components/forge/KillSignalCard";
+import { ExperimentTypeChart } from "@/components/forge/charts/ExperimentTypeChart";
+import { SurpriseRateTrendChart } from "@/components/forge/charts/SurpriseRateTrendChart";
 
-export type Tab = "overview" | "activity" | "experiments" | "oracle" | "changes" | "logs" | "console";
+export type Tab = "overview" | "activity" | "experiments" | "hypotheses" | "oracle" | "changes" | "logs" | "console";
 
 export function SessionTabs({
   session,
@@ -24,6 +30,7 @@ export function SessionTabs({
   isDev,
   tab,
   onTabChange,
+  agent,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
   logs: { filename: string; content: string }[];
@@ -31,6 +38,7 @@ export function SessionTabs({
   isDev?: boolean;
   tab: Tab;
   onTabChange: (tab: Tab) => void;
+  agent?: { id: string; name: string; isRunning: boolean } | null;
 }) {
   const [consoleHighlightTs, setConsoleHighlightTs] = useState<string | undefined>();
 
@@ -43,9 +51,10 @@ export function SessionTabs({
     { key: "overview", label: "Overview" },
     { key: "activity", label: "Activity", count: activity?.length },
     { key: "experiments", label: "Experiments", count: session.experiments.length },
+    { key: "hypotheses", label: "Hypotheses", count: session.hypothesisSets?.length ?? 0 },
     { key: "oracle", label: "Oracle", count: session.oracleConsultations.length },
     { key: "changes", label: "Changes", count: allCodeChanges.length },
-    { key: "logs", label: "Logs", count: logs.length },
+    { key: "logs", label: "Research Logs", count: logs.length },
     { key: "console", label: "Console" },
   ];
 
@@ -79,7 +88,7 @@ export function SessionTabs({
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab session={session} />}
+      {tab === "overview" && <OverviewTab session={session} agent={agent} />}
       {tab === "activity" && (
         <ActivityTimeline
           events={activity || []}
@@ -88,8 +97,14 @@ export function SessionTabs({
         />
       )}
       {tab === "experiments" && (
-        <ExperimentTimeline experiments={session.experiments} />
+        <ExperimentTimeline
+          experiments={session.experiments}
+          logs={logs}
+          session={session}
+          onSeeInConsole={navigateToConsole}
+        />
       )}
+      {tab === "hypotheses" && <HypothesesTab session={session} />}
       {tab === "oracle" && <OracleTab session={session} />}
       {tab === "changes" && (
         <ChangesTab session={session} onSeeInConsole={navigateToConsole} />
@@ -108,13 +123,32 @@ export function SessionTabs({
 
 function OverviewTab({
   session,
+  agent,
 }: {
   session: Omit<ForgeSession, "conversationHistory">;
+  agent?: { id: string; name: string; isRunning: boolean } | null;
 }) {
   const githubBranch = session.worktreeBranch;
 
   return (
     <div className="space-y-6">
+      {/* Agent */}
+      {agent && (
+        <Card title="Agent">
+          <div className="flex items-center gap-3">
+            <a href={`/forge/agents/${agent.id}`} className="text-sm font-medium text-zinc-200 hover:text-emerald-400 transition-colors">
+              {agent.name}
+            </a>
+            {agent.isRunning && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-900/50 px-2 py-0.5 text-xs font-medium text-emerald-400 border border-emerald-800/50">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Running
+              </span>
+            )}
+          </div>
+        </Card>
+      )}
+
       {/* Cost */}
       <Card title="Cost">
         <CostDisplay
@@ -162,6 +196,48 @@ function OverviewTab({
         </Card>
       )}
 
+      {/* Research Health */}
+      {(() => {
+        const surprises = session.oracleSurprises ?? [];
+        const hypothesisSets = session.hypothesisSets ?? [];
+        const currentHypothesis = hypothesisSets.length > 0 ? hypothesisSets[hypothesisSets.length - 1] : null;
+        const hasSurprises = surprises.length > 0;
+        const surprisingCount = surprises.filter(s => s.wasSurprising).length;
+        const rate = hasSurprises ? surprisingCount / surprises.length : 0;
+
+        return (currentHypothesis || hasSurprises) ? (
+          <Card title="Research Health">
+            <div className="space-y-3">
+              {currentHypothesis && (
+                <div>
+                  <p className="text-xs text-zinc-500">Current Hypothesis</p>
+                  <p className="text-sm text-zinc-200">
+                    <span className={`inline-block rounded-full border px-2 py-0.5 text-xs font-medium mr-2 ${
+                      currentHypothesis.committedLevel === "groundbreaking"
+                        ? "border-purple-700 text-purple-400"
+                        : currentHypothesis.committedLevel === "continuous-a"
+                          ? "border-blue-700 text-blue-400"
+                          : "border-amber-700 text-amber-400"
+                    }`}>
+                      {currentHypothesis.committedLevel}
+                    </span>
+                    {currentHypothesis.hypotheses.find(h => h.level === currentHypothesis.committedLevel)?.statement?.slice(0, 80)}
+                  </p>
+                </div>
+              )}
+              {hasSurprises && (
+                <SurpriseRateIndicator
+                  rate={rate}
+                  totalEntries={surprises.length}
+                  healthy={rate >= 0.2}
+                  message={rate < 0.2 ? "Low surprise rate — may be confirming rather than exploring" : "Healthy surprise rate"}
+                />
+              )}
+            </div>
+          </Card>
+        ) : null;
+      })()}
+
       {/* Charts */}
       {session.experiments.length > 0 && (
         <div className="grid gap-4 sm:grid-cols-2">
@@ -193,6 +269,18 @@ function OverviewTab({
         </div>
       )}
 
+      {/* Experiment type + surprise rate charts */}
+      {(session.experiments.length > 0 || (session.oracleSurprises ?? []).length > 0) && (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {session.experiments.length > 0 && (
+            <ExperimentTypeChart experiments={session.experiments} />
+          )}
+          {(session.oracleSurprises ?? []).length > 0 && (
+            <SurpriseRateTrendChart surprises={session.oracleSurprises ?? []} />
+          )}
+        </div>
+      )}
+
       {/* Cost chart when only oracle consultations */}
       {session.experiments.length === 0 && session.oracleConsultations.length > 0 && (
         <CostChart
@@ -208,6 +296,9 @@ function OverviewTab({
           Session has not computed a baseline yet.
         </div>
       )}
+
+      {/* Raw state (dev mode) */}
+      <RawStatePanel session={session} />
     </div>
   );
 }
@@ -291,6 +382,62 @@ function OracleTab({
   );
 }
 
+function HypothesesTab({
+  session,
+}: {
+  session: Omit<ForgeSession, "conversationHistory">;
+}) {
+  const hypothesisSets = session.hypothesisSets ?? [];
+  const killSignals = session.killSignals ?? [];
+  const reflections = session.reflections ?? [];
+
+  if (hypothesisSets.length === 0 && killSignals.length === 0 && reflections.length === 0) {
+    return (
+      <div className="text-center py-12 text-zinc-500 text-sm">
+        No hypotheses generated yet.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      {hypothesisSets.map((hs) => (
+        <HypothesisCard
+          key={hs.id}
+          hypothesisSet={hs}
+          killSignals={killSignals.filter((k) => k.hypothesisSetId === hs.id)}
+        />
+      ))}
+
+      {reflections.length > 0 && (
+        <div>
+          <h3 className="text-xs font-medium text-zinc-500 mb-3">
+            Reflections ({reflections.length})
+          </h3>
+          <div className="space-y-3">
+            {reflections.map((r) => (
+              <ReflectionCard key={r.id} reflection={r} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {killSignals.length > 0 && (
+        <div>
+          <h3 className="text-xs font-medium text-zinc-500 mb-3">
+            Kill Signals ({killSignals.length})
+          </h3>
+          <div className="space-y-3">
+            {killSignals.map((k) => (
+              <KillSignalCard key={k.id} killSignal={k} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LogsTab({ logs }: { logs: { filename: string; content: string }[] }) {
   if (logs.length === 0) {
     return (
@@ -320,6 +467,31 @@ function Card({ title, children }: { title: string; children: React.ReactNode })
     <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-5">
       <p className="text-xs font-medium text-zinc-500 mb-3">{title}</p>
       {children}
+    </div>
+  );
+}
+
+function RawStatePanel({
+  session,
+}: {
+  session: Omit<ForgeSession, "conversationHistory">;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900">
+      <button
+        onClick={() => setOpen(!open)}
+        className="w-full flex items-center justify-between px-5 py-3 text-xs font-medium text-zinc-500 hover:text-zinc-400 transition-colors"
+      >
+        <span>Raw Session State (JSON)</span>
+        <span>{open ? "Hide" : "Show"}</span>
+      </button>
+      {open && (
+        <pre className="px-5 pb-4 text-xs font-mono text-zinc-400 overflow-x-auto max-h-[500px] overflow-y-auto">
+          {JSON.stringify(session, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }

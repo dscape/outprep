@@ -59,7 +59,11 @@
       "Bash(git show HEAD:src/app/player/[slug]/scout-features.tsx)",
       "Bash(sudo chown -R 501:20 \"/Users/dscape/.npm\")",
       "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/resume)",
-      "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/stop)"
+      "Bash(mkdir -p /Users/dscape/dev/outprep/src/app/api/forge/sessions/[sessionId]/stop)",
+      "mcp__Claude_in_Chrome__computer"
     ]
+  },
+  "enabledPlugins": {
+    "vtsls@claude-code-lsps": true
   }
 }

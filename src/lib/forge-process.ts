@@ -1,14 +1,13 @@
 /**
  * Forge process registry — tracks running forge CLI child processes.
  *
- * This module manages spawning, tracking, and stopping forge sessions
- * from the Next.js API routes. Processes are tracked in-memory and
- * will be lost on server restart (acceptable for a local dev tool).
+ * Manages agent processes and the eval service. Sessions are created/managed
+ * by agents, not by users directly.
  */
 
 import { spawn, type ChildProcess } from "child_process";
+import fs from "fs";
 import path from "path";
-import { markSessionPausedIfActive } from "./forge";
 
 const PROJECT_ROOT = process.cwd();
 const FORGE_CLI = path.join(PROJECT_ROOT, "packages", "forge", "src", "cli.ts");
@@ -17,28 +16,38 @@ interface RunningProcess {
   process: ChildProcess;
   sessionId: string;
   startedAt: string;
+  exitCode: number | null;
+  stderrTail: string;
 }
 
-const running = new Map<string, RunningProcess>();
+/* ── Agent process management ─────────────────────────────── */
 
-export interface StartSessionOpts {
-  name?: string;
-  players: string[];
+export interface StartAgentOpts {
+  players?: string[];
   focus?: string;
   maxExperiments?: number;
   seed?: number;
   quick?: boolean;
+  researchBias?: number;
 }
 
-export function startSession(opts: StartSessionOpts): { sessionId: string } {
-  const args = ["tsx", FORGE_CLI, "research"];
+const runningAgents = new Map<string, RunningProcess>();
 
-  if (opts.name) args.push("--name", opts.name);
-  args.push("--players", opts.players.join(","));
+export function startAgentProcess(opts: StartAgentOpts): { agentId: string; error?: string } {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return {
+      agentId: "",
+      error: "ANTHROPIC_API_KEY is not configured.",
+    };
+  }
+
+  const args = ["tsx", FORGE_CLI, "agent", "start"];
+  if (opts.players?.length) args.push("--players", opts.players.join(","));
   if (opts.focus) args.push("--focus", opts.focus);
   if (opts.maxExperiments) args.push("--max-experiments", String(opts.maxExperiments));
   if (opts.seed) args.push("--seed", String(opts.seed));
   if (opts.quick) args.push("--quick");
+  if (opts.researchBias != null) args.push("--bias", String(opts.researchBias));
 
   const child = spawn("npx", args, {
     cwd: PROJECT_ROOT,
@@ -47,34 +56,81 @@ export function startSession(opts: StartSessionOpts): { sessionId: string } {
     detached: false,
   });
 
-  // Generate a temporary ID; the real session ID will be in forge-state.json
-  // once the CLI creates it. We use the name as a lookup key.
-  const tempId = opts.name || `session-${Date.now()}`;
+  const tempId = `agent-${Date.now()}`;
 
   const entry: RunningProcess = {
     process: child,
     sessionId: tempId,
     startedAt: new Date().toISOString(),
+    exitCode: null,
+    stderrTail: "",
   };
 
-  running.set(tempId, entry);
+  runningAgents.set(tempId, entry);
 
   child.on("exit", () => {
-    running.delete(tempId);
-    markSessionPausedIfActive(tempId);
+    runningAgents.delete(tempId);
   });
 
   child.stderr?.on("data", (data: Buffer) => {
-    console.error(`[forge:${tempId}]`, data.toString());
+    const text = data.toString();
+    console.error(`[forge-agent:${tempId}]`, text);
+    entry.stderrTail = (entry.stderrTail + text).slice(-2048);
   });
 
-  return { sessionId: tempId };
+  return { agentId: tempId };
 }
 
-export function resumeSession(sessionId: string): boolean {
-  if (running.has(sessionId)) return false; // already running
+// NOTE: Duplicates packages/forge/src/agent/shared.ts — kept separate for Next.js build compatibility
+export function stopAgentProcess(agentId: string): boolean {
+  const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
+  const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
 
-  const args = ["tsx", FORGE_CLI, "resume", sessionId];
+  try {
+    const fs = require("fs");
+    const pidFile = path.join(PIDS_DIR, `agent-${agentId}.pid`);
+    const raw = fs.readFileSync(pidFile, "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (Number.isFinite(pid)) {
+      process.kill(pid, "SIGINT");
+      return true;
+    }
+  } catch {
+    // PID file not found or process not running
+  }
+  return false;
+}
+
+export function stopAllAgents(): number {
+  const fs = require("fs");
+  const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
+  const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
+
+  let stopped = 0;
+  try {
+    const files = fs.readdirSync(PIDS_DIR) as string[];
+    for (const f of files) {
+      if (f.startsWith("agent-") && f.endsWith(".pid")) {
+        const raw = fs.readFileSync(path.join(PIDS_DIR, f), "utf-8");
+        const pid = parseInt(raw.trim(), 10);
+        if (Number.isFinite(pid)) {
+          try {
+            process.kill(pid, "SIGINT");
+            stopped++;
+          } catch { /* already dead */ }
+        }
+      }
+    }
+  } catch { /* dir doesn't exist */ }
+  return stopped;
+}
+
+export function startSingleAgent(agentId: string): { started: boolean; error?: string } {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { started: false, error: "ANTHROPIC_API_KEY is not configured." };
+  }
+
+  const args = ["tsx", FORGE_CLI, "agent", "start", "--resume", agentId];
 
   const child = spawn("npx", args, {
     cwd: PROJECT_ROOT,
@@ -83,39 +139,127 @@ export function resumeSession(sessionId: string): boolean {
     detached: false,
   });
 
-  const entry: RunningProcess = {
-    process: child,
-    sessionId,
-    startedAt: new Date().toISOString(),
-  };
-
-  running.set(sessionId, entry);
-
-  child.on("exit", () => {
-    running.delete(sessionId);
-    markSessionPausedIfActive(sessionId);
+  child.stderr?.on("data", (data: Buffer) => {
+    console.error(`[forge-agent:resume:${agentId.slice(0, 8)}]`, data.toString());
   });
+
+  return { started: true };
+}
+
+export function startAllAgents(): { started: number; error?: string } {
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return { started: 0, error: "ANTHROPIC_API_KEY is not configured." };
+  }
+
+  const fs = require("fs");
+  const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
+  const DB_PATH = path.join(FORGE_ROOT, "forge.db");
+  const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
+
+  // Read agents from SQLite
+  let agents: { id: string; name: string; status: string }[] = [];
+  try {
+    if (!fs.existsSync(DB_PATH)) {
+      return { started: 0, error: "No forge database found." };
+    }
+    const Database = require("better-sqlite3");
+    const db = new Database(DB_PATH, { readonly: true });
+    agents = db.prepare("SELECT id, name, status FROM agents").all() as any[];
+    db.close();
+  } catch {
+    return { started: 0, error: "Could not read forge database." };
+  }
+
+  // Find stopped agents (not currently running)
+  const stopped = agents.filter((a) => {
+    if (a.status === "running") {
+      // Check if actually alive
+      try {
+        const raw = fs.readFileSync(path.join(PIDS_DIR, `agent-${a.id}.pid`), "utf-8");
+        const pid = parseInt(raw.trim(), 10);
+        if (Number.isFinite(pid)) {
+          process.kill(pid, 0);
+          return false; // actually running
+        }
+      } catch { /* no pid file or dead process */ }
+    }
+    return true;
+  });
+
+  // Start each agent as a separate process
+  let started = 0;
+  for (const a of stopped) {
+    const result = startSingleAgent(a.id);
+    if (result.started) started++;
+  }
+
+  return { started };
+}
+
+/* ── Eval service process management ──────────────────────── */
+
+const FORGE_ROOT = path.join(PROJECT_ROOT, "packages", "forge");
+const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
+const EVAL_PID_FILE = path.join(PIDS_DIR, "eval-service.pid");
+
+export function isEvalServiceRunning(): boolean {
+  try {
+    const raw = fs.readFileSync(EVAL_PID_FILE, "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (Number.isFinite(pid)) {
+      process.kill(pid, 0); // throws if dead
+      return true;
+    }
+  } catch {
+    // PID file not found or process is dead
+  }
+  return false;
+}
+
+export function startEvalServiceProcess(): { started: boolean; error?: string } {
+  if (isEvalServiceRunning()) {
+    return { started: true }; // already running
+  }
+
+  const child = spawn("npx", ["tsx", FORGE_CLI, "eval-service"], {
+    cwd: PROJECT_ROOT,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+  });
+
+  // Write PID file so we can track it
+  try {
+    fs.mkdirSync(PIDS_DIR, { recursive: true });
+    fs.writeFileSync(EVAL_PID_FILE, String(child.pid));
+  } catch {
+    // non-fatal
+  }
 
   child.stderr?.on("data", (data: Buffer) => {
-    console.error(`[forge:${sessionId}]`, data.toString());
+    console.error(`[forge-eval-service]`, data.toString());
   });
 
-  return true;
+  child.on("exit", () => {
+    try { fs.unlinkSync(EVAL_PID_FILE); } catch {}
+  });
+
+  child.unref();
+
+  return { started: true };
 }
 
-export function stopSession(sessionId: string): boolean {
-  const entry = running.get(sessionId);
-  if (!entry) return false;
-
-  // Send SIGINT for graceful pause (forge agent handles this)
-  entry.process.kill("SIGINT");
-  return true;
-}
-
-export function isRunning(sessionId: string): boolean {
-  return running.has(sessionId);
-}
-
-export function getRunningSessionIds(): string[] {
-  return Array.from(running.keys());
+export function stopEvalServiceProcess(): boolean {
+  try {
+    const raw = fs.readFileSync(EVAL_PID_FILE, "utf-8");
+    const pid = parseInt(raw.trim(), 10);
+    if (Number.isFinite(pid)) {
+      process.kill(pid, "SIGINT");
+      try { fs.unlinkSync(EVAL_PID_FILE); } catch {}
+      return true;
+    }
+  } catch {
+    // not running
+  }
+  return false;
 }

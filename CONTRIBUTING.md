@@ -125,6 +125,28 @@ npm run harness:run -- --dataset datasets/SomePlayer.json
 
 This gives you match rate, top-4 rate, and CPL delta metrics to measure the impact of your changes.
 
+## Working with the forge
+
+The forge is an autonomous research agent that uses the Claude API to iteratively improve bot accuracy. To use it, you need an `ANTHROPIC_API_KEY` in your `.env`:
+
+```bash
+# Add to .env (required for forge CLI and forge dashboard session launcher)
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+Without this key, forge sessions will fail immediately — both from the CLI and the web dashboard at `/forge`.
+
+```bash
+# Start a research session from the CLI
+npm run forge -- research --players "SomePlayer" --focus accuracy
+
+# Or use the web dashboard (requires the dev server running)
+npm run dev
+# Then visit http://localhost:3000/forge and click "New Session"
+```
+
+Each session runs in an isolated git worktree. Use `npm run forge -- ls` to list sessions and `npm run forge -- clean` to remove them.
+
 ## Questions?
 
 Open an issue. There are no dumb questions.

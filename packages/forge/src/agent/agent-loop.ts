@@ -13,16 +13,18 @@ import "dotenv/config";
 import { randomUUID } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
 import { loadState, saveState, updateSession } from "../state/forge-state";
-import { createSandbox, destroySandbox } from "../repl/sandbox";
+import { createSandbox, destroySandbox, commitSandbox, pushBranch } from "../repl/sandbox";
+import type { SandboxInfo } from "../repl/sandbox";
 import { createReplServer } from "../repl/repl-server";
-import { createForgeApi } from "../repl/forge-api";
+import { createForgeApi, type ForgeApi } from "../repl/forge-api";
 import { buildSystemPrompt, type PromptContext } from "./system-prompt";
-import { writePid, removePid } from "../pid";
+
 import { buildKnowledgeContext, buildNotesContext } from "../knowledge/index";
 import { REPL_TOOL_DEFINITION, handleReplTool, formatToolOutput } from "./tool-handler";
 import { CostTracker, CLAUDE_INPUT_COST_PER_1K, CLAUDE_OUTPUT_COST_PER_1K } from "./cost-tracker";
 import { checkConvergence, DEFAULT_CONVERGENCE } from "./convergence";
 import { createLogWriter, type LogWriter } from "./log-writer";
+import { buildPlayerData } from "./shared";
 import type { ForgeSession, ForgeState, ConversationMessage } from "../state/types";
 
 export interface ResearchOptions {
@@ -32,6 +34,7 @@ export interface ResearchOptions {
   maxExperiments: number;
   seed: number;
   quick: boolean;
+  researchBias?: number;
 }
 
 /**
@@ -48,7 +51,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
   const state = loadState();
   const costTracker = new CostTracker();
   const sessionId = randomUUID();
-  const logWriter = createLogWriter(opts.name);
+  const logWriter = createLogWriter(opts.name, sessionId);
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
     else if (level === "warn") console.warn(msg);
@@ -74,6 +77,7 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     status: "active",
+    agentId: null,
     worktreeBranch: sandbox.branchName,
     focus: opts.focus,
     players: opts.players ?? [],
@@ -88,42 +92,21 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     totalCostUsd: 0,
     oracleConsultations: [],
     interactions: [],
+    hypothesisSets: [],
+    oracleSurprises: [],
+    killSignals: [],
+    reflections: [],
   };
 
   state.sessions.push(session);
   state.activeSessionId = sessionId;
   saveState(state);
-  writePid(sessionId);
 
   // Create REPL and inject forge API (playerData passed after construction below)
   const repl = createReplServer();
 
   // Pre-inject playerData so the agent has immediate access
-  const { getGames, loadPlayer } = await import("../data/game-store");
-  const { createSplit } = await import("../data/splits");
-
-  const playerData: Record<string, {
-    meta: ReturnType<typeof loadPlayer>;
-    games: ReturnType<typeof getGames>;
-    trainGames: ReturnType<typeof getGames>;
-    testGames: ReturnType<typeof getGames>;
-    split: ReturnType<typeof createSplit>["split"];
-  }> = {};
-
-  for (const username of opts.players ?? []) {
-    const meta = loadPlayer(username);
-    const games = getGames(username);
-    if (meta && games.length > 0) {
-      const result = createSplit(games, { seed: opts.seed, trainRatio: 0.8 });
-      playerData[username] = {
-        meta,
-        games,
-        trainGames: result.trainGames,
-        testGames: result.testGames,
-        split: result.split,
-      };
-    }
-  }
+  const playerData = await buildPlayerData(opts.players ?? [], opts.seed);
   repl.inject("playerData", playerData);
 
   // Create forge API with playerData ref so eval auto-injects trainGames
@@ -136,23 +119,40 @@ export async function runResearchSession(opts: ResearchOptions): Promise<void> {
     baseline: session.baseline,
     focus: opts.focus,
     maxExperiments: opts.maxExperiments,
+    researchBias: opts.researchBias ?? 0.5,
   };
 
   // Initial user message
   const initialMessage = buildInitialMessage(opts, playerData);
 
   try {
-    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts, logWriter);
+    await runAgentLoop(client, repl, session, state, promptCtx, initialMessage, costTracker, opts, logWriter, forgeApi, sandbox);
   } catch (err) {
     log(`\n  ✗ Session error: ${err}`, "error");
     updateSession(state, sessionId, (s) => {
       s.status = "paused";
     });
   } finally {
-    removePid(sessionId);
     repl.dispose();
     // Don't destroy sandbox on pause — it can be resumed
     if (session.status === "completed" || session.status === "abandoned") {
+      // Safety: commit any remaining changes before destroying worktree
+      try { commitSandbox(sandbox, `forge: safety commit before destroy for ${session.name}`); } catch { /* sandbox may already be clean */ }
+
+      // Auto-push positive results
+      if (session.status === "completed" && session.bestResult && session.baseline) {
+        const baselineComposite = session.baseline.aggregate?.compositeScore ?? 0;
+        const delta = session.bestResult.compositeScore - baselineComposite;
+        if (delta >= 0.01) {
+          try {
+            pushBranch(sandbox.branchName);
+            console.log(`  \u2713 Auto-pushed branch ${sandbox.branchName} (composite \u0394 +${delta.toFixed(4)})`);
+          } catch (err) {
+            console.log(`  \u26A0 Auto-push failed for ${sandbox.branchName}: ${err}`);
+          }
+        }
+      }
+
       destroySandbox(sandbox);
     }
   }
@@ -198,7 +198,7 @@ export async function resumeSession(
 
   const client = new Anthropic({ apiKey });
   const costTracker = new CostTracker();
-  const logWriter = createLogWriter(session.name);
+  const logWriter = createLogWriter(session.name, session.id);
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
     else if (level === "warn") console.warn(msg);
@@ -222,18 +222,7 @@ export async function resumeSession(
   // Recreate REPL, rebuild playerData, and inject forge API
   const repl = createReplServer();
 
-  const { getGames, loadPlayer } = await import("../data/game-store");
-  const { createSplit } = await import("../data/splits");
-
-  const playerData: Record<string, any> = {};
-  for (const username of session.players) {
-    const meta = loadPlayer(username);
-    const games = getGames(username);
-    if (meta && games.length > 0) {
-      const result = createSplit(games, { seed: 42, trainRatio: 0.8 });
-      playerData[username] = { meta, games, ...result };
-    }
-  }
+  const playerData = await buildPlayerData(session.players);
   repl.inject("playerData", playerData);
 
   const forgeApi = createForgeApi(sandbox, session, state, playerData);
@@ -246,6 +235,7 @@ export async function resumeSession(
     baseline: session.baseline,
     focus,
     maxExperiments: 20,
+    researchBias: 0.5,
   };
 
   // Resume message
@@ -258,7 +248,6 @@ export async function resumeSession(
   updateSession(state, session.id, (s) => {
     s.status = "active";
   });
-  writePid(session.id);
 
   try {
     await runAgentLoop(client, repl, session, state, promptCtx, resumeMessage, costTracker, {
@@ -267,14 +256,13 @@ export async function resumeSession(
       maxExperiments: 20,
       seed: 42,
       quick: false,
-    }, logWriter);
+    }, logWriter, forgeApi, sandbox);
   } catch (err) {
     log(`\n  ✗ Session error: ${err}`, "error");
     updateSession(state, session.id, (s) => {
       s.status = "paused";
     });
   } finally {
-    removePid(session.id);
     repl.dispose();
     logWriter.close();
   }
@@ -302,6 +290,9 @@ function messageText(msg: Anthropic.MessageParam): string {
  * Prune conversation history to fit within a token budget.
  * Keeps first user message + last N turn pairs that fit.
  * Returns a pruned copy — does not mutate the original.
+ *
+ * IMPORTANT: tool_use (assistant) and tool_result (user) messages
+ * are always kept/dropped as pairs to avoid Anthropic API errors.
  */
 function pruneMessages(
   messages: Anthropic.MessageParam[],
@@ -313,15 +304,37 @@ function pruneMessages(
   const first = messages[0];
   const firstTokens = estimateTokens(messageText(first));
 
-  // Walk backwards, keeping turn pairs that fit
+  // Walk backwards in turn pairs (assistant + user) to keep tool_use/tool_result together
   const kept: Anthropic.MessageParam[] = [];
   let remaining = tokenBudget - firstTokens;
 
-  for (let i = messages.length - 1; i >= 1; i--) {
-    const tokens = estimateTokens(messageText(messages[i]));
-    if (remaining - tokens < 0 && kept.length >= 2) break;
-    remaining -= tokens;
-    kept.unshift(messages[i]);
+  let i = messages.length - 1;
+  while (i >= 1) {
+    const msg = messages[i];
+    const msgTokens = estimateTokens(messageText(msg));
+
+    // Check if this user message contains tool_result blocks (paired with previous assistant)
+    const isToolResult =
+      msg.role === "user" &&
+      Array.isArray(msg.content) &&
+      (msg.content as Anthropic.ToolResultBlockParam[]).some(
+        (b) => b.type === "tool_result"
+      );
+
+    if (isToolResult && i > 1 && messages[i - 1].role === "assistant") {
+      // Must keep/drop as a pair
+      const prevTokens = estimateTokens(messageText(messages[i - 1]));
+      const pairTokens = msgTokens + prevTokens;
+      if (remaining - pairTokens < 0 && kept.length >= 4) break;
+      remaining -= pairTokens;
+      kept.unshift(messages[i - 1], msg);
+      i -= 2;
+    } else {
+      if (remaining - msgTokens < 0 && kept.length >= 2) break;
+      remaining -= msgTokens;
+      kept.unshift(msg);
+      i -= 1;
+    }
   }
 
   return [first, ...kept];
@@ -330,7 +343,7 @@ function pruneMessages(
 /**
  * Main agent loop — iterates between Claude and the REPL.
  */
-async function runAgentLoop(
+export async function runAgentLoop(
   client: Anthropic,
   repl: ReturnType<typeof createReplServer>,
   session: ForgeSession,
@@ -339,7 +352,9 @@ async function runAgentLoop(
   initialMessage: string,
   costTracker: CostTracker,
   opts: ResearchOptions,
-  logWriter?: LogWriter
+  logWriter?: LogWriter,
+  forgeApi?: ForgeApi,
+  sandbox?: SandboxInfo,
 ): Promise<void> {
   const log = (msg: string, level: "info" | "warn" | "error" = "info") => {
     if (level === "error") console.error(msg);
@@ -361,6 +376,7 @@ async function runAgentLoop(
   let turnCount = 0;
   const maxTurns = opts.maxExperiments * 10; // ~10 API calls per experiment
   let knowledgeSummarized = false;
+  let convergenceFinalized = false;
 
   while (turnCount < maxTurns) {
     turnCount++;
@@ -372,8 +388,47 @@ async function runAgentLoop(
       convergenceConfig
     );
 
-    if (convergence.shouldStop) {
-      log(`\n  ⏹ Stopping: ${convergence.reason}`);
+    if (convergence.shouldStop && !convergenceFinalized) {
+      convergenceFinalized = true;
+      log(`\n  ⏹ Convergence reached: ${convergence.reason}`);
+
+      // Sync tracked changes immediately (don't wait for agent)
+      if (forgeApi) {
+        updateSession(state, session.id, (s) => {
+          s.activeChanges = forgeApi.code.getTrackedChanges();
+        });
+      }
+
+      // Give the agent one finalization turn
+      messages.push({
+        role: "user",
+        content: [
+          `Convergence reached: ${convergence.reason}. Session is ending. Before closing:`,
+          "1. Leave a note with `forge.knowledge.note(summary, [tags])` summarizing your key findings and recommendations.",
+          "2. Generate hypotheses for FUTURE sessions with `forge.hypothesis.commit()` — what should the next agent try?",
+          "3. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
+          "4. If you achieved a significant improvement, ensure the branch is pushed with `forge.session.push()`.",
+          "5. Record a final reflection with `forge.log.reflect()` covering what was learned this session.",
+          "",
+          "After completing these steps, say 'Session complete' to end.",
+        ].join("\n"),
+      });
+      continue; // give the agent one more turn
+    }
+
+    if (convergence.shouldStop && convergenceFinalized) {
+      log(`\n  ⏹ Finalizing session: ${convergence.reason}`);
+
+      // Ensure changes are committed and pushed before marking complete
+      if (forgeApi) {
+        try {
+          const result = forgeApi.session.finalize();
+          log(`  ${result}`);
+        } catch (err) {
+          log(`  Finalization warning: ${err}`, "warn");
+        }
+      }
+
       updateSession(state, session.id, (s) => {
         s.status = "completed";
       });
@@ -482,13 +537,70 @@ async function runAgentLoop(
           const input = block.input as { code: string };
           log(`  $:\n${input.code}\n  ────`);
 
+          // Intercept process.stdout/stderr to capture progress writes
+          const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+          const originalStderrWrite = process.stderr.write.bind(process.stderr);
+          let pendingProgress = "";
+
+          // Write directly to original stdout to avoid recursion:
+          // log() -> console.log() -> process.stdout.write -> handleWrite -> log() ...
+          const captureLog = (msg: string) => {
+            originalStdoutWrite.call(process.stdout, `${msg}\n`);
+            logWriter?.log(msg, "info");
+          };
+
+          const handleWrite = (chunk: string | Uint8Array) => {
+            const str = typeof chunk === "string" ? chunk : chunk.toString();
+            if (str.includes("\r") && !str.includes("\n")) {
+              // \r-based progress — remember latest, don't log yet
+              pendingProgress = str.replace(/\r/g, "").trim();
+            } else {
+              // Regular output — flush pending progress first, then log
+              if (pendingProgress) {
+                captureLog(`  ${pendingProgress}`);
+                pendingProgress = "";
+              }
+              const trimmed = str.trim();
+              if (trimmed) captureLog(`  ${trimmed}`);
+            }
+          };
+
+          process.stdout.write = ((...args: Parameters<typeof process.stdout.write>) => {
+            handleWrite(args[0]);
+            return originalStdoutWrite(...args);
+          }) as typeof process.stdout.write;
+
+          process.stderr.write = ((...args: Parameters<typeof process.stderr.write>) => {
+            handleWrite(args[0]);
+            return originalStderrWrite(...args);
+          }) as typeof process.stderr.write;
+
           const toolOutput = await handleReplTool(repl, input);
+
+          // Restore original writers + flush pending progress
+          process.stdout.write = originalStdoutWrite;
+          process.stderr.write = originalStderrWrite;
+          if (pendingProgress) {
+            log(`  ${pendingProgress}`);
+            pendingProgress = "";
+          }
+
           const formatted = formatToolOutput(toolOutput);
 
           if (toolOutput.error) {
             log(`  $:✗ ${toolOutput.error.slice(0, 200)}`, "error");
           } else {
             log(`  $:✓ (${toolOutput.durationMs}ms)`);
+          }
+
+          // Log REPL stdout (console.log output from executed code)
+          if (toolOutput.output) {
+            log(`  Output:\n${toolOutput.output}`);
+          }
+
+          // Log REPL return value
+          if (toolOutput.result && toolOutput.result !== "(undefined)") {
+            log(`  Result:\n${toolOutput.result}`);
           }
 
           toolResults.push({
@@ -533,20 +645,40 @@ async function runAgentLoop(
       if (wantsDone && !knowledgeSummarized) {
         // Ask agent to summarize findings before closing
         knowledgeSummarized = true;
+
+        // Sync tracked changes immediately
+        if (forgeApi) {
+          updateSession(state, session.id, (s) => {
+            s.activeChanges = forgeApi.code.getTrackedChanges();
+          });
+        }
+
         messages.push({
           role: "user",
           content: [
             "Before closing, please:",
             "1. Leave a note with `forge.knowledge.note(summary, [tags])` summarizing your key findings and recommendations for future sessions.",
-            "2. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
-            "3. Create new topics with `forge.knowledge.create()` for any novel knowledge areas you discovered.",
-            "4. If you achieved a significant improvement, push the branch with `forge.session.push()` so it can be reviewed as a PR.",
+            "2. Generate hypotheses for FUTURE sessions with `forge.hypothesis.commit()` — what should the next agent try? Include at least one groundbreaking hypothesis.",
+            "3. Compact any topics with large experiment histories using `forge.knowledge.compact(topicId)`.",
+            "4. Create new topics with `forge.knowledge.create()` for any novel knowledge areas you discovered.",
+            "5. If you achieved a significant improvement, push the branch with `forge.session.push()` so it can be reviewed as a PR.",
+            "6. Record a final reflection with `forge.log.reflect()` covering what was learned this session.",
           ].join("\n"),
         });
         continue;
       }
 
       if (wantsDone) {
+        // Finalize: sync changes, commit, push
+        if (forgeApi) {
+          try {
+            const result = forgeApi.session.finalize();
+            log(`  ${result}`);
+          } catch (err) {
+            log(`  Finalization warning: ${err}`, "warn");
+          }
+        }
+
         updateSession(state, session.id, (s) => {
           s.status = "completed";
         });
@@ -559,14 +691,34 @@ async function runAgentLoop(
       const freshNotes = buildNotesContext(3);
       const contextRefresh = [freshKnowledge, freshNotes].filter(Boolean).join("\n\n");
 
+      // Compute reflection status
+      const reflections = session.reflections ?? [];
+      const lastRef = reflections.length > 0 ? reflections[reflections.length - 1] : null;
+      const expsSinceReflection = session.experiments.length - (lastRef?.afterExperimentNumber ?? 0);
+      const needsReflection = expsSinceReflection >= 5;
+
+      const hasHypothesis = (session.hypothesisSets ?? []).length > 0;
+
       messages.push({
         role: "user",
         content: [
           "Continue with the next experiment. Remember:",
-          "- Ask the oracle (`forge.oracle.ask(question, context)`) if you're unsure what to try next.",
-          "- After each experiment, leave a note (`forge.knowledge.note(summary, [tags])`).",
+          !hasHypothesis
+            ? "- ⚠ You have NOT generated a hypothesis set yet. Call forge.hypothesis.commit() BEFORE running experiments."
+            : "",
+          "- Frame oracle queries as adversarial: 'What would make my hypothesis fail?'",
+          "- After each oracle result, record surprise: forge.oracle.recordSurprise(oracleId, expectation, wasSurprising)",
+          "- After each experiment, record with forge.log.record() and leave a knowledge note.",
+          needsReflection
+            ? `- ⚠ REFLECTION DUE: ${expsSinceReflection} experiments since last reflection. Call forge.log.reflect() before continuing.`
+            : "",
+          (opts.researchBias ?? 0.5) >= 0.75
+            ? "- Groundbreaking sessions earn 5x. If you haven't committed to groundbreaking yet, consider it strongly."
+            : (opts.researchBias ?? 0.5) >= 0.4
+              ? "- Stay focused on your committed hypothesis. Make code changes to avoid the 0.5x config-only penalty."
+              : "- Focus on validating your current approach thoroughly. Incremental gains compound reliably.",
           contextRefresh ? `\n## Updated Knowledge Context\n\n${contextRefresh}` : "",
-        ].join("\n"),
+        ].filter(Boolean).join("\n"),
       });
     }
   }
@@ -579,11 +731,70 @@ async function runAgentLoop(
   }
 }
 
-function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, any>): string {
+/**
+ * Generate bias-appropriate research guidance text.
+ * bias: 0.0 = conservative, 0.5 = balanced, 1.0 = aggressive.
+ */
+function biasGuidance(bias: number): {
+  competitiveFraming: string;
+  scoringRule: string;
+  hypothesisHint: string;
+  strategyReminder: string;
+} {
+  if (bias >= 0.75) {
+    return {
+      competitiveFraming: `## COMPETITIVE OBJECTIVE: Reach #1 on the Leaderboard\n\nBefore anything else, check your standing:`,
+      scoringRule:
+        `\n**CRITICAL SCORING RULE:** Groundbreaking (exploratory) sessions earn **5x** the leaderboard score of incremental sessions. ` +
+        `If you are behind on the leaderboard, a successful groundbreaking session is the fastest path to #1. Factor this into your hypothesis commitment.\n`,
+      hypothesisHint: `  committedLevel: "<choose based on leaderboard strategy — groundbreaking earns 5x>",`,
+      strategyReminder:
+        `\n**Remember:** Groundbreaking = 5x score, but config-only sessions = 0.5x penalty. ` +
+        `The best strategy: commit to groundbreaking AND make code changes (5x). The worst: continuous + config-only (0.5x).\n`,
+    };
+  } else if (bias >= 0.4) {
+    return {
+      competitiveFraming: `## OBJECTIVE: Maximize Leaderboard Score\n\nCheck your current standing before choosing a strategy:`,
+      scoringRule:
+        `\n**SCORING:** The leaderboard rewards both consistent incremental work and bold exploratory research. ` +
+        `Groundbreaking sessions earn a 5x multiplier, but only if they produce measurable improvements — a failed groundbreaking attempt scores 5x of zero. ` +
+        `Consistent incremental gains (1x each) accumulate reliably. Choose the approach that fits your current position and available session time.\n`,
+      hypothesisHint: `  committedLevel: "<choose the level that matches your confidence and session goals>",`,
+      strategyReminder:
+        `\n**Strategy options:** ` +
+        `Groundbreaking + code changes = 5x (high risk, high reward). ` +
+        `Continuous + code changes = 1x (reliable compounding). ` +
+        `Config-only sessions = 0.5x penalty. Make at least one code change per session.\n`,
+    };
+  } else {
+    return {
+      competitiveFraming: `## OBJECTIVE: Build Reliable, Compounding Improvements\n\nCheck where you stand on the leaderboard:`,
+      scoringRule:
+        `\n**APPROACH:** Consistent incremental improvements compound over time. Each well-validated experiment adds to your score reliably. ` +
+        `Groundbreaking research earns a 5x multiplier IF it succeeds, but failed ambitious experiments produce nothing. ` +
+        `Focus on depth over breadth: thoroughly explore one lever before moving to the next. ` +
+        `Aim to run every experiment, measure carefully, and build on what works.\n`,
+      hypothesisHint: `  committedLevel: "<continuous-a or continuous-b recommended — build on what works>",`,
+      strategyReminder:
+        `\n**Key principle:** Five successful incremental sessions (1x each) beat one failed groundbreaking session (5x * 0 = 0). ` +
+        `Config-only sessions receive a 0.5x penalty. Make code changes that you can validate empirically.\n`,
+    };
+  }
+}
+
+export function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, any>): string {
   const parts: string[] = [];
+  const guidance = biasGuidance(opts.researchBias ?? 0.5);
 
   parts.push(`Start research session "${opts.name}" focused on ${opts.focus}.`);
   parts.push(`Seed: ${opts.seed}\n`);
+
+  parts.push(guidance.competitiveFraming);
+  parts.push("```typescript");
+  parts.push(`const lb = await forge.leaderboard.get();`);
+  parts.push(`console.log("Current leaderboard:", JSON.stringify(lb, null, 2));`);
+  parts.push("```");
+  parts.push(guidance.scoringRule);
 
   // Show available player data
   parts.push("## Available Players (pre-downloaded and split)\n");
@@ -602,7 +813,7 @@ function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, a
 
   // Give the agent a concrete first step
   const first = opts.players?.[0];
-  parts.push(`\n## First step: compute baseline\n`);
+  parts.push(`\n## Step 1: Compute baseline\n`);
   parts.push("```typescript");
   if (first) {
     parts.push(`const baseline = await forge.eval.baseline(playerData["${first}"].testGames);`);
@@ -611,21 +822,36 @@ function buildInitialMessage(opts: ResearchOptions, playerData: Record<string, a
   parts.push("```");
 
   parts.push(`\n## After baseline, follow this workflow:\n`);
-  parts.push(`**Step 1: Consult history** — check what previous sessions learned:`);
+  parts.push(`**Step 2: Consult history** — check what previous sessions learned:`);
   parts.push("```typescript");
   parts.push(`await forge.knowledge.search("${opts.focus}")`);
   parts.push(`await forge.knowledge.notes({ limit: 5 })`);
   parts.push(`await forge.history.searchExperiments("${opts.focus}")`);
   parts.push("```");
-  parts.push(`\n**Step 2: Ask the oracle** — before your first experiment, consult the oracle for strategy:`);
+  parts.push(`\n**Step 3: Generate hypotheses** — MANDATORY before any experiments:`);
   parts.push("```typescript");
-  parts.push(`await forge.oracle.ask("Given baseline metrics and ${opts.focus} focus, what is the highest-impact first experiment?", JSON.stringify(baseline))`);
+  parts.push(`forge.hypothesis.commit({`);
+  parts.push(`  hypotheses: [`);
+  parts.push(`    { level: "continuous-a", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
+  parts.push(`    { level: "continuous-b", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
+  parts.push(`    { level: "groundbreaking", statement: "...", falsificationCriteria: "...", estimatedCost: "..." },`);
+  parts.push(`  ],`);
+  parts.push(guidance.hypothesisHint);
+  parts.push(`  commitmentRationale: "Choosing this because...",`);
+  parts.push(`  costOfBeingWrong: "If wrong, it means...",`);
+  parts.push(`});`);
   parts.push("```");
-  parts.push(`\n**Step 3: Run experiment, then ALWAYS leave a note:**`);
+  parts.push(guidance.strategyReminder);
+  parts.push(`\n**Step 4: Challenge your hypothesis** — first oracle query must seek disconfirmation:`);
+  parts.push("```typescript");
+  parts.push(`const oracleResult = await forge.oracle.ask("What inputs would most likely make this hypothesis fail?", JSON.stringify(baseline), "adversarial")`);
+  parts.push(`forge.oracle.recordSurprise(oracleResult.id, "I expected...", true/false, "The surprise was...")`);
+  parts.push("```");
+  parts.push(`\n**Step 5: Run experiment, record, and leave a note:**`);
   parts.push("```typescript");
   parts.push(`forge.knowledge.note("EXP <name>: <hypothesis>. Result: <delta>. Conclusion: <learning>", ["${opts.focus}", "<technique>"])`);
   parts.push("```");
-  parts.push(`\nRepeat steps 2-3. Use the oracle whenever you're unsure which direction to take next.`);
+  parts.push(`\nRepeat steps 4-5. After every 5 experiments, call forge.log.reflect(). When abandoning a hypothesis, call forge.log.kill().`);
 
   if (opts.quick) {
     parts.push(`\nUse \`forge.eval.runQuick(testGames, trainGames)\` for faster triage iterations.`);

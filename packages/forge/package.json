@@ -6,21 +6,25 @@
   "scripts": {
     "forge": "tsx src/cli.ts",
     "build": "echo 'forge uses tsx, no build step'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.40",
+    "@anthropic-ai/sdk": "^0.39.0",
     "@outprep/engine": "*",
     "@outprep/harness": "*",
-    "@anthropic-ai/sdk": "^0.39.0",
-    "openai": "^4.0.0",
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^11.10.0",
     "commander": "^12.0.0",
     "dotenv": "^16.0.0",
-    "gray-matter": "^4.0.0"
+    "gray-matter": "^4.0.0",
+    "openai": "^4.0.0"
   },
   "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
     "tsx": "^4.0.0",
     "typescript": "^5",
-    "@types/better-sqlite3": "^7.0.0"
+    "vitest": "^4.0.18"
   }
 }
