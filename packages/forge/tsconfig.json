@@ -1,7 +1,12 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
+    "module": "esnext",
     "moduleResolution": "bundler",
     "strict": true,
     "esModuleInterop": true,
@@ -10,15 +15,40 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "jsx": "react-jsx",
+    "incremental": true,
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
     "paths": {
-      "@outprep/engine": ["../engine/src/index.ts"],
-      "@outprep/harness": ["../harness/src/index.ts"]
-    }
+      "@/*": [
+        "./src/*"
+      ],
+      "@outprep/engine": [
+        "../engine/src/index.ts"
+      ],
+      "@outprep/harness": [
+        "../harness/src/index.ts"
+      ]
+    },
+    "allowJs": true
   },
   "include": [
+    "next-env.d.ts",
     "src/**/*.ts",
+    "src/**/*.tsx",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts",
     "../engine/src/**/*.ts",
     "../harness/src/**/*.ts"
   ],
-  "exclude": ["node_modules", "data", "sessions", "logs"]
+  "exclude": [
+    "node_modules",
+    "data",
+    "sessions",
+    "logs",
+    ".next"
+  ]
 }

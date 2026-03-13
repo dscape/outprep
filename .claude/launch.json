@@ -1,10 +1,16 @@
 {
   "version": "0.0.1",
   "configurations": [
-{
+    {
       "name": "dev",
       "runtimeExecutable": "npx",
-      "runtimeArgs": ["next", "dev", "--port", "3001"],
+      "runtimeArgs": ["next", "dev", "--port", "3000"],
+      "port": 3000
+    },
+    {
+      "name": "forge-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "--workspace=packages/forge", "dev"],
       "port": 3001
     }
   ]

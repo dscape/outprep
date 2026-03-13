@@ -5,9 +5,9 @@
  * The agent consults these before formulating hypotheses.
  * Experiment results are appended as institutional memory.
  *
- * Seed data lives in src/knowledge/topics/*.md and notes/*.md.
- * On first access, if the DB tables are empty, they are auto-populated
- * from these seed files so new developers get a working knowledge base.
+ * Seed data lives in src/knowledge/topics/*.md. Notes are stored in SQLite.
+ * On first access, if the DB tables are empty, topics are auto-populated
+ * from the seed files so new developers get a working knowledge base.
  *
  * Also provides:
  * - Topic creation and compaction/archiving

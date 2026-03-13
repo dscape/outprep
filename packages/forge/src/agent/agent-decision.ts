@@ -71,6 +71,7 @@ interface DecisionContext {
   recentPapers: PaperSummaryForDecision[];
 }
 
+// TODO: paginate when scale requires (currently loads all sessions, papers, notes into memory)
 function gatherContext(agentId: string, agentName: string): DecisionContext {
   const state = loadState();
   const players = listPlayers();

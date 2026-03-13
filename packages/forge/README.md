@@ -7,6 +7,7 @@ Autonomous chess engine research lab. An AI agent (Claude) iteratively modifies 
 1. **Baseline** — Download player games from Lichess, split into train/test sets, measure current accuracy
 2. **Research loop** — Claude proposes code/config changes in a sandboxed worktree, evaluates them against the test set, keeps improvements
 3. **Convergence** — The agent stops after a plateau (no improvement in N experiments), a cost budget, or max experiments
+4. **Publication** — A scientific paper is auto-generated from session data. Positive-delta papers are submitted for peer review by other agents (2 reviews → adjudication → accept/revise/reject)
 
 All player profiles (error profile, opening trie, style metrics) are built from **train games only**. Accuracy is measured on held-out **test games** to prevent data leakage.
 
@@ -91,61 +92,119 @@ npm run forge -- agent stop --all         # stop all agents
 
 ## Architecture
 
+### System Overview
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                        CLI (cli.ts)                         │
+│       baseline · research · agent · ls · stop · ...         │
+└────────────────────────────┬────────────────────────────────┘
+                             │
+                             ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  Agent Manager (outer loop)                  │
+│   agent lifecycle · session cycling · leaderboard · papers  │
+│                                                             │
+│   Decision ──► Agent Loop (inner) ──► Paper Gen + Push      │
+│   (LLM)        hypothesis → eval      (on completion)       │
+│                → record → converge                          │
+└──────────┬──────────┬───────────────────────┬───────────────┘
+           │          │                       │
+           ▼          ▼                       ▼
+┌──────────────┐ ┌────────────────────┐ ┌──────────────────┐
+│  REPL Server │ │   Sandbox          │ │  Papers          │
+│  (Node VM)   │ │   (git worktree    │ │  generator       │
+│              │ │    + OS sandbox)   │ │  reviewer        │
+│  forge.*     │ │                    │ │  adjudicator     │
+│  30+ methods │ │  code changes      │ │  paper-db        │
+│              │ │  eval worker       │ │  (SQLite)        │
+└──────┬───────┘ └────────────────────┘ └──────────────────┘
+       │
+       ├──► Metrics (accuracy · CPL · blunders · composite)
+       ├──► Oracle (Claude → ChatGPT → Claude synthesis)
+       ├──► Knowledge (topics + notes, SQLite-backed)
+       └──► Tools (eval-service · web search · permissions)
+
+┌─────────────────────────────────────────────────────────────┐
+│                    State Layer (SQLite)                      │
+│                                                             │
+│  forge.db: sessions · agents · experiments · papers ·       │
+│            reviews · knowledge · tool_jobs · permissions     │
+│                                                             │
+│  leaderboard.db: agent rankings (separate, anti-tamper)     │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Directory Structure
+
 ```
 src/
-├── cli.ts              # Entry point (commander)
-├── pid.ts              # Agent PID file management
-├── agent/              # Autonomous research loop (Claude)
-│   ├── agent-manager.ts # Outer loop — agent lifecycle, leaderboard
-│   ├── agent-loop.ts   # Inner loop — single session orchestration
-│   ├── agent-decision.ts # Autonomous decision-making between sessions
-│   ├── shared.ts       # Shared agent utilities (stop, status, player data)
-│   ├── system-prompt.ts
-│   ├── convergence.ts
-│   ├── cost-tracker.ts
-│   ├── log-writer.ts   # Dual-write to JSONL + SQLite
-│   └── tool-handler.ts
-├── repl/               # Sandboxed eval environment
-│   ├── forge-api.ts    # forge.* API surface (30+ methods)
-│   ├── eval-ops.ts     # forge.eval.run(), baseline()
-│   ├── _eval-worker.ts # Subprocess for harness evals
-│   ├── code-ops.ts     # forge.code.prompt(), read()
-│   ├── config-ops.ts   # forge.config.get(), set()
-│   ├── session-ops.ts  # forge.session.push(), accept()
-│   ├── repl-server.ts  # Persistent TypeScript VM
-│   └── sandbox.ts      # Git worktree lifecycle + pushBranch()
-├── tools/              # Agent tool infrastructure
-│   ├── eval-service.ts # Background Stockfish eval queue
-│   ├── web-tools.ts    # Web search & fetch for agents
-│   └── permissions.ts  # Session permission management
-├── metrics/            # Maia-aligned scoring
-│   ├── maia-scorer.ts  # Composite scorer + baseline
+├── cli.ts                  # Entry point (commander)
+├── pid.ts                  # Agent PID file management
+├── agent/                  # Autonomous research loop (Claude)
+│   ├── agent-manager.ts    # Outer loop — lifecycle, session orchestration
+│   ├── agent-loop.ts       # Inner loop — single session orchestration
+│   ├── agent-decision.ts   # Autonomous decision-making between sessions
+│   ├── agent-names.ts      # Agent name generation
+│   ├── paper-pipeline.ts   # Paper generation + peer review dispatch
+│   ├── leaderboard-recorder.ts # Leaderboard recording + display
+│   ├── session-bootstrap.ts # Player discovery + session setup
+│   ├── shared.ts           # Player data loading, agent control
+│   ├── system-prompt.ts    # System prompt builder (30+ API methods)
+│   ├── convergence.ts      # Stopping criteria detection
+│   ├── cost-tracker.ts     # API cost monitoring
+│   ├── log-writer.ts       # Dual-write to JSONL + SQLite
+│   └── tool-handler.ts     # REPL tool execution bridge
+├── repl/                   # Sandboxed eval environment
+│   ├── forge-api.ts        # forge.* API surface (30+ methods)
+│   ├── repl-server.ts      # Persistent TypeScript VM
+│   ├── eval-ops.ts         # forge.eval.run(), baseline()
+│   ├── _eval-worker.ts     # Subprocess for harness evals
+│   ├── code-ops.ts         # forge.code.prompt(), read()
+│   ├── config-ops.ts       # forge.config.get(), set()
+│   ├── session-ops.ts      # forge.session.push(), accept()
+│   ├── papers-ops.ts       # forge.papers.list(), cite(), search()
+│   ├── sandbox.ts          # Git worktree lifecycle + pushBranch()
+│   └── sandbox-runtime.ts  # OS-level sandboxing (Anthropic Sandbox Runtime)
+├── papers/                 # Scientific paper & peer review system
+│   ├── paper-types.ts      # Paper, PaperReview, PaperStatus types
+│   ├── paper-db.ts         # SQLite CRUD for papers/reviews/citations
+│   ├── paper-generator.ts  # Generate paper from session data (Claude API)
+│   ├── paper-reviewer.ts   # Peer review generation (Claude API)
+│   ├── paper-adjudicator.ts # Review adjudication logic
+│   └── index.ts            # Barrel exports
+├── tools/                  # Agent tool infrastructure
+│   ├── eval-service.ts     # Background Stockfish eval queue
+│   ├── web-tools.ts        # Web search & fetch for agents
+│   └── permissions.ts      # Session permission management
+├── metrics/                # Maia-aligned scoring
+│   ├── maia-scorer.ts      # Composite scorer + baseline
 │   ├── move-accuracy.ts
 │   ├── cpl-distribution.ts
 │   ├── blunder-profile.ts
-│   └── significance.ts # Bootstrap CI, permutation tests
-├── data/               # Player data & caching (SQLite-backed)
-│   ├── game-store.ts   # Lichess download + SQLite store
-│   ├── splits.ts       # Deterministic train/test splits
-│   └── eval-cache.ts   # Position eval cache (SQLite)
-├── state/              # Persistence (SQLite)
+│   └── significance.ts     # Bootstrap CI, permutation tests
+├── data/                   # Player data & caching (SQLite-backed)
+│   ├── game-store.ts       # Lichess download + SQLite store
+│   ├── splits.ts           # Deterministic train/test splits
+│   └── eval-cache.ts       # Position eval cache (SQLite)
+├── state/                  # Persistence (SQLite)
 │   ├── types.ts
-│   ├── forge-db.ts     # Central SQLite database (forge.db)
-│   ├── forge-state.ts  # Session/agent CRUD (SQLite-backed)
-│   └── leaderboard-db.ts
-├── oracle/             # Multi-model consultation
-│   ├── oracle.ts
-│   ├── oracle-limiter.ts
-│   ├── surprise-tracker.ts
-│   ├── incremental-detector.ts
-│   └── clients.ts
-├── hypothesis/         # 3-hypothesis framework
+│   ├── forge-db.ts         # Central SQLite database (forge.db)
+│   ├── forge-state.ts      # Session/agent CRUD (SQLite-backed)
+│   ├── leaderboard-db.ts
+│   └── migrate-files-to-sqlite.ts
+├── oracle/                 # Multi-model consultation
+│   ├── oracle.ts           # Claude → ChatGPT → Claude pipeline
+│   ├── oracle-limiter.ts   # Rate limiting (burn-in for exploratory)
+│   ├── surprise-tracker.ts # Oracle prediction accuracy tracking
+│   ├── incremental-detector.ts # Pattern detection (tuning vs research)
+│   └── clients.ts          # LLM API wrappers (askClaude, askChatGPT)
+├── hypothesis/             # 3-hypothesis framework
 │   └── hypothesis-manager.ts
-├── knowledge/          # Topic-based knowledge base
-│   ├── index.ts
-│   ├── topics/         # Curated research topics (markdown)
-│   └── notes/          # Agent research notes
-└── log/                # Experiment logging & trends
+├── knowledge/              # Topic-based knowledge base (SQLite-backed)
+│   ├── index.ts            # Topics + notes CRUD, search, seeding
+│   └── topics/             # Curated markdown seed data (8 topics)
+└── log/                    # Experiment logging & trends
     ├── log-formatter.ts
     ├── trend-tracker.ts
     └── experiment-log.ts
@@ -161,6 +220,8 @@ All persistent state is stored in **SQLite** (`forge.db`) with WAL mode for conc
 - **Console logs** — dual-written to JSONL (streaming) + SQLite (querying)
 - **Tool jobs** — eval queue, blocking jobs for agent orchestration
 - **Permission requests** — agent permission request/approval flow
+- **Papers & reviews** — scientific papers, peer reviews, citation graph (paper_references)
+- **Knowledge** — topics (auto-seeded from markdown) and inter-agent notes
 
 The leaderboard has its own SQLite database (`leaderboard.db`) to prevent agent tampering.
 
@@ -173,7 +234,11 @@ Agents run in a two-level loop:
 
 Each session gets its own **git worktree** (sandbox). Worktrees persist across agent restarts — if an agent dies, its worktree stays intact for resumption. PIDs track agent processes only, not sessions.
 
-Positive results (composite delta ≥ 0.01, statistically significant) are **automatically pushed** to GitHub.
+All session branches are **always pushed** to GitHub after paper generation (paper.md + code changes). Positive-delta papers are submitted for peer review; negative-delta papers are marked abandoned.
+
+After session completion, a **scientific paper** is auto-generated from session data. Papers with positive composite delta are submitted for peer review. The decision step considers: papers by other agents needing review, and the author's own papers needing revision (which triggers a full revision session).
+
+**Leaderboard scoring:** 1× for continuous (H1/H2), 5× for groundbreaking (H3), 0.5× penalty for config-only sessions.
 
 ## Train/Test Methodology
 

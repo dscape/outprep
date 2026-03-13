@@ -31,7 +31,7 @@ export interface SessionPermissions {
 export function defaultPermissions(worktreePath: string): SessionPermissions {
   return {
     filesystem: {
-      readAllow: [worktreePath, "packages/forge/data/"],
+      readAllow: [worktreePath, "packages/data/"],
       writeAllow: [worktreePath],
       writeDeny: [".env", ".git/config"],
     },

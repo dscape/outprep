@@ -765,12 +765,25 @@ export function createForgeApi(
   };
 
   // Wrap code.prompt to log to tool_jobs
+  // Note: codeOps.prompt() catches errors internally and returns them as strings
+  // (e.g. "Error from Claude Code: ..."). We detect these and throw so logToolJob
+  // correctly marks the job as "failed", then catch to return the error string
+  // to the agent so it can still see the message.
   const wrappedCodeOps: CodeOps = {
     ...codeOps,
-    prompt(instruction: string): Promise<string> {
-      return logToolJob("code_prompt", { instruction: instruction.slice(0, 200) }, () =>
-        codeOps.prompt(instruction),
-      );
+    async prompt(instruction: string): Promise<string> {
+      try {
+        return await logToolJob("code_prompt", { instruction: instruction.slice(0, 200) }, async () => {
+          const result = await codeOps.prompt(instruction);
+          if (result.startsWith("Error from Claude Code:")) {
+            throw new Error(result);
+          }
+          return result;
+        });
+      } catch (err) {
+        // logToolJob already marked the job as failed; return the error message to the agent
+        return (err as Error).message;
+      }
     },
   };
 

@@ -2,7 +2,7 @@
 
 # dependencies
 /node_modules
-/packages/fide-pipeline/node_modules
+/packages/*/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -17,6 +17,7 @@
 # next.js
 /.next/
 /out/
+packages/forge/.next/
 
 # production
 /build

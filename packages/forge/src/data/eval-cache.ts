@@ -2,7 +2,7 @@
  * SQLite evaluation cache.
  *
  * Caches Stockfish position evaluations in a local SQLite database
- * at `packages/forge/data/evals/eval-cache.sqlite`. The cache is
+ * at `packages/data/evals/eval-cache.sqlite`. The cache is
  * keyed by SHA-256 of `${fen}:${depth}` for deduplication.
  *
  * Uses better-sqlite3 for synchronous access — evaluations are
