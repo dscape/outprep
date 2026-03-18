@@ -4,7 +4,7 @@ import fs from "fs";
 import path from "path";
 import { execSync } from "child_process";
 
-const FORGE_ROOT = process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
+const FORGE_ROOT = process.env.FORGE_DATA_DIR || process.cwd();
 const STATE_PATH = path.join(FORGE_ROOT, "forge-state.json");
 const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
 

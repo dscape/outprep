@@ -21,7 +21,7 @@ function readEvalPid(): { pid: number | null; alive: boolean } {
   const fs = require("fs");
   const path = require("path");
   const FORGE_ROOT =
-    process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
+    process.env.FORGE_DATA_DIR || process.cwd();
   const pidFile = path.join(FORGE_ROOT, ".pids", "eval-service.pid");
   try {
     const raw = fs.readFileSync(pidFile, "utf-8");
@@ -54,7 +54,7 @@ function getServiceStatus(): ServiceStatus {
     const path = require("path");
     const fs = require("fs");
     const FORGE_ROOT =
-      process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
+      process.env.FORGE_DATA_DIR || process.cwd();
     const DB_PATH = path.join(FORGE_ROOT, "forge.db");
     if (fs.existsSync(DB_PATH)) {
       const db = new Database(DB_PATH, { readonly: true });

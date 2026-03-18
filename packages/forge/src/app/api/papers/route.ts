@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
     const Database = require("better-sqlite3");
     const path = require("path");
     const FORGE_ROOT =
-      process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
+      process.env.FORGE_DATA_DIR || process.cwd();
     const DB_PATH = path.join(FORGE_ROOT, "forge.db");
 
     const db = new Database(DB_PATH, { readonly: true });

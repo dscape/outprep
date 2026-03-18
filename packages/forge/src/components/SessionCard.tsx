@@ -1,23 +1,31 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { SessionSummary } from "@/lib/forge-types";
 import { StatusBadge } from "./StatusBadge";
 import { CostDisplay } from "./CostDisplay";
 
+function formatDate(date: Date): string {
+  const month = date.toLocaleString("en-US", { month: "short" });
+  const day = date.getDate();
+  const hours = date.getHours();
+  const minutes = date.getMinutes().toString().padStart(2, "0");
+  const ampm = hours >= 12 ? "PM" : "AM";
+  const h = hours % 12 || 12;
+  return `${month} ${day}, ${h.toString().padStart(2, "0")}:${minutes} ${ampm}`;
+}
+
 export function SessionCard({ session }: { session: SessionSummary }) {
   const router = useRouter();
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [updated, setUpdated] = useState("");
 
-  const updated = new Date(session.updatedAt).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  useEffect(() => {
+    setUpdated(formatDate(new Date(session.updatedAt)));
+  }, [session.updatedAt]);
 
   async function handleDelete() {
     setDeleting(true);
@@ -103,7 +111,7 @@ export function SessionCard({ session }: { session: SessionSummary }) {
           </div>
         )}
 
-        <p className="text-xs text-zinc-600 mt-3">Updated {updated}</p>
+        {updated && <p className="text-xs text-zinc-600 mt-3">Updated {updated}</p>}
       </Link>
 
       {/* Delete confirmation dialog */}

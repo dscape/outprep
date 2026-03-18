@@ -36,7 +36,7 @@ export async function GET(request: NextRequest) {
     const path = require("path");
     const fs = require("fs");
     const FORGE_ROOT =
-      process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
+      process.env.FORGE_DATA_DIR || process.cwd();
     const DB_PATH = path.join(FORGE_ROOT, "forge.db");
     const PIDS_DIR = path.join(FORGE_ROOT, ".pids");
 

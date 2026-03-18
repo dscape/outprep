@@ -24,7 +24,7 @@ export async function GET(
 
   // offset = last seen row ID (0 = start from beginning)
   const offset = parseInt(req.nextUrl.searchParams.get("offset") ?? "0", 10);
-  const isActive = session.status === "active";
+  const isActive = session.isRunning || session.status === "active";
 
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -40,7 +40,7 @@ export async function GET(
       try {
         const db = new Database(
           require("path").join(
-            process.env.FORGE_DATA_DIR || require("path").join(process.cwd(), "packages", "forge"),
+            process.env.FORGE_DATA_DIR || process.cwd(),
             "forge.db"
           ),
           { readonly: true }
@@ -73,7 +73,7 @@ export async function GET(
         try {
           const db = new Database(
             require("path").join(
-              process.env.FORGE_DATA_DIR || require("path").join(process.cwd(), "packages", "forge"),
+              process.env.FORGE_DATA_DIR || process.cwd(),
               "forge.db"
             ),
             { readonly: true }
@@ -92,7 +92,7 @@ export async function GET(
 
           // Re-check session status
           const freshSession = getSession(sessionId);
-          if (!freshSession || freshSession.status !== "active") {
+          if (!freshSession || (!freshSession.isRunning && freshSession.status !== "active")) {
             controller.enqueue(encoder.encode(`event: done\ndata: {}\n\n`));
             controller.enqueue(encoder.encode(`event: offset\ndata: ${lastId}\n\n`));
             clearInterval(interval);

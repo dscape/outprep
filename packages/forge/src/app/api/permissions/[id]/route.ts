@@ -12,7 +12,7 @@ export async function POST(
     const Database = require("better-sqlite3");
     const path = require("path");
     const fs = require("fs");
-    const FORGE_ROOT = process.env.FORGE_DATA_DIR || path.join(process.cwd(), "packages", "forge");
+    const FORGE_ROOT = process.env.FORGE_DATA_DIR || process.cwd();
     const DB_PATH = path.join(FORGE_ROOT, "forge.db");
 
     if (!fs.existsSync(DB_PATH)) {
