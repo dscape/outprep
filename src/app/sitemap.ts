@@ -8,18 +8,16 @@ import {
   getEventSlugsForSitemap,
 } from "@/lib/db";
 
-// Generate sitemaps on-demand instead of at build time to avoid timeouts
-export const dynamic = "force-dynamic";
-export const revalidate = 86400; // Cache for 24 hours
+export const revalidate = 86400; // ISR: cache for 24 hours
 
 const BASE_URL = "https://outprep.xyz";
-const ENTRIES_PER_SITEMAP = 45000; // Stay under 50K limit
+const ENTRIES_PER_SITEMAP = 5000; // Smaller chunks = faster generation, stays well under 50K limit
 
 /**
  * Generate sitemap IDs:
  * - ID 0: static pages + event pages (events are few enough to fit in one sitemap)
- * - IDs 1..P: player pages in chunks of 45,000
- * - IDs P+1..P+G: game pages in chunks of 45,000
+ * - IDs 1..P: player pages in chunks of 5,000
+ * - IDs P+1..P+G: game pages in chunks of 5,000
  */
 export async function generateSitemaps() {
   const [playerCount, gameCount] = await Promise.all([

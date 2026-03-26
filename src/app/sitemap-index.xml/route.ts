@@ -1,10 +1,9 @@
 import { getPlayerCount, getGameCount } from "@/lib/db";
 
-export const dynamic = "force-dynamic";
 export const revalidate = 86400;
 
 const BASE_URL = "https://outprep.xyz";
-const ENTRIES_PER_SITEMAP = 45000;
+const ENTRIES_PER_SITEMAP = 5000;
 
 export async function GET() {
   const [playerCount, gameCount] = await Promise.all([

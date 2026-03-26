@@ -17,6 +17,7 @@
 # next.js
 /.next/
 /out/
+packages/forge/.next/
 
 # production
 /build
@@ -49,6 +50,10 @@ packages/forge/sessions/
 packages/forge/logs/
 packages/forge/forge-state.json
 packages/forge/.pids/
+packages/forge/*.db
+packages/forge/*.db-shm
+packages/forge/*.db-wal
+packages/forge/node_modules/
 
 # TWIC data archives (multi-GB, created by scripts/create-twic-archive.sh)
 twic-archive-*.zip

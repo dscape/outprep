@@ -128,7 +128,8 @@ export async function getGameCount(): Promise<number> {
 
 /**
  * Get player slugs for a sitemap chunk.
- * Paginated SELECT instead of loading 23MB index.json.
+ * Uses a subquery to skip to the right offset via index-only scan,
+ * then reads only the needed rows — much faster than OFFSET at high page numbers.
  */
 export async function getPlayerSlugsForSitemap(
   offset: number,
@@ -139,8 +140,12 @@ export async function getPlayerSlugsForSitemap(
     const { rows } = await sql`
       SELECT slug, fide_rating, updated_at
       FROM players
+      WHERE id >= COALESCE(
+        (SELECT id FROM players ORDER BY id OFFSET ${offset} LIMIT 1),
+        ~(1<<31)
+      )
       ORDER BY id
-      LIMIT ${limit} OFFSET ${offset}
+      LIMIT ${limit}
     `;
     return rows.map((r) => ({
       slug: r.slug as string,
@@ -154,7 +159,8 @@ export async function getPlayerSlugsForSitemap(
 
 /**
  * Get game slugs for a sitemap chunk.
- * Paginated SELECT instead of loading 1.4GB game-index.json.
+ * Uses a subquery to skip to the right offset via index-only scan,
+ * then reads only the needed rows — much faster than OFFSET at high page numbers.
  */
 export async function getGameSlugsForSitemap(
   offset: number,
@@ -165,8 +171,12 @@ export async function getGameSlugsForSitemap(
     const { rows } = await sql`
       SELECT slug, avg_elo, date
       FROM games
+      WHERE id >= COALESCE(
+        (SELECT id FROM games ORDER BY id OFFSET ${offset} LIMIT 1),
+        ~(1<<31)
+      )
       ORDER BY id
-      LIMIT ${limit} OFFSET ${offset}
+      LIMIT ${limit}
     `;
     return rows.map((r) => ({
       slug: r.slug as string,
