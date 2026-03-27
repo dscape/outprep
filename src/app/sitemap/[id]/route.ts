@@ -2,8 +2,6 @@ import {
   getPlayerCount,
   getGameCount,
   getEventCount,
-  getPlayerIdRange,
-  getGameIdRange,
   getPlayerSlugsForSitemap,
   getGameSlugsForSitemap,
   getEventSlugsForSitemap,
@@ -90,12 +88,10 @@ async function generateSitemapEntries(
     return entries;
   }
 
-  // Fetch counts and ID ranges in parallel (all fast index-only queries)
-  const [playerCount, gameCount, playerRange, gameRange] = await Promise.all([
+  // Fetch counts (fast)
+  const [playerCount, gameCount] = await Promise.all([
     getPlayerCount(),
     getGameCount(),
-    getPlayerIdRange(),
-    getGameIdRange(),
   ]);
 
   const playerSitemapCount = Math.max(
@@ -112,14 +108,10 @@ async function generateSitemapEntries(
     return null;
   }
 
-  // Sitemaps 1..P: player pages (ID-range pagination)
+  // Sitemaps 1..P: player pages
   if (id <= playerSitemapCount) {
-    const chunkRange = Math.ceil(
-      (playerRange.maxId - playerRange.minId + 1) / playerSitemapCount,
-    );
-    const startId = playerRange.minId + (id - 1) * chunkRange;
-    const endId = startId + chunkRange;
-    const players = await getPlayerSlugsForSitemap(startId, endId);
+    const offset = (id - 1) * ENTRIES_PER_SITEMAP;
+    const players = await getPlayerSlugsForSitemap(offset, ENTRIES_PER_SITEMAP);
 
     return players.map((p) => ({
       url: `${BASE_URL}/player/${p.slug}`,
@@ -130,14 +122,10 @@ async function generateSitemapEntries(
     }));
   }
 
-  // Sitemaps P+1..end: game pages (ID-range pagination)
+  // Sitemaps P+1..end: game pages
   const gameIdx = id - playerSitemapCount - 1;
-  const chunkRange = Math.ceil(
-    (gameRange.maxId - gameRange.minId + 1) / gameSitemapCount,
-  );
-  const startId = gameRange.minId + gameIdx * chunkRange;
-  const endId = startId + chunkRange;
-  const games = await getGameSlugsForSitemap(startId, endId);
+  const offset = gameIdx * ENTRIES_PER_SITEMAP;
+  const games = await getGameSlugsForSitemap(offset, ENTRIES_PER_SITEMAP);
 
   return games.map((g) => ({
     url: `${BASE_URL}/game/${g.slug}`,

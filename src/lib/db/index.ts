@@ -127,60 +127,21 @@ export async function getGameCount(): Promise<number> {
 }
 
 /**
- * Get MIN/MAX id for players. Index-only scan, <10ms.
- */
-export async function getPlayerIdRange(): Promise<{
-  minId: number;
-  maxId: number;
-}> {
-  if (!HAS_POSTGRES) return { minId: 0, maxId: 0 };
-  try {
-    const { rows } =
-      await sql`SELECT MIN(id)::int AS min_id, MAX(id)::int AS max_id FROM players`;
-    return {
-      minId: (rows[0].min_id as number) ?? 0,
-      maxId: (rows[0].max_id as number) ?? 0,
-    };
-  } catch {
-    return { minId: 0, maxId: 0 };
-  }
-}
-
-/**
- * Get MIN/MAX id for games. Index-only scan, <10ms.
- */
-export async function getGameIdRange(): Promise<{
-  minId: number;
-  maxId: number;
-}> {
-  if (!HAS_POSTGRES) return { minId: 0, maxId: 0 };
-  try {
-    const { rows } =
-      await sql`SELECT MIN(id)::int AS min_id, MAX(id)::int AS max_id FROM games`;
-    return {
-      minId: (rows[0].min_id as number) ?? 0,
-      maxId: (rows[0].max_id as number) ?? 0,
-    };
-  } catch {
-    return { minId: 0, maxId: 0 };
-  }
-}
-
-/**
- * Get player slugs for a sitemap chunk using ID-range pagination.
- * Uses WHERE id >= startId AND id < endId — direct PK index seek, <50ms.
+ * Get player slugs for a sitemap chunk.
+ * Safe to use OFFSET here — route handler generates one sitemap at a time (no
+ * build-time stampede). ISR caches the result for 24h.
  */
 export async function getPlayerSlugsForSitemap(
-  startId: number,
-  endId: number,
+  offset: number,
+  limit: number,
 ): Promise<{ slug: string; fideRating: number; updatedAt: Date }[]> {
   if (!HAS_POSTGRES) return [];
   try {
     const { rows } = await sql`
       SELECT slug, fide_rating, updated_at
       FROM players
-      WHERE id >= ${startId} AND id < ${endId}
       ORDER BY id
+      LIMIT ${limit} OFFSET ${offset}
     `;
     return rows.map((r) => ({
       slug: r.slug as string,
@@ -193,20 +154,21 @@ export async function getPlayerSlugsForSitemap(
 }
 
 /**
- * Get game slugs for a sitemap chunk using ID-range pagination.
- * Uses WHERE id >= startId AND id < endId — direct PK index seek, <50ms.
+ * Get game slugs for a sitemap chunk.
+ * Safe to use OFFSET here — route handler generates one sitemap at a time (no
+ * build-time stampede). ISR caches the result for 24h.
  */
 export async function getGameSlugsForSitemap(
-  startId: number,
-  endId: number,
+  offset: number,
+  limit: number,
 ): Promise<{ slug: string; avgElo: number; date: Date }[]> {
   if (!HAS_POSTGRES) return [];
   try {
     const { rows } = await sql`
       SELECT slug, avg_elo, date
       FROM games
-      WHERE id >= ${startId} AND id < ${endId}
       ORDER BY id
+      LIMIT ${limit} OFFSET ${offset}
     `;
     return rows.map((r) => ({
       slug: r.slug as string,
