@@ -3,6 +3,8 @@ import {
   getPlayerCount,
   getGameCount,
   getEventCount,
+  getPlayerIdRange,
+  getGameIdRange,
   getPlayerSlugsForSitemap,
   getGameSlugsForSitemap,
   getEventSlugsForSitemap,
@@ -16,8 +18,8 @@ const ENTRIES_PER_SITEMAP = 5000; // Smaller chunks = faster generation, stays w
 /**
  * Generate sitemap IDs:
  * - ID 0: static pages + event pages (events are few enough to fit in one sitemap)
- * - IDs 1..P: player pages in chunks of 5,000
- * - IDs P+1..P+G: game pages in chunks of 5,000
+ * - IDs 1..P: player pages in chunks of ~5,000
+ * - IDs P+1..P+G: game pages in chunks of ~5,000
  */
 export async function generateSitemaps() {
   const [playerCount, gameCount] = await Promise.all([
@@ -73,16 +75,26 @@ export default async function sitemap(
     return staticPages;
   }
 
-  const playerCount = await getPlayerCount();
+  // Fetch counts and ID ranges in parallel (all fast index-only queries)
+  const [playerCount, playerRange, gameRange] = await Promise.all([
+    getPlayerCount(),
+    getPlayerIdRange(),
+    getGameIdRange(),
+  ]);
+
   const playerSitemapCount = Math.max(
     1,
     Math.ceil(playerCount / ENTRIES_PER_SITEMAP),
   );
 
-  // Sitemaps 1..P: player pages
+  // Sitemaps 1..P: player pages (ID-range pagination)
   if (id <= playerSitemapCount) {
-    const offset = (id - 1) * ENTRIES_PER_SITEMAP;
-    const players = await getPlayerSlugsForSitemap(offset, ENTRIES_PER_SITEMAP);
+    const chunkRange = Math.ceil(
+      (playerRange.maxId - playerRange.minId + 1) / playerSitemapCount,
+    );
+    const startId = playerRange.minId + (id - 1) * chunkRange;
+    const endId = startId + chunkRange;
+    const players = await getPlayerSlugsForSitemap(startId, endId);
 
     return players.map((p) => ({
       url: `${BASE_URL}/player/${p.slug}`,
@@ -93,10 +105,19 @@ export default async function sitemap(
     }));
   }
 
-  // Sitemaps P+1..end: game pages
+  // Sitemaps P+1..end: game pages (ID-range pagination)
+  const gameCount = await getGameCount();
+  const gameSitemapCount = Math.max(
+    1,
+    Math.ceil(gameCount / ENTRIES_PER_SITEMAP),
+  );
   const gameIdx = id - playerSitemapCount - 1;
-  const offset = gameIdx * ENTRIES_PER_SITEMAP;
-  const games = await getGameSlugsForSitemap(offset, ENTRIES_PER_SITEMAP);
+  const chunkRange = Math.ceil(
+    (gameRange.maxId - gameRange.minId + 1) / gameSitemapCount,
+  );
+  const startId = gameRange.minId + gameIdx * chunkRange;
+  const endId = startId + chunkRange;
+  const games = await getGameSlugsForSitemap(startId, endId);
 
   return games.map((g) => ({
     url: `${BASE_URL}/game/${g.slug}`,

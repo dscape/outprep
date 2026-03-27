@@ -127,25 +127,60 @@ export async function getGameCount(): Promise<number> {
 }
 
 /**
- * Get player slugs for a sitemap chunk.
- * Uses a subquery to skip to the right offset via index-only scan,
- * then reads only the needed rows — much faster than OFFSET at high page numbers.
+ * Get MIN/MAX id for players. Index-only scan, <10ms.
+ */
+export async function getPlayerIdRange(): Promise<{
+  minId: number;
+  maxId: number;
+}> {
+  if (!HAS_POSTGRES) return { minId: 0, maxId: 0 };
+  try {
+    const { rows } =
+      await sql`SELECT MIN(id)::int AS min_id, MAX(id)::int AS max_id FROM players`;
+    return {
+      minId: (rows[0].min_id as number) ?? 0,
+      maxId: (rows[0].max_id as number) ?? 0,
+    };
+  } catch {
+    return { minId: 0, maxId: 0 };
+  }
+}
+
+/**
+ * Get MIN/MAX id for games. Index-only scan, <10ms.
+ */
+export async function getGameIdRange(): Promise<{
+  minId: number;
+  maxId: number;
+}> {
+  if (!HAS_POSTGRES) return { minId: 0, maxId: 0 };
+  try {
+    const { rows } =
+      await sql`SELECT MIN(id)::int AS min_id, MAX(id)::int AS max_id FROM games`;
+    return {
+      minId: (rows[0].min_id as number) ?? 0,
+      maxId: (rows[0].max_id as number) ?? 0,
+    };
+  } catch {
+    return { minId: 0, maxId: 0 };
+  }
+}
+
+/**
+ * Get player slugs for a sitemap chunk using ID-range pagination.
+ * Uses WHERE id >= startId AND id < endId — direct PK index seek, <50ms.
  */
 export async function getPlayerSlugsForSitemap(
-  offset: number,
-  limit: number,
+  startId: number,
+  endId: number,
 ): Promise<{ slug: string; fideRating: number; updatedAt: Date }[]> {
   if (!HAS_POSTGRES) return [];
   try {
     const { rows } = await sql`
       SELECT slug, fide_rating, updated_at
       FROM players
-      WHERE id >= COALESCE(
-        (SELECT id FROM players ORDER BY id OFFSET ${offset} LIMIT 1),
-        ~(1<<31)
-      )
+      WHERE id >= ${startId} AND id < ${endId}
       ORDER BY id
-      LIMIT ${limit}
     `;
     return rows.map((r) => ({
       slug: r.slug as string,
@@ -158,25 +193,20 @@ export async function getPlayerSlugsForSitemap(
 }
 
 /**
- * Get game slugs for a sitemap chunk.
- * Uses a subquery to skip to the right offset via index-only scan,
- * then reads only the needed rows — much faster than OFFSET at high page numbers.
+ * Get game slugs for a sitemap chunk using ID-range pagination.
+ * Uses WHERE id >= startId AND id < endId — direct PK index seek, <50ms.
  */
 export async function getGameSlugsForSitemap(
-  offset: number,
-  limit: number,
+  startId: number,
+  endId: number,
 ): Promise<{ slug: string; avgElo: number; date: Date }[]> {
   if (!HAS_POSTGRES) return [];
   try {
     const { rows } = await sql`
       SELECT slug, avg_elo, date
       FROM games
-      WHERE id >= COALESCE(
-        (SELECT id FROM games ORDER BY id OFFSET ${offset} LIMIT 1),
-        ~(1<<31)
-      )
+      WHERE id >= ${startId} AND id < ${endId}
       ORDER BY id
-      LIMIT ${limit}
     `;
     return rows.map((r) => ({
       slug: r.slug as string,
