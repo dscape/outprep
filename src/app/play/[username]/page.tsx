@@ -9,6 +9,7 @@ import { buildOpeningTrie, analyzeStyleFromRecords } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
+import { matchesPlayerName } from "@outprep/engine";
 
 interface BotData {
   errorProfile: ErrorProfile;
@@ -32,6 +33,8 @@ export default function PlayPage() {
   const speeds = searchParams.get("speeds") || "";
   const since = searchParams.get("since") || "";
   const eco = searchParams.get("eco") || "";
+  const gameCountParam = searchParams.get("gameCount") || "";
+  const timeRangeLabelParam = searchParams.get("timeRangeLabel") || "";
   const openingName = searchParams.get("openingName") || "";
   const opponentWeaknessColor = searchParams.get("color") as "white" | "black" | null;
 
@@ -189,9 +192,12 @@ export default function PlayPage() {
   }, [botData]);
 
   // Bot data label for display
+  const platformLabel = platform === "chesscom" ? "Chess.com" : platform === "fide" ? "FIDE OTB" : "Lichess";
+  const gameCountStr = gameCountParam ? ` ${gameCountParam}` : "";
+  const timeRangeStr = timeRangeLabelParam && timeRangeLabelParam !== "All time" ? ` in ${timeRangeLabelParam.toLowerCase()}` : "";
   const botDataLabel = enhancedErrorProfile
     ? `Bot enhanced with Stockfish analysis`
-    : `Bot based on ${platform === "chesscom" ? "Chess.com" : platform === "fide" ? "FIDE OTB" : "Lichess"} game history`;
+    : `Opening book from${gameCountStr} ${platformLabel} games${timeRangeStr}`;
 
   // Only block on profile — show color selection ASAP
   if (!profileReady && !error) {
@@ -316,9 +322,8 @@ export default function PlayPage() {
           opponentUsername={profile?.username || username}
           fideEstimate={profile?.fideEstimate?.rating || 1500}
           errorProfile={activeErrorProfile}
-          openingTrie={
-            botColor === "white" ? botData?.whiteTrie || null : botData?.blackTrie || null
-          }
+          whiteTrie={botData?.whiteTrie || null}
+          blackTrie={botData?.blackTrie || null}
           onGameEnd={handleGameEnd}
           startingMoves={startingMoves || undefined}
           botDataLabel={botDataLabel}
@@ -344,11 +349,14 @@ function buildBotDataFromPGN(username: string): BotData | null {
     const gameRecords: GameRecord[] = (otb.games || [])
       .filter((g) => g.moves)
       .map((g) => {
-        const playerName = username.toLowerCase();
-        const isWhite = g.white.toLowerCase().includes(playerName);
+        const isWhite = matchesPlayerName(g.white, username);
+        const isBlack = matchesPlayerName(g.black, username);
+        const playerIsWhite = isWhite && !isBlack ? true
+          : isBlack && !isWhite ? false
+          : isWhite;
         return {
           moves: g.moves,
-          playerColor: (isWhite ? "white" : "black") as "white" | "black",
+          playerColor: (playerIsWhite ? "white" : "black") as "white" | "black",
           result: g.result === "1-0" ? "white" as const
             : g.result === "0-1" ? "black" as const
             : "draw" as const,

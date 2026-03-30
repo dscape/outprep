@@ -66,31 +66,17 @@ export function analyzeOTBGames(
  * Also handles slug-format names (e.g., "arif-abdul-hafiz-7104227") by extracting
  * name parts and matching them against PGN player names.
  */
+// Re-export from engine package — canonical implementation lives there
+import { matchesPlayerName } from "@outprep/engine";
+export { matchesPlayerName };
+
 function resolvePlayerName(games: OTBGame[], playerName: string): string {
   const lower = playerName.toLowerCase();
   // counts maps alphanumeric ID → { count, originalName }
   const counts = new Map<string, { count: number; name: string }>();
 
-  // Extract name words from the input (handles slug format with trailing FIDE ID)
-  const slugParts = lower.split(/[-\s,]+/).filter(Boolean);
-  // Remove trailing numeric FIDE ID if present
-  const nameWords = slugParts.filter(p => !/^\d{4,}$/.test(p));
-
   function nameMatches(pgnName: string): boolean {
-    const pgnLower = pgnName.toLowerCase();
-    // Direct substring match
-    if (pgnLower.includes(lower)) return true;
-    // Reverse alphanumeric substring match — handles abbreviated FIDE names
-    // e.g. PGN "Caruana,F" → "caruanaf", player "Caruana, Fabiano" → "caruanafabiano"
-    const pgnAlpha = pgnLower.replace(/[^a-z0-9]/g, "");
-    const playerAlpha = lower.replace(/[^a-z0-9]/g, "");
-    if (pgnAlpha.length >= 4 && playerAlpha.includes(pgnAlpha)) return true;
-    // Word-based match: all name words appear in the PGN name
-    if (nameWords.length >= 2) {
-      const pgnNormalized = pgnLower.replace(/[^a-z\s]/g, " ");
-      return nameWords.every(w => pgnNormalized.includes(w));
-    }
-    return false;
+    return matchesPlayerName(pgnName, lower);
   }
 
   for (const g of games) {

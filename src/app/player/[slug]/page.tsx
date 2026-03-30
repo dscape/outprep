@@ -296,6 +296,7 @@ export default async function PlayerPage({
 
       <div className="min-h-screen px-4 py-8">
         <div className="mx-auto max-w-3xl">
+          <ScoutProvider platform={platform} username={scoutUsername}>
           <div className="mb-6 flex items-center justify-between">
             <Link
               href="/"
@@ -305,8 +306,6 @@ export default async function PlayerPage({
             </Link>
             <PracticeButton playerName={displayName} slug={scoutUsername} platform={platform} fideRating={fidePlayer?.fideRating} />
           </div>
-
-          <ScoutProvider platform={platform} username={scoutUsername}>
             {/* Loading / Error states */}
             <ScoutLoading />
 

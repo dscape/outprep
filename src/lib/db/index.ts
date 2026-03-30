@@ -735,14 +735,30 @@ export async function getGamePgn(slug: string): Promise<string | null> {
  * Get all PGN strings for a player's games (for practice mode).
  * Uses UNION ALL for optimal index usage on white_slug / black_slug.
  */
-export async function getPlayerGamePgns(slug: string): Promise<string[] | null> {
+export async function getPlayerGamePgns(
+  slug: string,
+  /** Optional: only return games on or after this date (ISO string or Date) */
+  since?: string | Date,
+): Promise<string[] | null> {
   if (!HAS_POSTGRES) return null;
   try {
-    const { rows } = await sql`
-      SELECT pgn FROM games WHERE white_slug = ${slug} AND pgn IS NOT NULL
-      UNION ALL
-      SELECT pgn FROM games WHERE black_slug = ${slug} AND pgn IS NOT NULL
-    `;
+    let rows: { pgn: string }[];
+    if (since) {
+      const sinceDate = typeof since === "string" ? since : since.toISOString().split("T")[0];
+      const result = await sql`
+        SELECT pgn FROM games WHERE white_slug = ${slug} AND pgn IS NOT NULL AND date >= ${sinceDate}::date
+        UNION ALL
+        SELECT pgn FROM games WHERE black_slug = ${slug} AND pgn IS NOT NULL AND date >= ${sinceDate}::date
+      `;
+      rows = result.rows as { pgn: string }[];
+    } else {
+      const result = await sql`
+        SELECT pgn FROM games WHERE white_slug = ${slug} AND pgn IS NOT NULL
+        UNION ALL
+        SELECT pgn FROM games WHERE black_slug = ${slug} AND pgn IS NOT NULL
+      `;
+      rows = result.rows as { pgn: string }[];
+    }
     if (rows.length === 0) return null;
     return rows.map((r) => r.pgn as string);
   } catch {
@@ -760,4 +776,63 @@ function formatDateForPlayer(d: Date): string {
 
 function formatDateForGame(d: Date): string {
   return formatDateForPlayer(d);
+}
+
+// ─── Game evaluations ──────────────────────────────────────────────────────────
+
+/**
+ * Retrieve stored game evaluations for a set of game IDs.
+ * Returns a Map of gameId → eval_data (JSONB).
+ */
+export async function getGameEvals(
+  platform: string,
+  username: string,
+  gameIds: string[],
+): Promise<Map<string, unknown>> {
+  if (!HAS_POSTGRES || gameIds.length === 0) return new Map();
+  try {
+    const { rows } = await sql`
+      SELECT game_id, eval_data
+      FROM game_evals
+      WHERE platform = ${platform}
+        AND username = ${username.toLowerCase()}
+        AND game_id = ANY(${gameIds})
+    `;
+    const result = new Map<string, unknown>();
+    for (const row of rows) {
+      result.set(row.game_id as string, row.eval_data);
+    }
+    return result;
+  } catch {
+    return new Map();
+  }
+}
+
+/**
+ * Store game evaluations in batches.
+ * Uses INSERT ... ON CONFLICT to avoid duplicates.
+ */
+export async function storeGameEvals(
+  platform: string,
+  username: string,
+  evals: Array<{ gameId: string; evalData: unknown; evalMode: string }>,
+): Promise<void> {
+  if (!HAS_POSTGRES || evals.length === 0) return;
+  try {
+    const usernameLower = username.toLowerCase();
+    // Insert in batches of 20 to avoid large queries
+    for (let i = 0; i < evals.length; i += 20) {
+      const batch = evals.slice(i, i + 20);
+      for (const entry of batch) {
+        await sql`
+          INSERT INTO game_evals (game_id, platform, username, eval_mode, eval_data)
+          VALUES (${entry.gameId}, ${platform}, ${usernameLower}, ${entry.evalMode}, ${JSON.stringify(entry.evalData)})
+          ON CONFLICT (platform, username, game_id)
+          DO UPDATE SET eval_data = EXCLUDED.eval_data, eval_mode = EXCLUDED.eval_mode
+        `;
+      }
+    }
+  } catch (err) {
+    console.error("[game_evals] Store error:", err);
+  }
 }

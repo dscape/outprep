@@ -155,3 +155,19 @@ CREATE TABLE fide_profiles (
 
 CREATE UNIQUE INDEX idx_fide_profiles_lookup ON fide_profiles (slug, month);
 CREATE INDEX idx_fide_profiles_slug ON fide_profiles (slug, updated_at DESC);
+
+-- ─── Game evaluations ────────────────────────────────────────────────────────
+-- Caches Stockfish analysis per game so games are never re-analyzed.
+-- eval_data contains the full GameEvalData including per-move evals.
+
+CREATE TABLE game_evals (
+  id         SERIAL PRIMARY KEY,
+  game_id    TEXT NOT NULL,            -- game identifier (e.g. "fide-42", lichess game ID)
+  platform   TEXT NOT NULL,            -- "fide", "lichess", "chesscom"
+  username   TEXT NOT NULL,            -- profiled player slug (lowercased)
+  eval_mode  TEXT NOT NULL DEFAULT 'sampling', -- "sampling" or "full"
+  eval_data  JSONB NOT NULL,           -- full GameEvalData: { evals, playerColor, result }
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_game_evals_lookup ON game_evals (platform, username, game_id);

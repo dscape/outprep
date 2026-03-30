@@ -5,8 +5,9 @@ import type { OpeningTrie, ErrorProfile, GameRecord } from "@outprep/engine";
 import { buildOpeningTrie, buildErrorProfileFromEvals } from "@outprep/engine";
 import { fromLichessGame, fromChesscomGame, normalizedToGameRecord, normalizedToGameEvalData } from "@/lib/normalized-game";
 import type { NormalizedGame } from "@/lib/normalized-game";
-import { getPlayer, getPlayerGamePgns } from "@/lib/db";
+import { getPlayer, getPlayerGamePgns, formatPlayerName } from "@/lib/db";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
+import { matchesPlayerName, crc32 } from "@outprep/engine";
 
 /**
  * Returns the bot data needed to play against an opponent:
@@ -44,31 +45,43 @@ export async function GET(
 
     let normalized: NormalizedGame[] | null = null;
     let fideGameRecords: GameRecord[] | null = null;
+    let fidePlatformId = username;
 
     if (platform === "fide") {
       // FIDE: fetch PGNs from DB and parse them
       const player = await getPlayer(username);
-      const pgns = await getPlayerGamePgns(username);
+      fidePlatformId = player?.fideId || username;
+      // Apply since filter at the DB level for FIDE games
+      const sinceDate = since ? new Date(since).toISOString().split("T")[0] : undefined;
+      const pgns = await getPlayerGamePgns(username, sinceDate);
       if (!pgns || pgns.length === 0) {
         return NextResponse.json({ error: "No games found" }, { status: 404 });
       }
       const playerName = player?.name || username;
+      const formattedName = formatPlayerName(playerName);
       const allPgn = pgns.join("\n\n");
       const otbGames = parseAllPGNGames(allPgn);
-      const nameLower = playerName.toLowerCase();
-      fideGameRecords = otbGames
-        .filter((g) => g.moves)
-        .map((g) => {
-          const isWhite = g.white.toLowerCase().includes(nameLower) ||
-            nameLower.includes(g.white.toLowerCase());
-          return {
+      fideGameRecords = [];
+      // Keep original OTB game data for stable ID generation
+      const fideOtbGames = otbGames.filter((g) => g.moves);
+      for (const g of fideOtbGames) {
+          const isWhite = matchesPlayerName(g.white, formattedName);
+          const isBlack = matchesPlayerName(g.black, formattedName);
+          const playerIsWhite = isWhite && !isBlack ? true
+            : isBlack && !isWhite ? false
+            : isWhite;
+          fideGameRecords.push({
             moves: g.moves,
-            playerColor: (isWhite ? "white" : "black") as "white" | "black",
+            playerColor: (playerIsWhite ? "white" : "black") as "white" | "black",
             result: g.result === "1-0" ? "white" as const
               : g.result === "0-1" ? "black" as const
               : "draw" as const,
-          };
-        });
+          });
+      }
+      console.log(
+        `[bot-data] FIDE ${formattedName}: ${pgns.length} PGNs, ${otbGames.length} parsed, ${fideGameRecords.length} with moves` +
+        (sinceDate ? ` (since ${sinceDate})` : "")
+      );
     } else if (platform === "chesscom") {
       const rawGames = await fetchChesscomGames(username, 2000, since);
       normalized = rawGames.map((g) => fromChesscomGame(g, username));
@@ -95,8 +108,14 @@ export async function GET(
 
     if (fideGameRecords) {
       // FIDE path: build from parsed game records (no eval data from PGN)
+      const whiteGames = fideGameRecords.filter(g => g.playerColor === "white").length;
+      const blackGames = fideGameRecords.filter(g => g.playerColor === "black").length;
       whiteTrie = buildOpeningTrie(fideGameRecords, "white");
       blackTrie = buildOpeningTrie(fideGameRecords, "black");
+      console.log(
+        `[bot-data] Trie sizes: white=${Object.keys(whiteTrie).length} positions (${whiteGames} games), ` +
+        `black=${Object.keys(blackTrie).length} positions (${blackGames} games)`
+      );
       const emptyPhase = { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 };
       errorProfile = {
         opening: { ...emptyPhase },
@@ -105,8 +124,8 @@ export async function GET(
         overall: { ...emptyPhase },
         gamesAnalyzed: 0,
       };
-      gameMoves = fideGameRecords.map((g, i) => ({
-        id: `fide-${i}`,
+      gameMoves = fideGameRecords.map((g) => ({
+        id: `FIDE:${fidePlatformId}:${crc32(g.moves)}`,
         moves: g.moves,
         playerColor: g.playerColor,
         result: g.result || ("draw" as const),
@@ -124,10 +143,11 @@ export async function GET(
       // Extract game moves for client-side batch eval
       // playerColor = the profiled player's color (the opponent we're mimicking)
       // id = game identifier for correlating with stored evals in IndexedDB
+      const platformPrefix = platform === "chesscom" ? "CHESSCOM" : "LICHESS";
       gameMoves = normalized!
         .filter((g) => g.moves)
         .map((g) => ({
-          id: g.id,
+          id: `${platformPrefix}:${username}:${g.id}`,
           moves: g.moves,
           playerColor: g.playerColor,
           result: g.result || "draw" as const,

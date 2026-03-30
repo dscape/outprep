@@ -31,6 +31,9 @@ export {
   type ThinkDifficulty,
 } from "./human-think-time";
 
+// --- Utilities ---
+export { matchesPlayerName, crc32 } from "./player-name";
+
 // --- Configuration ---
 export { DEFAULT_CONFIG, mergeConfig } from "./config";
 
