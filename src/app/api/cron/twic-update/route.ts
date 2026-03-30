@@ -24,7 +24,7 @@ export async function GET(request: NextRequest) {
   try {
     const lastIssue = await getLastProcessedIssue();
 
-    const result = await processIncrementalTwic(3);
+    const result = await processIncrementalTwic(5);
 
     return Response.json({
       status: result.errors.length === 0 ? "ok" : "partial",

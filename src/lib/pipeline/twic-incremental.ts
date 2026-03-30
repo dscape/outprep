@@ -25,7 +25,7 @@ function generateEventSlug(eventName: string): string {
     .slice(0, 120);
 }
 
-interface ParsedGame {
+export interface ParsedGame {
   white: string;
   black: string;
   whiteElo: number | null;
@@ -55,7 +55,7 @@ function extractHeaders(pgn: string): Record<string, string> {
   return headers;
 }
 
-function splitPGN(pgnText: string): string[] {
+export function splitPGN(pgnText: string): string[] {
   const games: string[] = [];
   const parts = pgnText.split(/\n\n(?=\[Event )/);
   for (const part of parts) {
@@ -65,26 +65,26 @@ function splitPGN(pgnText: string): string[] {
   return games.length > 0 ? games : [pgnText.trim()].filter(Boolean);
 }
 
-function parseElo(elo: string | undefined): number | null {
+export function parseElo(elo: string | undefined): number | null {
   if (!elo || elo === "-" || elo === "0" || elo === "") return null;
   const n = parseInt(elo, 10);
   return isNaN(n) || n < 100 ? null : n;
 }
 
-function parseFideId(id: string | undefined): string | null {
+export function parseFideId(id: string | undefined): string | null {
   if (!id || id === "0" || id === "" || id === "-") return null;
   const trimmed = id.trim();
   return /^\d+$/.test(trimmed) ? trimmed : null;
 }
 
-function parseTitle(title: string | undefined): string | null {
+export function parseTitle(title: string | undefined): string | null {
   if (!title || title === "-" || title === "") return null;
   const valid = ["GM", "IM", "FM", "CM", "NM", "WGM", "WIM", "WFM", "WCM"];
   const upper = title.toUpperCase().trim();
   return valid.includes(upper) ? upper : null;
 }
 
-function parseGames(pgnText: string): ParsedGame[] {
+export function parseGames(pgnText: string): ParsedGame[] {
   const rawGames = splitPGN(pgnText);
   const results: ParsedGame[] = [];
 
@@ -149,7 +149,7 @@ function parseNameParts(name: string): { lastName: string; firstName: string } {
   };
 }
 
-function generateGameSlug(game: ParsedGame): string {
+export function generateGameSlug(game: ParsedGame): string {
   const { lastName: wLast } = parseNameParts(game.white);
   const { lastName: bLast } = parseNameParts(game.black);
   const matchup = slugify(
@@ -170,7 +170,7 @@ function generateGameSlug(game: ParsedGame): string {
   return matchup;
 }
 
-function generatePlayerSlug(name: string, fideId: string): string {
+export function generatePlayerSlug(name: string, fideId: string): string {
   const { lastName, firstName } = parseNameParts(name);
   if (firstName) return slugify(`${firstName} ${lastName} ${fideId}`);
   return slugify(`${lastName} ${fideId}`);
@@ -236,18 +236,28 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
     const issue = lastIssue + i;
 
     // Check if issue exists before downloading
+    console.log(`[twic] Checking TWIC ${issue}...`);
     const exists = await twicIssueExists(issue);
-    if (!exists) break;
+    if (!exists) {
+      console.log(`[twic] TWIC ${issue} not found — stopping.`);
+      break;
+    }
 
     // Download and extract PGN in memory
+    console.log(`[twic] Downloading TWIC ${issue}...`);
+    const t0 = Date.now();
     const pgnText = await downloadAndExtractPgn(issue);
     if (!pgnText) {
       errors.push(`Failed to extract PGN from TWIC ${issue}`);
+      console.log(`[twic] Failed to extract TWIC ${issue}`);
       continue;
     }
+    console.log(`[twic] Downloaded TWIC ${issue} in ${Date.now() - t0}ms`);
 
     // Parse games
+    console.log(`[twic] Parsing games...`);
     const games = parseGames(pgnText);
+    console.log(`[twic] Parsed ${games.length} games from TWIC ${issue}`);
 
     // Build a set of player FIDE IDs to slug mappings from our database
     const fideIds = new Set<string>();
@@ -257,6 +267,7 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
     }
 
     // Look up existing players by FIDE ID
+    console.log(`[twic] Looking up ${fideIds.size} unique FIDE IDs...`);
     const playerSlugs = new Map<string, string>();
     if (fideIds.size > 0) {
       const fideIdArray = Array.from(fideIds);
@@ -271,130 +282,173 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
         }
       }
     }
+    console.log(`[twic] Matched ${playerSlugs.size} players in DB`);
 
-    // Upsert games in batches
-    const BATCH_SIZE = 200;
+    // Build all row values for this issue (one pass)
+    const BATCH_SIZE = 500;
     let gamesInIssue = 0;
     const seenSlugs = new Map<string, number>();
 
-    for (let j = 0; j < games.length; j += BATCH_SIZE) {
-      const batch = games.slice(j, j + BATCH_SIZE);
-      const values: Array<{
-        slug: string;
-        whiteName: string;
-        blackName: string;
-        whiteSlug: string | null;
-        blackSlug: string | null;
-        whiteFideId: string;
-        blackFideId: string;
-        whiteElo: number;
-        blackElo: number;
-        whiteTitle: string | null;
-        blackTitle: string | null;
-        event: string;
-        site: string | null;
-        date: string;
-        round: string | null;
-        eco: string | null;
-        opening: string | null;
-        variation: string | null;
-        result: string;
-        pgn: string;
-      }> = [];
+    // Collect all valid rows first
+    type GameRow = {
+      slug: string;
+      white_name: string;
+      black_name: string;
+      white_slug: string | null;
+      black_slug: string | null;
+      white_fide_id: string;
+      black_fide_id: string;
+      white_elo: number;
+      black_elo: number;
+      white_title: string | null;
+      black_title: string | null;
+      event: string;
+      site: string | null;
+      date: string;
+      round: string | null;
+      eco: string | null;
+      opening: string | null;
+      variation: string | null;
+      result: string;
+      pgn: string;
+    };
+    const allRows: GameRow[] = [];
 
-      for (const game of batch) {
-        if (!game.whiteFideId || !game.blackFideId) continue;
-        if (!game.event || !game.date) continue;
+    for (const game of games) {
+      if (!game.whiteFideId || !game.blackFideId) continue;
+      if (!game.event || !game.date) continue;
 
-        // Generate slug with collision handling
-        let slug = generateGameSlug(game);
-        const count = (seenSlugs.get(slug) ?? 0) + 1;
-        seenSlugs.set(slug, count);
-        if (count > 1) slug = `${slug}-${count}`;
+      // Generate slug with collision handling
+      let slug = generateGameSlug(game);
+      const count = (seenSlugs.get(slug) ?? 0) + 1;
+      seenSlugs.set(slug, count);
+      if (count > 1) slug = `${slug}-${count}`;
 
-        const whiteSlug =
-          playerSlugs.get(game.whiteFideId) ||
-          generatePlayerSlug(game.white, game.whiteFideId);
-        const blackSlug =
-          playerSlugs.get(game.blackFideId) ||
-          generatePlayerSlug(game.black, game.blackFideId);
+      const whiteSlug =
+        playerSlugs.get(game.whiteFideId) ||
+        generatePlayerSlug(game.white, game.whiteFideId);
+      const blackSlug =
+        playerSlugs.get(game.blackFideId) ||
+        generatePlayerSlug(game.black, game.blackFideId);
 
-        // Convert date from "2024.01.15" to "2024-01-15" for SQL
-        const sqlDate = game.date.replace(/\./g, "-");
+      // Convert date from "2024.01.15" to "2024-01-15" for SQL
+      const sqlDate = game.date.replace(/\./g, "-");
 
-        values.push({
-          slug,
-          whiteName: game.white,
-          blackName: game.black,
-          whiteSlug,
-          blackSlug,
-          whiteFideId: game.whiteFideId,
-          blackFideId: game.blackFideId,
-          whiteElo: game.whiteElo ?? 0,
-          blackElo: game.blackElo ?? 0,
-          whiteTitle: game.whiteTitle,
-          blackTitle: game.blackTitle,
-          event: game.event,
-          site: game.site,
-          date: sqlDate,
-          round: game.round,
-          eco: game.eco,
-          opening: game.opening,
-          variation: game.variation,
-          result: game.result,
-          pgn: game.pgn,
-        });
+      allRows.push({
+        slug,
+        white_name: game.white,
+        black_name: game.black,
+        white_slug: whiteSlug,
+        black_slug: blackSlug,
+        white_fide_id: game.whiteFideId,
+        black_fide_id: game.blackFideId,
+        white_elo: game.whiteElo ?? 0,
+        black_elo: game.blackElo ?? 0,
+        white_title: game.whiteTitle,
+        black_title: game.blackTitle,
+        event: game.event,
+        site: game.site,
+        date: sqlDate,
+        round: game.round,
+        eco: game.eco,
+        opening: game.opening,
+        variation: game.variation,
+        result: game.result,
+        pgn: game.pgn,
+      });
 
-        if (game.whiteFideId) updatedFideIds.add(game.whiteFideId);
-        if (game.blackFideId) updatedFideIds.add(game.blackFideId);
-      }
-
-      if (values.length === 0) continue;
-
-      // Upsert games
-      for (const v of values) {
-        try {
-          await sql`
-            INSERT INTO games (
-              slug, white_name, black_name, white_slug, black_slug,
-              white_fide_id, black_fide_id, white_elo, black_elo,
-              white_title, black_title,
-              event, site, date, round, eco, opening, variation, result, pgn
-            ) VALUES (
-              ${v.slug}, ${v.whiteName}, ${v.blackName}, ${v.whiteSlug}, ${v.blackSlug},
-              ${v.whiteFideId}, ${v.blackFideId}, ${v.whiteElo}, ${v.blackElo},
-              ${v.whiteTitle}, ${v.blackTitle},
-              ${v.event}, ${v.site}, ${v.date}::date, ${v.round}, ${v.eco}, ${v.opening}, ${v.variation}, ${v.result}, ${v.pgn}
-            )
-            ON CONFLICT (slug) DO NOTHING
-          `;
-          gamesInIssue++;
-        } catch {
-          // Slug collision — skip silently
-        }
-      }
+      updatedFideIds.add(game.whiteFideId);
+      updatedFideIds.add(game.blackFideId);
     }
 
-    // Update player stats for players involved in new games
-    for (const fideId of updatedFideIds) {
+    // Bulk-insert in batches of BATCH_SIZE — one round-trip per batch instead of per game
+    console.log(`[twic] Inserting ${allRows.length} games in batches of ${BATCH_SIZE}...`);
+    for (let j = 0; j < allRows.length; j += BATCH_SIZE) {
+      const batch = allRows.slice(j, j + BATCH_SIZE);
+      const batchNum = Math.floor(j / BATCH_SIZE) + 1;
+      const totalBatches = Math.ceil(allRows.length / BATCH_SIZE);
+      console.log(`[twic]   batch ${batchNum}/${totalBatches} (${batch.length} rows)...`);
+      const t1 = Date.now();
       try {
         await sql`
-          UPDATE players SET
-            game_count = (
-              SELECT COUNT(*) FROM games
-              WHERE white_fide_id = ${fideId} OR black_fide_id = ${fideId}
-            ),
-            last_seen = GREATEST(
-              last_seen,
-              (SELECT MAX(date) FROM games WHERE white_fide_id = ${fideId} OR black_fide_id = ${fideId})
-            ),
-            updated_at = NOW()
-          WHERE fide_id = ${fideId}
+          INSERT INTO games (
+            slug, white_name, black_name, white_slug, black_slug,
+            white_fide_id, black_fide_id, white_elo, black_elo,
+            white_title, black_title,
+            event, site, date, round, eco, opening, variation, result, pgn
+          )
+          SELECT
+            slug, white_name, black_name, white_slug, black_slug,
+            white_fide_id, black_fide_id, white_elo, black_elo,
+            white_title, black_title,
+            event, site, date::date, round, eco, opening, variation, result, pgn
+          FROM unnest(
+            ${batch.map((r) => r.slug)}::text[],
+            ${batch.map((r) => r.white_name)}::text[],
+            ${batch.map((r) => r.black_name)}::text[],
+            ${batch.map((r) => r.white_slug)}::text[],
+            ${batch.map((r) => r.black_slug)}::text[],
+            ${batch.map((r) => r.white_fide_id)}::text[],
+            ${batch.map((r) => r.black_fide_id)}::text[],
+            ${batch.map((r) => r.white_elo)}::int[],
+            ${batch.map((r) => r.black_elo)}::int[],
+            ${batch.map((r) => r.white_title)}::text[],
+            ${batch.map((r) => r.black_title)}::text[],
+            ${batch.map((r) => r.event)}::text[],
+            ${batch.map((r) => r.site)}::text[],
+            ${batch.map((r) => r.date)}::text[],
+            ${batch.map((r) => r.round)}::text[],
+            ${batch.map((r) => r.eco)}::text[],
+            ${batch.map((r) => r.opening)}::text[],
+            ${batch.map((r) => r.variation)}::text[],
+            ${batch.map((r) => r.result)}::text[],
+            ${batch.map((r) => r.pgn)}::text[]
+          ) AS t(
+            slug, white_name, black_name, white_slug, black_slug,
+            white_fide_id, black_fide_id, white_elo, black_elo,
+            white_title, black_title,
+            event, site, date, round, eco, opening, variation, result, pgn
+          )
+          ON CONFLICT (slug) DO NOTHING
         `;
-      } catch {
-        // Player may not exist in our database — skip
+        gamesInIssue += batch.length;
+        console.log(`[twic]   batch ${batchNum}/${totalBatches} done in ${Date.now() - t1}ms`);
+      } catch (e) {
+        errors.push(`Batch insert failed for issue ${issue} batch ${j}: ${String(e)}`);
+        console.log(`[twic]   batch ${batchNum} FAILED: ${String(e)}`);
       }
     }
+    console.log(`[twic] Inserted ${gamesInIssue} games for TWIC ${issue}`);
+
+    // Batch-update player stats in groups of 200 FIDE IDs per query
+    const fideIdArray = Array.from(updatedFideIds);
+    console.log(`[twic] Updating stats for ${fideIdArray.length} players...`);
+    for (let j = 0; j < fideIdArray.length; j += 200) {
+      const batch = fideIdArray.slice(j, j + 200);
+      try {
+        await sql`
+          UPDATE players p SET
+            game_count = sub.cnt,
+            last_seen  = GREATEST(p.last_seen, sub.max_date),
+            updated_at = NOW()
+          FROM (
+            SELECT fide_id, COUNT(*)::int AS cnt, MAX(date) AS max_date
+            FROM (
+              SELECT white_fide_id AS fide_id, date FROM games
+                WHERE white_fide_id = ANY(${batch})
+              UNION ALL
+              SELECT black_fide_id AS fide_id, date FROM games
+                WHERE black_fide_id = ANY(${batch})
+            ) g
+            GROUP BY fide_id
+          ) sub
+          WHERE p.fide_id = sub.fide_id
+        `;
+      } catch {
+        // Skip on error — stats are non-critical
+      }
+    }
+    console.log(`[twic] Player stats updated`);
 
     // Record pipeline run for this issue
     await sql`
@@ -404,6 +458,7 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
         status = 'completed',
         completed_at = NOW()
     `;
+    console.log(`[twic] TWIC ${issue} complete — ${gamesInIssue} games inserted`);
 
     totalGamesUpserted += gamesInIssue;
     issuesProcessed++;
@@ -411,6 +466,7 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
 
   // Update events for newly inserted games
   if (totalGamesUpserted > 0) {
+    console.log(`[twic] Updating events table...`);
     try {
       // Ensure events table exists
       await sql`
@@ -477,8 +533,9 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
           await sql`UPDATE games SET event_slug = ${correctSlug} WHERE event_slug = ${ev.slug as string}`;
         }
       }
-    } catch {
-      // Events table or column may not exist in older schemas — skip
+      console.log(`[twic] Events table updated`);
+    } catch (e) {
+      console.log(`[twic] Events update skipped: ${String(e)}`);
     }
   }
 

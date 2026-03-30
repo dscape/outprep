@@ -19,7 +19,7 @@
 import { sql } from "@/lib/db/connection";
 import { downloadAndExtractFideRatings } from "./pgn-extract";
 
-interface FideRatingRecord {
+export interface FideRatingRecord {
   fideId: string;
   name: string;
   federation: string;
@@ -33,7 +33,7 @@ interface FideRatingRecord {
 /**
  * Parse the FIDE fixed-width text, filtering to only FIDE IDs we care about.
  */
-function parseFideText(
+export function parseFideText(
   text: string,
   filterIds: Set<string>,
 ): FideRatingRecord[] {
@@ -120,6 +120,8 @@ export async function updateFideRatings(): Promise<{
   }
 
   // 2. Download and extract FIDE ratings file in memory
+  console.log(`[fide] Downloading ratings list (~40MB zip)...`);
+  const t0 = Date.now();
   const fideText = await downloadAndExtractFideRatings();
   if (!fideText) {
     return {
@@ -129,34 +131,52 @@ export async function updateFideRatings(): Promise<{
     };
   }
 
+  console.log(`[fide] Downloaded in ${Date.now() - t0}ms (${Math.round(fideText.length / 1e6)}MB text). Parsing...`);
   // 3. Parse, filtering to only our players
   const records = parseFideText(fideText, ourFideIds);
+  console.log(`[fide] Parsed ${records.length} matching records`);
 
-  // 4. Batch-update ratings
+  // 4. Bulk-update ratings using unnest — one round-trip per batch instead of per player
   let updated = 0;
-  const BATCH_SIZE = 100;
+  const BATCH_SIZE = 500;
+  const totalBatches = Math.ceil(records.length / BATCH_SIZE);
+  console.log(`[fide] Updating ${records.length} players in ${totalBatches} bulk batches...`);
 
   for (let i = 0; i < records.length; i += BATCH_SIZE) {
     const batch = records.slice(i, i + BATCH_SIZE);
-
-    for (const rec of batch) {
-      try {
-        const result = await sql`
-          UPDATE players SET
-            standard_rating = COALESCE(${rec.standardRating}, standard_rating),
-            rapid_rating = COALESCE(${rec.rapidRating}, rapid_rating),
-            blitz_rating = COALESCE(${rec.blitzRating}, blitz_rating),
-            fide_rating = COALESCE(${rec.standardRating}, ${rec.rapidRating}, ${rec.blitzRating}, fide_rating),
-            title = COALESCE(${rec.title}, title),
-            federation = COALESCE(${rec.federation}, federation),
-            birth_year = COALESCE(${rec.birthYear}, birth_year),
-            updated_at = NOW()
-          WHERE fide_id = ${rec.fideId}
-        `;
-        if (result.rows !== undefined) updated++;
-      } catch (e) {
-        errors.push(`Failed to update ${rec.fideId}: ${String(e)}`);
-      }
+    const batchNum = Math.floor(i / BATCH_SIZE) + 1;
+    console.log(`[fide]   batch ${batchNum}/${totalBatches}...`);
+    const t1 = Date.now();
+    try {
+      await sql`
+        UPDATE players p SET
+          standard_rating = COALESCE(src.standard_rating::smallint, p.standard_rating),
+          rapid_rating    = COALESCE(src.rapid_rating::smallint,    p.rapid_rating),
+          blitz_rating    = COALESCE(src.blitz_rating::smallint,    p.blitz_rating),
+          fide_rating     = COALESCE(src.standard_rating::smallint, src.rapid_rating::smallint, src.blitz_rating::smallint, p.fide_rating),
+          title           = COALESCE(NULLIF(src.title, ''),         p.title),
+          federation      = COALESCE(NULLIF(src.federation, ''),    p.federation),
+          birth_year      = COALESCE(src.birth_year::smallint,      p.birth_year),
+          updated_at      = NOW()
+        FROM (
+          SELECT *
+          FROM unnest(
+            ${batch.map((r) => r.fideId)}::text[],
+            ${batch.map((r) => r.standardRating)}::int[],
+            ${batch.map((r) => r.rapidRating)}::int[],
+            ${batch.map((r) => r.blitzRating)}::int[],
+            ${batch.map((r) => r.title ?? "")}::text[],
+            ${batch.map((r) => r.federation)}::text[],
+            ${batch.map((r) => r.birthYear)}::int[]
+          ) AS t(fide_id, standard_rating, rapid_rating, blitz_rating, title, federation, birth_year)
+        ) src
+        WHERE p.fide_id = src.fide_id
+      `;
+      updated += batch.length;
+      console.log(`[fide]   batch ${batchNum}/${totalBatches} done in ${Date.now() - t1}ms`);
+    } catch (e) {
+      errors.push(`Bulk update batch ${batchNum} failed: ${String(e)}`);
+      console.log(`[fide]   batch ${batchNum} FAILED: ${String(e)}`);
     }
   }
 

@@ -17,6 +17,7 @@
     "harness:compare": "npm run harness -- compare",
     "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --",
     "twic-archive": "bash scripts/create-twic-archive.sh",
+    "test": "vitest run",
     "test:engine": "npm run --workspace=packages/engine test"
   },
   "dependencies": {
@@ -41,6 +42,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^4.1.2"
   }
 }
