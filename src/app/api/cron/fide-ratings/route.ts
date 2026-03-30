@@ -26,11 +26,21 @@ export async function GET(request: NextRequest) {
 
     const result = await updateFideRatings();
 
-    return Response.json({
-      status: result.errors.length === 0 ? "ok" : "partial",
-      previousUpdate: lastUpdate,
-      ...result,
-    });
+    const hasErrors = result.errors.length > 0;
+
+    // Ping healthchecks.io on success so we know the cron ran
+    if (!hasErrors && process.env.HEALTHCHECKS_FIDE_URL) {
+      fetch(process.env.HEALTHCHECKS_FIDE_URL).catch(() => {});
+    }
+
+    return Response.json(
+      {
+        status: hasErrors ? "error" : "ok",
+        previousUpdate: lastUpdate,
+        ...result,
+      },
+      { status: hasErrors ? 500 : 200 },
+    );
   } catch (error) {
     return Response.json({ error: String(error) }, { status: 500 });
   }

@@ -26,14 +26,24 @@ export async function GET(request: NextRequest) {
 
     const result = await processIncrementalTwic(5);
 
-    return Response.json({
-      status: result.errors.length === 0 ? "ok" : "partial",
-      previousLastIssue: lastIssue,
-      newLastIssue: lastIssue
-        ? lastIssue + result.issuesProcessed
-        : lastIssue,
-      ...result,
-    });
+    const hasErrors = result.errors.length > 0;
+
+    // Ping healthchecks.io on success so we know the cron ran
+    if (!hasErrors && process.env.HEALTHCHECKS_TWIC_URL) {
+      fetch(process.env.HEALTHCHECKS_TWIC_URL).catch(() => {});
+    }
+
+    return Response.json(
+      {
+        status: hasErrors ? "error" : "ok",
+        previousLastIssue: lastIssue,
+        newLastIssue: lastIssue
+          ? lastIssue + result.issuesProcessed
+          : lastIssue,
+        ...result,
+      },
+      { status: hasErrors ? 500 : 200 },
+    );
   } catch (error) {
     return Response.json({ error: String(error) }, { status: 500 });
   }
