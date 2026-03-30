@@ -2,6 +2,8 @@
 
 import { useRouter } from "next/navigation";
 import type { Platform } from "@/lib/platform-utils";
+import { useScout } from "./scout-context";
+import { TIME_RANGES } from "@/lib/profile-merge";
 
 interface PracticeButtonProps {
   playerName: string;
@@ -22,6 +24,7 @@ function shortName(name: string): string {
 
 export default function PracticeButton({ playerName, slug, platform, fideRating }: PracticeButtonProps) {
   const router = useRouter();
+  const { selectedSpeeds, timeRange, filteredData, profile } = useScout();
 
   const handleClick = () => {
     // Pre-seed play-profile cache so the play page has the correct rating immediately
@@ -37,7 +40,19 @@ export default function PracticeButton({ playerName, slug, platform, fideRating 
     }
 
     const prefix = platform === "chesscom" ? "chesscom:" : platform === "fide" ? "fide:" : platform === "pgn" ? "pgn:" : "";
-    router.push(`/play/${prefix}${encodeURIComponent(slug)}`);
+    const params = new URLSearchParams();
+    if (selectedSpeeds.length > 0) params.set("speeds", selectedSpeeds.join(","));
+    if (timeRange !== "all") {
+      const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+      if (sinceMs) params.set("since", String(Date.now() - sinceMs));
+    }
+    // Pass game count and time range label for bot data label
+    const gameCount = filteredData?.games ?? profile?.analyzedGames ?? 0;
+    if (gameCount > 0) params.set("gameCount", String(gameCount));
+    const rangeEntry = TIME_RANGES.find(t => t.key === timeRange);
+    if (rangeEntry) params.set("timeRangeLabel", rangeEntry.label);
+    const qs = params.toString() ? `?${params}` : "";
+    router.push(`/play/${prefix}${encodeURIComponent(slug)}${qs}`);
   };
 
   return (

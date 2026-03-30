@@ -141,7 +141,7 @@ export const DEFAULT_CONFIG: BotConfig = {
   },
   trie: {
     maxPly: 40,
-    minGames: 3,
+    minGames: 1,
     winBias: 0
   },
   thinkTime: {

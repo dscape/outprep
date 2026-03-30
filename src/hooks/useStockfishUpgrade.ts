@@ -21,6 +21,7 @@ import {
 import type { FilteredData } from "@/lib/profile-merge";
 import { mergeErrorProfiles, TIME_RANGES } from "@/lib/profile-merge";
 import type { Platform } from "@/lib/platform-utils";
+import { matchesPlayerName, crc32 } from "@outprep/engine";
 
 interface UseStockfishUpgradeOptions {
   platform: Platform;
@@ -53,9 +54,27 @@ export function useStockfishUpgrade({
     pct: number;
   } | null>(null);
   const [enhancedErrorProfile, setEnhancedErrorProfile] =
-    useState<ErrorProfile | null>(null);
-  const [upgradeComplete, setUpgradeComplete] = useState(false);
-  const [totalGameCount, setTotalGameCount] = useState<number | null>(null);
+    useState<ErrorProfile | null>(() => {
+      if (typeof window === "undefined") return null;
+      try {
+        const cached = sessionStorage.getItem(`enhanced-profile:${username}`);
+        if (cached) return JSON.parse(cached);
+      } catch { /* ignore parse errors */ }
+      return null;
+    });
+  const [upgradeComplete, setUpgradeComplete] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return !!sessionStorage.getItem(`enhanced-profile:${username}`);
+    } catch { return false; }
+  });
+  const [totalGameCount, setTotalGameCount] = useState<number | null>(() => {
+    if (typeof window === "undefined") return null;
+    try {
+      const c = sessionStorage.getItem(`enhanced-profile-total:${username}`);
+      return c ? parseInt(c) : null;
+    } catch { return null; }
+  });
   const [enhancedWeaknesses, setEnhancedWeaknesses] = useState<Weakness[] | null>(null);
   const [enhancedPrepTips, setEnhancedPrepTips] = useState<PrepTip[] | null>(null);
 
@@ -68,22 +87,8 @@ export function useStockfishUpgrade({
   // Keep ref in sync
   filteredDataRef.current = filteredData;
 
-  // Load cached enhanced profile from sessionStorage
-  useEffect(() => {
-    try {
-      const cached = sessionStorage.getItem(`enhanced-profile:${username}`);
-      const cachedCount = sessionStorage.getItem(
-        `enhanced-profile-total:${username}`
-      );
-      if (cached) {
-        setEnhancedErrorProfile(JSON.parse(cached));
-        setUpgradeComplete(true);
-        if (cachedCount) setTotalGameCount(parseInt(cachedCount));
-      }
-    } catch {
-      // Ignore parse errors
-    }
-  }, [username]);
+  // SessionStorage cache is now loaded synchronously in useState initializers above,
+  // avoiding a race condition where auto-scan would trigger before the cached profile was set.
 
   // Cleanup on unmount
   useEffect(() => {
@@ -148,13 +153,18 @@ export function useStockfishUpgrade({
           allGameMoves = localGames
             .filter((g) => g.moves && g.moves.trim().length > 0)
             .map((g, i) => {
-              const nameLower = localPlayerName.toLowerCase();
-              const isWhite = g.white.toLowerCase().includes(nameLower) ||
-                nameLower.includes(g.white.toLowerCase());
+              const isWhite = matchesPlayerName(g.white, localPlayerName);
+              const isBlack = matchesPlayerName(g.black, localPlayerName);
+              const playerIsWhite = isWhite && !isBlack ? true
+                : isBlack && !isWhite ? false
+                : isWhite;
+              // Extract FIDE ID from slug (e.g. "alireza-firouzja-12573981" → "12573981")
+              const fideIdMatch = username.match(/-(\d{4,})$/);
+              const platformId = fideIdMatch ? fideIdMatch[1] : username;
               return {
-                id: `local-${i}-${g.date || ""}`,
+                id: `FIDE:${platformId}:${crc32(g.moves)}`,
                 moves: g.moves,
-                playerColor: (isWhite ? "white" : "black") as "white" | "black",
+                playerColor: (playerIsWhite ? "white" : "black") as "white" | "black",
                 hasEvals: false,
               };
             });
@@ -184,11 +194,32 @@ export function useStockfishUpgrade({
 
         const noLichessEvals = allGameMoves.filter((g) => !g.hasEvals);
 
+        // Check IndexedDB cache first
         const cachedEvalMap = await getStoredEvals(
           platform,
           username,
           noLichessEvals.map((g) => g.id),
         );
+
+        // Also check DB for evals not in IndexedDB
+        const uncachedIds = noLichessEvals
+          .filter((g) => !cachedEvalMap.has(g.id))
+          .map((g) => g.id);
+        if (uncachedIds.length > 0) {
+          try {
+            const res = await fetch(
+              `/api/game-evals?platform=${encodeURIComponent(platform)}&username=${encodeURIComponent(username)}&gameIds=${encodeURIComponent(uncachedIds.join(","))}`
+            );
+            if (res.ok) {
+              const { evals: dbEvals } = await res.json();
+              for (const [id, data] of Object.entries(dbEvals)) {
+                if (data) cachedEvalMap.set(id, data as GameEvalData);
+              }
+            }
+          } catch {
+            // DB check failed — non-fatal, will compute with Stockfish
+          }
+        }
 
         const cachedEvals: GameEvalData[] = [];
         const needsStockfish: typeof noLichessEvals = [];
@@ -279,7 +310,19 @@ export function useStockfishUpgrade({
               data,
               evalMode: mode,
             }));
+            // Store in IndexedDB (local cache)
             storeEvals(platform, username, batchEntries).catch(() => {});
+            // Persist to DB in batches of 20
+            const dbEntries = batchEntries.map((e) => ({
+              gameId: e.gameId,
+              evalData: e.data,
+              evalMode: e.evalMode,
+            }));
+            fetch("/api/game-evals", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ platform, username, evals: dbEntries }),
+            }).catch(() => {});
           },
         );
 

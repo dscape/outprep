@@ -6,18 +6,23 @@ import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { WasmStockfishAdapter } from "@/lib/stockfish-adapter";
 import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics, CandidateMove } from "@outprep/engine";
-import { BotController, createBot, temperatureFromSkill } from "@outprep/engine";
+import { BotController, createBot, temperatureFromSkill, lookupTrie } from "@outprep/engine";
 import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
 import { useDebugPanel } from "@/hooks/useDebugPanel";
+import { useBookExplorer } from "@/hooks/useBookExplorer";
 import { buildDebugEntry, type DebugMoveEntry } from "@/lib/debug-reasoning";
 import DebugPanel from "@/components/DebugPanel";
+import BookExplorerPanel from "@/components/BookExplorerPanel";
 
 interface ChessBoardProps {
   playerColor: "white" | "black";
   opponentUsername: string;
   fideEstimate: number;
   errorProfile: ErrorProfile | null;
-  openingTrie: OpeningTrie | null;
+  /** White opening trie (positions where white moves) */
+  whiteTrie: OpeningTrie | null;
+  /** Black opening trie (positions where black moves) */
+  blackTrie: OpeningTrie | null;
   onGameEnd: (pgn: string, result: string, precomputedAnalysis?: {
     moves: import("@/lib/types").MoveEval[];
     summary: import("@/lib/types").AnalysisSummary;
@@ -27,12 +32,23 @@ interface ChessBoardProps {
   styleMetrics?: StyleMetrics | null;
 }
 
+/** Pick the trie matching the side to move in the given FEN. */
+function trieForFen(
+  whiteTrie: OpeningTrie | null,
+  blackTrie: OpeningTrie | null,
+  fen: string,
+): OpeningTrie | null {
+  const sideToMove = fen.split(" ")[1];
+  return sideToMove === "w" ? whiteTrie : blackTrie;
+}
+
 export default function ChessBoard({
   playerColor,
   opponentUsername,
   fideEstimate,
   errorProfile,
-  openingTrie,
+  whiteTrie,
+  blackTrie,
   onGameEnd,
   startingMoves,
   botDataLabel,
@@ -41,6 +57,8 @@ export default function ChessBoard({
   const gameRef = useRef(new Chess());
   const [fen, setFen] = useState(gameRef.current.fen());
   const [moveSource, setMoveSource] = useState<"book" | "engine" | null>(null);
+  /** Whether the current position is still reachable from the opening trie */
+  const [inBook, setInBook] = useState<boolean | null>(null);
   const [engineReady, setEngineReady] = useState(false);
   const [thinking, setThinking] = useState(false);
   const [lastMoveInfo, setLastMoveInfo] = useState<{
@@ -59,6 +77,7 @@ export default function ChessBoard({
     { startSquare: string; endSquare: string; color: string }[]
   >([]);
   const { isOpen: debugOpen, toggle: toggleDebug, close: closeDebug } = useDebugPanel();
+  const { isOpen: bookOpen, toggle: toggleBook, close: closeBook } = useBookExplorer();
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
@@ -153,10 +172,11 @@ export default function ChessBoard({
         }
 
         const adapter = new WasmStockfishAdapter(engine);
+        const botTrie = botColor === "white" ? whiteTrie : blackTrie;
         const bot = createBot(adapter, {
           elo: fideEstimate,
           errorProfile,
-          openingTrie,
+          openingTrie: botTrie,
           botColor,
           styleMetrics,
         });
@@ -168,10 +188,11 @@ export default function ChessBoard({
         // Still try to use bot engine even if analyzer fails
         engine.init().then(() => {
           const adapter = new WasmStockfishAdapter(engine);
+          const botTrie = botColor === "white" ? whiteTrie : blackTrie;
           const bot = createBot(adapter, {
             elo: fideEstimate,
             errorProfile,
-            openingTrie,
+            openingTrie: botTrie,
             botColor,
             styleMetrics,
           });
@@ -309,6 +330,16 @@ export default function ChessBoard({
         plyRef.current++;
         setFen(game.fen());
         setMoveSource(result.source);
+        // After bot moves, check if the resulting position (player's turn) is in book
+        {
+          const activeTrie = trieForFen(whiteTrie, blackTrie, game.fen());
+          if (activeTrie) {
+            const node = lookupTrie(activeTrie, game.fen());
+            setInBook(node !== null);
+          } else {
+            setInBook(result.source === "book");
+          }
+        }
         setLastMoveInfo({ phase: result.phase, skill: result.dynamicSkill });
 
         // Record position for live analysis
@@ -456,6 +487,17 @@ export default function ChessBoard({
       plyRef.current++;
       setFen(game.fen());
 
+      // Update book status after player move
+      {
+        const activeTrie = trieForFen(whiteTrie, blackTrie, game.fen());
+        if (activeTrie) {
+          const node = lookupTrie(activeTrie, game.fen());
+          setInBook(node !== null);
+          if (node !== null) setMoveSource("book");
+          else if (inBook !== false) setMoveSource("engine");
+        }
+      }
+
       // Record position for live analysis
       analyzerRef.current?.recordPosition(plyRef.current, game.fen());
 
@@ -491,6 +533,17 @@ export default function ChessBoard({
           setFen(game.fen());
           setSelectedSquare(null);
           setLegalMoveSquares({});
+
+          // Update book status after player move
+          {
+            const activeTrie = trieForFen(whiteTrie, blackTrie, game.fen());
+            if (activeTrie) {
+              const node = lookupTrie(activeTrie, game.fen());
+              setInBook(node !== null);
+              if (node !== null) setMoveSource("book");
+              else if (inBook !== false) setMoveSource("engine");
+            }
+          }
 
           // Record position for live analysis
           analyzerRef.current?.recordPosition(plyRef.current, game.fen());
@@ -562,14 +615,24 @@ export default function ChessBoard({
           styleMetrics={styleMetrics}
         />
       )}
+      {bookOpen && (
+        <BookExplorerPanel
+          whiteTrie={whiteTrie}
+          blackTrie={blackTrie}
+          fen={fen}
+          onClose={closeBook}
+          plyCount={plyRef.current}
+          moveHistory={gameRef.current.history()}
+        />
+      )}
       {/* Status bar */}
       <div className="flex items-center gap-3 text-sm flex-wrap justify-center">
-        {moveSource === "book" && (
+        {inBook === true && (
           <span className="rounded-full bg-green-600/20 border border-green-500/30 px-3 py-1 text-green-400">
             Following {opponentUsername}&apos;s repertoire
           </span>
         )}
-        {moveSource === "engine" && (
+        {inBook === false && (
           <span className="rounded-full bg-zinc-700/50 border border-zinc-600/30 px-3 py-1 text-zinc-400">
             Out of book
           </span>
@@ -651,6 +714,20 @@ export default function ChessBoard({
               <path d="M19.967 17.484A4 4 0 0 1 18 18" />
             </svg>
             Thinking
+          </button>
+          <button
+            onClick={toggleBook}
+            className={`rounded-md border px-3 py-1.5 text-sm transition-colors flex items-center gap-1.5 ${
+              bookOpen
+                ? "bg-green-600/20 border-green-500/30 text-green-400"
+                : "bg-zinc-700/30 border-zinc-600/30 text-zinc-400 hover:text-zinc-300 hover:bg-zinc-700/50"
+            }`}
+            title="Show opening book"
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+            </svg>
+            Book
           </button>
           <button
             onClick={handleResign}

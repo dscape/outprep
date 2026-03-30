@@ -46,11 +46,12 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
   const [timeRangeLoading, setTimeRangeLoading] = useState(false);
   const [error, setError] = useState("");
   const [selectedSpeeds, setSelectedSpeeds] = useState<string[]>([]);
-  const [timeRange, setTimeRange] = useState<string>("all");
+  // FIDE defaults to "3 months" — initialized synchronously to avoid race
+  // with the main loading effect (which depends on timeRange).
+  const [timeRange, setTimeRange] = useState<string>(isFIDEMode ? "3m" : "all");
   const [otbProfile, setOtbProfile] = useState<OTBProfile | null>(null);
 
   const profileRef = useRef<PlayerProfile | null>(null);
-  const initialFilterSetRef = useRef(false);
 
   // Bridge PGN profile into shared state
   const bridgePgnProfile = useCallback((otb: PlayerProfile) => {
@@ -78,25 +79,29 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
   // Main data loading effect
   useEffect(() => {
     if (isPGNMode) {
+      // Load full profile from sessionStorage or API, then apply date filter if active
+      let fullProfile: PlayerProfile | null = null;
+
       try {
         const stored =
           sessionStorage.getItem(`fide-import:${username}`) ||
           sessionStorage.getItem(`pgn-import:${username}`);
         if (stored) {
-          const parsed = JSON.parse(stored) as PlayerProfile;
-          bridgePgnProfile(parsed);
-          setFullLoading(false);
-          return;
+          fullProfile = JSON.parse(stored) as PlayerProfile;
         }
       } catch {
         // Parse error — fall through to API fetch
       }
 
-      if (isFIDEMode) {
+      if (!fullProfile && isFIDEMode) {
         (async () => {
           try {
+            // Pass since param to API so DB can filter by date
+            const sinceMs = timeRange !== "all" ? TIME_RANGES.find(t => t.key === timeRange)?.ms : undefined;
+            const sinceVal = sinceMs ? Date.now() - sinceMs : undefined;
+            const query = sinceVal ? `?since=${sinceVal}` : "";
             const res = await fetch(
-              `/api/fide-practice/${encodeURIComponent(username)}`
+              `/api/fide-practice/${encodeURIComponent(username)}${query}`
             );
             if (!res.ok) {
               const body = await res.json().catch(() => ({}));
@@ -104,8 +109,7 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
               setFullLoading(false);
               return;
             }
-            const data = await res.json();
-            bridgePgnProfile(data);
+            const data = await res.json() as PlayerProfile;
             try {
               sessionStorage.setItem(
                 `fide-import:${username}`,
@@ -114,6 +118,8 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
             } catch {
               // Quota exceeded — non-fatal
             }
+            // Apply date filter or use full profile
+            applyPgnProfile(data);
           } catch {
             setError("Failed to load games. Please try again.");
           } finally {
@@ -123,43 +129,70 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
         return;
       }
 
-      setError("PGN data not found. Please go back and re-upload.");
-      setFullLoading(false);
-      return;
-    }
-
-    // PGN mode date filtering
-    if (isPGNMode && otbProfile?.games && timeRange !== "all") {
-      setTimeRangeLoading(true);
-      const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
-      if (sinceMs) {
-        const cutoff = Date.now() - sinceMs;
-        const filtered = otbProfile.games.filter(g => {
-          if (!g.date) return true;
-          const parsed = new Date(g.date.replace(/\./g, "-"));
-          return !isNaN(parsed.getTime()) && parsed.getTime() >= cutoff;
-        });
-        if (filtered.length > 0) {
-          const reanalyzed = analyzeOTBGames(filtered, otbProfile.username);
-          if (otbProfile.ratings) reanalyzed.ratings = otbProfile.ratings;
-          setProfile(reanalyzed);
-          profileRef.current = reanalyzed;
-          const speeds = Object.keys(reanalyzed.bySpeed || {}).sort(
-            (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
-          );
-          setSelectedSpeeds(speeds.length > 0 ? speeds : ["classical"]);
-        }
+      if (!fullProfile) {
+        setError("PGN data not found. Please go back and re-upload.");
+        setFullLoading(false);
+        return;
       }
-      setTimeRangeLoading(false);
+
+      applyPgnProfile(fullProfile);
       setFullLoading(false);
       return;
     }
 
-    // PGN mode "all time" — restore full profile
-    if (isPGNMode && otbProfile) {
-      bridgePgnProfile(otbProfile);
-      setFullLoading(false);
-      return;
+    function applyPgnProfile(full: PlayerProfile) {
+      // Always keep full data in otbProfile for switching back to "all time"
+      if (!otbProfile) setOtbProfile(full);
+
+      if (timeRange !== "all" && full.games && full.games.length > 0) {
+        setTimeRangeLoading(true);
+        const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
+        if (sinceMs) {
+          const cutoff = Date.now() - sinceMs;
+          const filtered = full.games.filter(g => {
+            if (!g.date) return true;
+            const d = new Date(g.date.replace(/\./g, "-"));
+            return !isNaN(d.getTime()) && d.getTime() >= cutoff;
+          });
+          if (filtered.length > 0) {
+            const reanalyzed = analyzeOTBGames(filtered, full.username);
+            if (full.ratings) reanalyzed.ratings = full.ratings;
+            if (full.fideEstimate) reanalyzed.fideEstimate = full.fideEstimate;
+            setProfile(reanalyzed);
+            profileRef.current = reanalyzed;
+            const speeds = Object.keys(reanalyzed.bySpeed || {}).sort(
+              (a, b) => SPEED_ORDER.indexOf(a) - SPEED_ORDER.indexOf(b)
+            );
+            setSelectedSpeeds(speeds.length > 0 ? speeds : ["classical"]);
+            setTimeRangeLoading(false);
+            return;
+          }
+          // No games match this time range — show empty profile, not full profile
+          const emptyProfile: PlayerProfile = {
+            username: full.username,
+            platform: full.platform,
+            totalGames: full.totalGames,
+            analyzedGames: 0,
+            ratings: full.ratings || {},
+            fideEstimate: full.fideEstimate,
+            style: { aggression: 0, tactical: 0, positional: 0, endgame: 0, sampleSize: 0 },
+            weaknesses: [],
+            openings: { white: [], black: [] },
+            prepTips: [],
+            lastComputed: Date.now(),
+            games: [],
+          };
+          setProfile(emptyProfile);
+          profileRef.current = emptyProfile;
+          setSelectedSpeeds(["classical"]);
+          setTimeRangeLoading(false);
+          return;
+        }
+        setTimeRangeLoading(false);
+      }
+
+      // "all time" or no filtered results — use full profile
+      bridgePgnProfile(full);
     }
 
     // Phase 1: Fast basic data
@@ -387,6 +420,5 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
     isFIDEMode,
     platform,
     profileRef,
-    initialFilterSetRef,
   };
 }

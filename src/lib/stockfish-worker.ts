@@ -26,13 +26,10 @@ export class StockfishEngine {
 
         this.worker.onmessage = (e: MessageEvent) => {
           const msg = typeof e.data === "string" ? e.data : String(e.data);
-
           if (msg.includes("uciok")) {
             this.ready = true;
             resolve();
           }
-
-          // Process waiting listeners
           if (this.messageQueue.length > 0) {
             const handler = this.messageQueue[0];
             handler(msg);
@@ -40,7 +37,10 @@ export class StockfishEngine {
         };
 
         this.worker.onerror = (e) => {
-          reject(new Error(`Stockfish worker error: ${e.message}`));
+          reject(new Error(
+            `Stockfish worker error: ${e.message || "unknown"} ` +
+            `(filename: ${e.filename || "none"}, line: ${e.lineno || 0})`
+          ));
         };
 
         this.send("uci");

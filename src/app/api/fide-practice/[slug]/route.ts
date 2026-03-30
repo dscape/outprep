@@ -38,6 +38,18 @@ export async function GET(
 ) {
   const { slug } = await params;
   const month = currentMonth();
+  const sinceParam = req.nextUrl.searchParams.get("since");
+  const sinceMs = sinceParam ? parseInt(sinceParam) : undefined;
+
+  // When a since filter is active, skip monthly cache and compute with date filter
+  if (sinceMs) {
+    const sinceDate = new Date(sinceMs).toISOString().split("T")[0];
+    const result = await computeAndCache(slug, month, req, sinceDate);
+    if (result.error) {
+      return Response.json({ error: result.error }, { status: result.status });
+    }
+    return Response.json(result.profile, { headers: CACHE_HEADERS });
+  }
 
   // ─── 1. Check current month's cached profile ─────────────────────
   const cached = await getFideProfile(slug, month);
@@ -67,6 +79,8 @@ async function computeAndCache(
   slug: string,
   month: string,
   req: NextRequest,
+  /** Optional date filter (YYYY-MM-DD). When set, results are NOT cached. */
+  sinceDate?: string,
 ): Promise<{ profile?: unknown; error?: string; status?: number }> {
   const fideIdMatch = slug.match(/-(\d{4,})$/);
   const fideId = fideIdMatch ? fideIdMatch[1] : null;
@@ -88,7 +102,7 @@ async function computeAndCache(
   const nameParam = req.nextUrl.searchParams.get("name");
   const playerName =
     displayName || nameParam || slug.replace(/-\d{4,}$/, "").replace(/-/g, " ");
-  const rawPgns = await getPlayerGamePgns(slug);
+  const rawPgns = await getPlayerGamePgns(slug, sinceDate);
 
   if (!rawPgns || rawPgns.length === 0) {
     return { error: "No games found for this player", status: 404 };
@@ -122,8 +136,10 @@ async function computeAndCache(
 
   const compactProfile = { ...profile, games: compactGames };
 
-  // Persist to DB cache
-  await upsertFideProfile(slug, month, compactProfile, otbGames.length);
+  // Only cache full (unfiltered) profiles to avoid overwriting with partial data
+  if (!sinceDate) {
+    await upsertFideProfile(slug, month, compactProfile, otbGames.length);
+  }
 
   return { profile: compactProfile };
 }
