@@ -5,6 +5,7 @@ node_modules/
 /.pnp
 .pnp.*
 .yarn/*
+.claude/*
 !.yarn/patches
 !.yarn/plugins
 !.yarn/releases
