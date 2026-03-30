@@ -1,5 +1,5 @@
 /**
- * Public API for programmatic use by @outprep/forge and other packages.
+ * Public API for programmatic use by other packages.
  *
  * The CLI (`cli.ts`) is the main entry point for human use.
  * This barrel export lets other packages call the harness as a library.

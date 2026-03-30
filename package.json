@@ -15,9 +15,7 @@
     "harness:create": "npm run harness -- create-dataset",
     "harness:run": "npm run harness -- run",
     "harness:compare": "npm run harness -- compare",
-    "forge-dashboard": "next dev --port 3001",
     "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --",
-    "forge": "npm run --workspace=packages/forge forge --",
     "twic-archive": "bash scripts/create-twic-archive.sh",
     "test:engine": "npm run --workspace=packages/engine test"
   },
@@ -32,9 +30,6 @@
     "react": "19.2.3",
     "react-chessboard": "^5.10.0",
     "react-dom": "19.2.3",
-    "react-markdown": "^10.1.0",
-    "recharts": "^3.8.0",
-    "remark-gfm": "^4.0.1",
     "stockfish": "^18.0.5",
     "uuid": "^13.0.0"
   },
