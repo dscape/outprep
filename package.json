@@ -18,7 +18,13 @@
     "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --",
     "twic-archive": "bash scripts/create-twic-archive.sh",
     "test": "vitest run",
-    "test:engine": "npm run --workspace=packages/engine test"
+    "test:engine": "npm run --workspace=packages/engine test",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test",
+    "prepare": "husky"
+  },
+  "lint-staged": {
+    "*.{ts,tsx}": "eslint"
   },
   "dependencies": {
     "@types/uuid": "^11.0.0",
@@ -35,12 +41,15 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.4.0",
     "tailwindcss": "^4",
     "typescript": "^5",
     "vitest": "^4.1.2"
