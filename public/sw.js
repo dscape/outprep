@@ -21,14 +21,22 @@ self.addEventListener("activate", (event) => {
       )
     )
   );
-  self.clients.claim();
+  // Don't call clients.claim() — let the SW take control naturally on next
+  // page load. Claiming mid-session causes navigation failures on mobile Safari.
 });
 
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
-  // Only intercept stockfish asset requests
-  if (!STOCKFISH_ASSETS.includes(url.pathname)) return;
+  if (!STOCKFISH_ASSETS.includes(url.pathname)) {
+    // Mobile Safari can fail navigations when respondWith() is not called
+    // by an active service worker. Explicitly pass through navigation
+    // requests so the browser always gets a proper response.
+    if (event.request.mode === "navigate") {
+      event.respondWith(fetch(event.request));
+    }
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
