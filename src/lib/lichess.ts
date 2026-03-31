@@ -2,9 +2,13 @@ import { LichessUser, LichessGame } from "./types";
 
 const LICHESS_API = "https://lichess.org/api";
 
+const LICHESS_HEADERS = {
+  "User-Agent": "outprep.xyz (https://outprep.xyz)",
+};
+
 export async function fetchLichessUser(username: string): Promise<LichessUser> {
   const res = await fetch(`${LICHESS_API}/user/${username}`, {
-    headers: { Accept: "application/json" },
+    headers: { ...LICHESS_HEADERS, Accept: "application/json" },
   });
   if (res.status === 404) throw new Error(`Player "${username}" not found on Lichess`);
   if (res.status === 429) throw new Error("Rate limited by Lichess. Please try again in a minute.");
@@ -14,7 +18,8 @@ export async function fetchLichessUser(username: string): Promise<LichessUser> {
 
 export async function fetchLichessGames(
   username: string,
-  max = 2000
+  max = 2000,
+  since?: number,
 ): Promise<LichessGame[]> {
   const params = new URLSearchParams({
     max: String(max),
@@ -25,10 +30,14 @@ export async function fetchLichessGames(
     opening: "true",
   });
 
+  if (since) {
+    params.set("since", String(since));
+  }
+
   const res = await fetch(
     `${LICHESS_API}/games/user/${username}?${params}`,
     {
-      headers: { Accept: "application/x-ndjson" },
+      headers: { ...LICHESS_HEADERS, Accept: "application/x-ndjson" },
     }
   );
 

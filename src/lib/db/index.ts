@@ -635,6 +635,89 @@ export async function upsertFideProfile(
   }
 }
 
+// ─── Bot data cache ────────────────────────────────────────────────────────
+
+interface BotDataCacheRow {
+  whiteTrie: unknown;
+  blackTrie: unknown;
+  errorProfile: unknown;
+  styleMetrics: unknown;
+  gameCount: number;
+  newestGameTs: number | null;
+  updatedAt: Date;
+}
+
+/**
+ * Get cached bot data (opening tries, error profile, style metrics).
+ * Returns null if no cached data exists or Postgres is unavailable.
+ */
+export async function getBotDataCache(
+  platform: string,
+  username: string,
+): Promise<BotDataCacheRow | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const u = username.toLowerCase();
+    const { rows } = await sql`
+      SELECT white_trie, black_trie, error_profile, style_metrics,
+             game_count, newest_game_ts, updated_at
+      FROM bot_data_cache
+      WHERE platform = ${platform} AND username = ${u}
+    `;
+    if (rows.length === 0) return null;
+    const row = rows[0];
+    return {
+      whiteTrie: jsonb(row.white_trie, null),
+      blackTrie: jsonb(row.black_trie, null),
+      errorProfile: jsonb(row.error_profile, null),
+      styleMetrics: jsonb(row.style_metrics, null),
+      gameCount: row.game_count as number,
+      newestGameTs: row.newest_game_ts ? Number(row.newest_game_ts) : null,
+      updatedAt: new Date(row.updated_at as string),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Upsert cached bot data.
+ */
+export async function upsertBotDataCache(
+  platform: string,
+  username: string,
+  whiteTrie: unknown,
+  blackTrie: unknown,
+  errorProfile: unknown,
+  styleMetrics: unknown,
+  gameCount: number,
+  newestGameTs: number | null,
+): Promise<void> {
+  if (!HAS_POSTGRES) return;
+  try {
+    const u = username.toLowerCase();
+    const wt = JSON.stringify(whiteTrie);
+    const bt = JSON.stringify(blackTrie);
+    const ep = JSON.stringify(errorProfile);
+    const sm = JSON.stringify(styleMetrics);
+    await sql`
+      INSERT INTO bot_data_cache (platform, username, white_trie, black_trie, error_profile, style_metrics, game_count, newest_game_ts, updated_at)
+      VALUES (${platform}, ${u}, ${wt}::jsonb, ${bt}::jsonb, ${ep}::jsonb, ${sm}::jsonb, ${gameCount}, ${newestGameTs}, NOW())
+      ON CONFLICT (platform, username)
+      DO UPDATE SET
+        white_trie = ${wt}::jsonb,
+        black_trie = ${bt}::jsonb,
+        error_profile = ${ep}::jsonb,
+        style_metrics = ${sm}::jsonb,
+        game_count = ${gameCount},
+        newest_game_ts = ${newestGameTs},
+        updated_at = NOW()
+    `;
+  } catch {
+    // Non-fatal: cache write failure shouldn't break the app
+  }
+}
+
 // ─── Utilities ───────────────────────────────────────────────────────────────
 
 /**

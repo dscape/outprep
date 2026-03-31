@@ -2,24 +2,49 @@
 
 import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { v4 as uuidv4 } from "uuid";
 import { MoveEval, AnalysisSummary, OTBProfile } from "@/lib/types";
 import type { ErrorProfile, OpeningTrie, GameRecord, StyleMetrics } from "@outprep/engine";
-import { buildOpeningTrie, analyzeStyleFromRecords } from "@outprep/engine";
+import { buildOpeningTrie } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
-import ChessBoard from "@/components/ChessBoard";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
 import { matchesPlayerName } from "@outprep/engine";
-import { parsePlayProfile } from "@/lib/parse-profile-response";
+
+const ChessBoard = dynamic(() => import("@/components/ChessBoard"), {
+  ssr: false,
+  loading: () => (
+    <div className="flex items-center justify-center" style={{ minHeight: 400 }}>
+      <div className="text-center">
+        <div className="h-8 w-8 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-3" />
+        <p className="text-sm text-zinc-400">Preparing chess engine...</p>
+      </div>
+    </div>
+  ),
+});
 
 interface BotData {
   errorProfile: ErrorProfile;
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
-  gameMoves: Array<{ moves: string; playerColor: "white" | "black"; result: "white" | "black" | "draw"; hasEvals: boolean }>;
+  styleMetrics: StyleMetrics;
 }
 
-import type { PlayProfile } from "@/lib/parse-profile-response";
+/** Minimal profile info needed for the play page */
+interface PlayProfile {
+  username: string;
+  fideEstimate: { rating: number };
+}
+
+type LoadingStage = "profile" | "fetching" | "analyzing" | "building" | "ready";
+
+const STAGE_LABELS: Record<LoadingStage, { title: string; detail: string }> = {
+  profile: { title: "Loading player data...", detail: "Fetching ratings and profile" },
+  fetching: { title: "Fetching game history...", detail: "Downloading games from platform" },
+  analyzing: { title: "Analyzing games...", detail: "Computing error profile and play style" },
+  building: { title: "Building opening book...", detail: "Creating opening repertoire from game history" },
+  ready: { title: "Ready", detail: "" },
+};
 
 export default function PlayPage() {
   const params = useParams();
@@ -70,63 +95,53 @@ export default function PlayPage() {
   });
   const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
   const [loadingOpening, setLoadingOpening] = useState(!!eco);
+  const [loadingStage, setLoadingStage] = useState<LoadingStage>("profile");
 
   useEffect(() => {
     const profileFromCache = !!cachedProfile;
 
     async function load() {
       try {
+        // Fetch profile-basic (fast JSON response, ~50ms) instead of full NDJSON profile
+        if (!profileFromCache) {
+          setLoadingStage("profile");
+          try {
+            const platformQuery = platform === "chesscom" ? "?platform=chesscom" : "";
+            const profileRes = await fetch(
+              `/api/profile-basic/${encodeURIComponent(username)}${platformQuery}`
+            );
+            if (profileRes.ok) {
+              const data = await profileRes.json();
+              setProfile({
+                username: data.username,
+                fideEstimate: data.fideEstimate || { rating: 0 },
+              });
+              setProfileReady(true);
+            } else {
+              // PGN user: no online profile, use username as-is
+              setProfile({ username, fideEstimate: { rating: 0 } });
+              setProfileReady(true);
+            }
+          } catch {
+            // Network error — still try to proceed for PGN users
+            setProfile({ username, fideEstimate: { rating: 0 } });
+            setProfileReady(true);
+          }
+        }
+
+        // Fetch bot data (DB cache hit is instant, miss triggers full pipeline)
+        setLoadingStage("fetching");
         let query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
         if (since) query += `${query ? "&" : "?"}since=${encodeURIComponent(since)}`;
         if (platform === "chesscom") query += `${query ? "&" : "?"}platform=chesscom`;
         if (platform === "fide") query += `${query ? "&" : "?"}platform=fide`;
 
-        // Start bot-data fetch immediately (likely cache-hit from scout pre-warm)
-        const botFetch = fetch(
+        const botRes = await fetch(
           `/api/bot-data/${encodeURIComponent(username)}${query}`
         );
 
-        // Only fetch profile API if not in sessionStorage
-        if (!profileFromCache) {
-          let parsed: { username: string; fideEstimate: { rating: number } } | null = null;
-          try {
-            const platformQuery = platform === "chesscom" ? "?platform=chesscom" : "";
-            const profileRes = await fetch(
-              `/api/profile/${encodeURIComponent(username)}${platformQuery}`
-            );
-            if (profileRes.ok) {
-              const text = await profileRes.text();
-              parsed = parsePlayProfile(text, username);
-            }
-          } catch {
-            // Network error — will try fide-estimate fallback below
-          }
-
-          // Fallback: if profile API didn't yield a rating (NDJSON error, rate limit, etc.),
-          // fetch just the FIDE estimate from the lightweight endpoint
-          if (!parsed || !parsed.fideEstimate.rating) {
-            if (platform !== "pgn" && platform !== "fide") {
-              try {
-                const estRes = await fetch(
-                  `/api/fide-estimate?username=${encodeURIComponent(username)}${platform === "chesscom" ? "&platform=chesscom" : ""}`
-                );
-                if (estRes.ok) {
-                  const est = await estRes.json();
-                  parsed = { username: parsed?.username ?? username, fideEstimate: { rating: est.rating } };
-                }
-              } catch {
-                // Non-fatal — proceed without estimate
-              }
-            }
-          }
-
-          setProfile(parsed ?? { username, fideEstimate: { rating: 0 } });
-          setProfileReady(true);
-        }
-
-        // Await bot-data (user is picking color while this loads)
-        const botRes = await botFetch;
         if (botRes.ok) {
+          setLoadingStage("building");
           const data: BotData = await botRes.json();
           setBotData(data);
         } else {
@@ -134,6 +149,7 @@ export default function PlayPage() {
           const pgnBotData = buildBotDataFromPGN(username);
           if (pgnBotData) setBotData(pgnBotData);
         }
+        setLoadingStage("ready");
         setBotDataReady(true);
       } catch {
         setError("Failed to load game data.");
@@ -189,19 +205,8 @@ export default function PlayPage() {
   // Use enhanced profile if available, otherwise fall back to bot-data profile
   const activeErrorProfile = enhancedErrorProfile || botData?.errorProfile || null;
 
-  // Compute style metrics from game history for debug panel
-  const styleMetrics = useMemo<StyleMetrics | null>(() => {
-    if (!botData?.gameMoves) return null;
-    const records: GameRecord[] = botData.gameMoves
-      .filter((g) => g.moves)
-      .map((g) => ({
-        moves: g.moves,
-        playerColor: g.playerColor,
-        result: g.result || ("draw" as const),
-      }));
-    if (records.length === 0) return null;
-    return analyzeStyleFromRecords(records);
-  }, [botData]);
+  // Style metrics from server-side computation
+  const styleMetrics = botData?.styleMetrics ?? null;
 
   // Bot data label for display
   const platformLabel = platform === "chesscom" ? "Chess.com" : platform === "fide" ? "FIDE OTB" : "Lichess";
@@ -213,11 +218,13 @@ export default function PlayPage() {
 
   // Only block on profile — show color selection ASAP
   if (!profileReady && !error) {
+    const stage = STAGE_LABELS[loadingStage];
     return (
-      <div className="flex min-h-screen items-center justify-center">
+      <div className="flex min-h-screen items-center justify-center px-4">
         <div className="text-center">
           <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
-          <p className="text-zinc-400">Loading...</p>
+          <p className="text-sm text-zinc-300 font-medium">{stage.title}</p>
+          <p className="text-xs text-zinc-500 mt-1">{stage.detail}</p>
         </div>
       </div>
     );
@@ -292,13 +299,23 @@ export default function PlayPage() {
 
   // Wait for bot data + opening before starting game
   if (!botDataReady || loadingOpening) {
+    const stage = STAGE_LABELS[loadingStage];
     return (
-      <div className="flex min-h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
-          <p className="text-zinc-400">
-            {loadingOpening ? "Loading opening position..." : "Preparing bot..."}
-          </p>
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6 max-w-sm w-full">
+          <div className="flex items-center gap-3">
+            <div className="h-6 w-6 rounded-full border-2 border-green-500 border-t-transparent animate-spin flex-shrink-0" />
+            <div>
+              <p className="text-sm text-zinc-300 font-medium">
+                {loadingOpening ? "Loading opening position..." : stage.title}
+              </p>
+              <p className="text-xs text-zinc-500 mt-0.5">
+                {loadingOpening
+                  ? `Preparing ${openingName || eco}`
+                  : stage.detail}
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -388,14 +405,15 @@ function buildBotDataFromPGN(username: string): BotData | null {
       gamesAnalyzed: 0,
     };
 
-    const gameMoves = gameRecords.map((g) => ({
-      moves: g.moves,
-      playerColor: g.playerColor,
-      result: g.result || ("draw" as const),
-      hasEvals: false,
-    }));
+    const styleMetrics: StyleMetrics = {
+      aggression: 50,
+      tactical: 50,
+      positional: 50,
+      endgame: 50,
+      sampleSize: 0,
+    };
 
-    return { errorProfile, whiteTrie, blackTrie, gameMoves };
+    return { errorProfile, whiteTrie, blackTrie, styleMetrics };
   } catch {
     return null;
   }

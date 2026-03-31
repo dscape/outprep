@@ -145,6 +145,62 @@ export function buildOpeningTrie(
 }
 
 /**
+ * Merge an addition trie into a base trie.
+ * For overlapping FEN positions: sums move counts, computes weighted-average winRates.
+ * For new positions: adds them directly.
+ * Returns a new merged trie (no mutation of inputs).
+ */
+export function mergeOpeningTries(base: OpeningTrie, addition: OpeningTrie): OpeningTrie {
+  const merged: OpeningTrie = {};
+
+  // Copy base trie
+  for (const [fen, node] of Object.entries(base)) {
+    merged[fen] = {
+      moves: node.moves.map((m) => ({ ...m })),
+      totalGames: node.totalGames,
+    };
+  }
+
+  // Merge addition trie
+  for (const [fen, addNode] of Object.entries(addition)) {
+    const existing = merged[fen];
+    if (!existing) {
+      merged[fen] = {
+        moves: addNode.moves.map((m) => ({ ...m })),
+        totalGames: addNode.totalGames,
+      };
+      continue;
+    }
+
+    // Merge moves for this position
+    const moveMap = new Map<string, TrieMove>();
+    for (const m of existing.moves) {
+      moveMap.set(m.uci, { ...m });
+    }
+
+    for (const addMove of addNode.moves) {
+      const baseMove = moveMap.get(addMove.uci);
+      if (baseMove) {
+        // Weighted average winRate, sum counts
+        const totalCount = baseMove.count + addMove.count;
+        baseMove.winRate =
+          (baseMove.winRate * baseMove.count + addMove.winRate * addMove.count) / totalCount;
+        baseMove.count = totalCount;
+      } else {
+        moveMap.set(addMove.uci, { ...addMove });
+      }
+    }
+
+    merged[fen] = {
+      moves: Array.from(moveMap.values()).sort((a, b) => b.count - a.count),
+      totalGames: existing.totalGames + addNode.totalGames,
+    };
+  }
+
+  return merged;
+}
+
+/**
  * Look up the current position in the trie.
  * Returns the available moves or null if out of book.
  */

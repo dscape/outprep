@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessUser } from "@/lib/lichess";
 import { fetchChesscomUser, fetchChesscomStats } from "@/lib/chesscom";
+import { estimateFIDE } from "@/lib/fide-estimator";
 
 const cache = new Map<string, { data: unknown; expires: number }>();
 const TTL = 24 * 60 * 60 * 1000;
@@ -42,6 +43,17 @@ export async function GET(
           return sum + tc.record.win + tc.record.loss + tc.record.draw;
         }, 0);
 
+      // Build a LichessUser-compatible shape for estimateFIDE
+      const userLike = {
+        id: user.username.toLowerCase(),
+        username: user.username,
+        perfs: {
+          blitz: stats.chess_blitz ? { rating: stats.chess_blitz.last.rating, games: (stats.chess_blitz.record?.win ?? 0) + (stats.chess_blitz.record?.loss ?? 0) + (stats.chess_blitz.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
+          rapid: stats.chess_rapid ? { rating: stats.chess_rapid.last.rating, games: (stats.chess_rapid.record?.win ?? 0) + (stats.chess_rapid.record?.loss ?? 0) + (stats.chess_rapid.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
+          classical: stats.chess_daily ? { rating: stats.chess_daily.last.rating, games: (stats.chess_daily.record?.win ?? 0) + (stats.chess_daily.record?.loss ?? 0) + (stats.chess_daily.record?.draw ?? 0), rd: 0, prog: 0 } : undefined,
+        },
+        count: { all: totalGames, rated: totalGames },
+      };
       basicProfile = {
         username: user.username,
         ratings: {
@@ -51,6 +63,7 @@ export async function GET(
           classical: stats.chess_daily?.last?.rating,
         },
         totalGames,
+        fideEstimate: estimateFIDE(userLike),
       };
     } else {
       const user = await fetchLichessUser(username);
@@ -63,6 +76,7 @@ export async function GET(
           classical: user.perfs?.classical?.prov ? undefined : user.perfs?.classical?.rating,
         },
         totalGames: user.count?.rated ?? user.count?.all ?? 0,
+        fideEstimate: estimateFIDE(user),
       };
     }
 

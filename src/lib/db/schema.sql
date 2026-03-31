@@ -171,3 +171,22 @@ CREATE TABLE game_evals (
 );
 
 CREATE UNIQUE INDEX idx_game_evals_lookup ON game_evals (platform, username, game_id);
+
+-- ─── Bot data cache ─────────────────────────────────────────────────────────
+-- Caches computed opening tries, error profiles, and style metrics for the
+-- play page bot. Built by the profile pipeline and read by the bot-data API.
+
+CREATE TABLE bot_data_cache (
+  id               SERIAL PRIMARY KEY,
+  platform         TEXT NOT NULL,          -- 'lichess' | 'chesscom'
+  username         TEXT NOT NULL,          -- lowercased
+  white_trie       JSONB NOT NULL,
+  black_trie       JSONB NOT NULL,
+  error_profile    JSONB NOT NULL,
+  style_metrics    JSONB NOT NULL,
+  game_count       INTEGER NOT NULL,
+  newest_game_ts   BIGINT,                 -- ms timestamp of newest game included
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX idx_bot_data_cache_lookup ON bot_data_cache (platform, username);

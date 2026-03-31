@@ -9,6 +9,7 @@ export {
 export { buildErrorProfileFromEvals } from "./error-profile";
 export {
   buildOpeningTrie,
+  mergeOpeningTries,
   lookupTrie,
   sampleTrieMove,
 } from "./opening-trie";

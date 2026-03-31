@@ -3,9 +3,10 @@ import { fetchLichessUser, fetchLichessGames } from "@/lib/lichess";
 import { fetchChesscomUser, fetchChesscomStats, fetchChesscomGames } from "@/lib/chesscom";
 import { buildProfile, analyzeOpenings, extractRatings } from "@/lib/profile-builder";
 import { estimateFIDE } from "@/lib/fide-estimator";
-import { fromLichessGame, fromChesscomGame } from "@/lib/normalized-game";
+import { fromLichessGame, fromChesscomGame, normalizedToGameRecord } from "@/lib/normalized-game";
 import type { LichessUser, LichessGame, ChesscomGame } from "@/lib/types";
-import { getOnlineProfile, upsertOnlineProfile } from "@/lib/db";
+import { getOnlineProfile, upsertOnlineProfile, upsertBotDataCache } from "@/lib/db";
+import { buildOpeningTrie } from "@outprep/engine";
 
 // Simple in-memory cache
 const cache = new Map<string, { data: unknown; expires: number }>();
@@ -45,6 +46,26 @@ function streamResponse(
   return new Response(stream, {
     headers: { "Content-Type": "application/x-ndjson" },
   });
+}
+
+/** Build and persist bot data (opening tries + error profile + style metrics) from normalized games */
+function persistBotData(
+  platform: string,
+  username: string,
+  standardGames: { moves: string; playerColor: "white" | "black"; result?: "white" | "black" | "draw" }[],
+  errorProfile: unknown,
+  styleMetrics: unknown,
+  gameCount: number,
+  newestGameTs: number | null,
+) {
+  const gameRecords = standardGames.filter(g => g.moves);
+  const whiteTrie = buildOpeningTrie(gameRecords, "white");
+  const blackTrie = buildOpeningTrie(gameRecords, "black");
+  // Fire and forget — cache write failure shouldn't block the response
+  upsertBotDataCache(
+    platform, username, whiteTrie, blackTrie,
+    errorProfile, styleMetrics, gameCount, newestGameTs,
+  ).catch(() => {});
 }
 
 export async function GET(
@@ -129,12 +150,20 @@ function handleLichess(
     setCache(profileCacheKey, profile);
     emit({ type: "profile", profile });
 
-    // Persist all-time profile to DB for fast repeat visits
+    // Persist all-time profile + bot data to DB for fast repeat visits
     if (!since) {
       const newestTs = games.length > 0
         ? Math.max(...games.map((g) => g.createdAt ?? 0))
         : null;
       upsertOnlineProfile("lichess", username, profile, games.length, newestTs).catch(() => {});
+
+      // Build and cache bot data (opening tries + error profile + style metrics)
+      const gameRecords = standardGames.map(normalizedToGameRecord);
+      persistBotData(
+        "lichess", username, gameRecords,
+        profile.errorProfile, profile.style,
+        standardGames.length, newestTs,
+      );
     }
   });
 }
@@ -216,12 +245,20 @@ function handleChesscom(
     setCache(profileCacheKey, profile);
     emit({ type: "profile", profile });
 
-    // Persist all-time profile to DB
+    // Persist all-time profile + bot data to DB
     if (!since) {
       const newestTs = games.length > 0
         ? Math.max(...games.map((g) => g.end_time * 1000))
         : null;
       upsertOnlineProfile("chesscom", username, profile, games.length, newestTs).catch(() => {});
+
+      // Build and cache bot data
+      const gameRecords = standardGames.map(normalizedToGameRecord);
+      persistBotData(
+        "chesscom", username, gameRecords,
+        profile.errorProfile, profile.style,
+        standardGames.length, newestTs,
+      );
     }
   });
 }
