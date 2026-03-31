@@ -4,12 +4,11 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { v4 as uuidv4 } from "uuid";
-import { MoveEval, AnalysisSummary, OTBProfile } from "@/lib/types";
-import type { ErrorProfile, OpeningTrie, GameRecord, StyleMetrics } from "@outprep/engine";
-import { buildOpeningTrie } from "@outprep/engine";
+import { MoveEval, AnalysisSummary } from "@/lib/types";
+import type { ErrorProfile } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
-import { matchesPlayerName } from "@outprep/engine";
+import { buildBotDataFromPGN, type BotData } from "@/lib/build-bot-data-from-pgn";
 
 const ChessBoard = dynamic(() => import("@/components/ChessBoard"), {
   ssr: false,
@@ -23,13 +22,6 @@ const ChessBoard = dynamic(() => import("@/components/ChessBoard"), {
   ),
 });
 
-interface BotData {
-  errorProfile: ErrorProfile;
-  whiteTrie: OpeningTrie;
-  blackTrie: OpeningTrie;
-  styleMetrics: StyleMetrics;
-}
-
 /** Minimal profile info needed for the play page */
 interface PlayProfile {
   username: string;
@@ -38,13 +30,21 @@ interface PlayProfile {
 
 type LoadingStage = "profile" | "fetching" | "analyzing" | "building" | "ready";
 
-const STAGE_LABELS: Record<LoadingStage, { title: string; detail: string }> = {
-  profile: { title: "Loading player data...", detail: "Fetching ratings and profile" },
-  fetching: { title: "Fetching game history...", detail: "Downloading games from platform" },
-  analyzing: { title: "Analyzing games...", detail: "Computing error profile and play style" },
-  building: { title: "Building opening book...", detail: "Creating opening repertoire from game history" },
-  ready: { title: "Ready", detail: "" },
-};
+function getStageLabels(platform: string): Record<LoadingStage, { title: string; detail: string }> {
+  const platformDetail =
+    platform === "chesscom" ? "Loading from Chess.com"
+    : platform === "fide" ? "Loading from database"
+    : platform === "pgn" ? "Building from uploaded games"
+    : "Loading from Lichess";
+
+  return {
+    profile: { title: "Loading player data...", detail: "Fetching ratings and profile" },
+    fetching: { title: "Fetching game history...", detail: platformDetail },
+    analyzing: { title: "Analyzing games...", detail: "Computing error profile and play style" },
+    building: { title: "Building opening book...", detail: "Creating opening repertoire from game history" },
+    ready: { title: "Ready", detail: "" },
+  };
+}
 
 export default function PlayPage() {
   const params = useParams();
@@ -96,6 +96,7 @@ export default function PlayPage() {
   const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
   const [loadingOpening, setLoadingOpening] = useState(!!eco);
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("profile");
+  const STAGE_LABELS = useMemo(() => getStageLabels(platform), [platform]);
 
   useEffect(() => {
     const profileFromCache = !!cachedProfile;
@@ -129,7 +130,17 @@ export default function PlayPage() {
           }
         }
 
-        // Fetch bot data (DB cache hit is instant, miss triggers full pipeline)
+        // PGN players: build bot data client-side, skip API entirely
+        if (platform === "pgn") {
+          setLoadingStage("building");
+          const pgnBotData = buildBotDataFromPGN(username);
+          if (pgnBotData) setBotData(pgnBotData);
+          setLoadingStage("ready");
+          setBotDataReady(true);
+          return;
+        }
+
+        // Online/FIDE players: fetch bot data from API (DB cache hit is instant, miss triggers full pipeline)
         setLoadingStage("fetching");
         let query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
         if (since) query += `${query ? "&" : "?"}since=${encodeURIComponent(since)}`;
@@ -144,10 +155,6 @@ export default function PlayPage() {
           setLoadingStage("building");
           const data: BotData = await botRes.json();
           setBotData(data);
-        } else {
-          // Fallback: build bot data client-side from PGN-imported games
-          const pgnBotData = buildBotDataFromPGN(username);
-          if (pgnBotData) setBotData(pgnBotData);
         }
         setLoadingStage("ready");
         setBotDataReady(true);
@@ -363,58 +370,3 @@ export default function PlayPage() {
   );
 }
 
-/**
- * Build BotData client-side from PGN-imported OTB games stored in sessionStorage.
- * Used as a fallback when the Lichess bot-data API is not available.
- */
-function buildBotDataFromPGN(username: string): BotData | null {
-  try {
-    const stored = sessionStorage.getItem(`pgn-import:${username}`);
-    if (!stored) return null;
-
-    const otb: OTBProfile = JSON.parse(stored);
-
-    // Convert OTB games to GameRecord format for trie building
-    const gameRecords: GameRecord[] = (otb.games || [])
-      .filter((g) => g.moves)
-      .map((g) => {
-        const isWhite = matchesPlayerName(g.white, username);
-        const isBlack = matchesPlayerName(g.black, username);
-        const playerIsWhite = isWhite && !isBlack ? true
-          : isBlack && !isWhite ? false
-          : isWhite;
-        return {
-          moves: g.moves,
-          playerColor: (playerIsWhite ? "white" : "black") as "white" | "black",
-          result: g.result === "1-0" ? "white" as const
-            : g.result === "0-1" ? "black" as const
-            : "draw" as const,
-        };
-      });
-
-    const whiteTrie = buildOpeningTrie(gameRecords, "white");
-    const blackTrie = buildOpeningTrie(gameRecords, "black");
-
-    // Empty error profile — no eval data from PGN
-    const emptyPhase = { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 };
-    const errorProfile: ErrorProfile = {
-      opening: { ...emptyPhase },
-      middlegame: { ...emptyPhase },
-      endgame: { ...emptyPhase },
-      overall: { ...emptyPhase },
-      gamesAnalyzed: 0,
-    };
-
-    const styleMetrics: StyleMetrics = {
-      aggression: 50,
-      tactical: 50,
-      positional: 50,
-      endgame: 50,
-      sampleSize: 0,
-    };
-
-    return { errorProfile, whiteTrie, blackTrie, styleMetrics };
-  } catch {
-    return null;
-  }
-}

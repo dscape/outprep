@@ -158,11 +158,13 @@ export function useStockfishUpgrade({
               const playerIsWhite = isWhite && !isBlack ? true
                 : isBlack && !isWhite ? false
                 : isWhite;
-              // Extract FIDE ID from slug (e.g. "alireza-firouzja-12573981" → "12573981")
-              const fideIdMatch = username.match(/-(\d{4,})$/);
+              // For FIDE: extract numeric ID from slug (e.g. "alireza-firouzja-12573981" → "12573981")
+              // For PGN: use username directly with PGN: prefix
+              const fideIdMatch = platform === "fide" ? username.match(/-(\d{4,})$/) : null;
               const platformId = fideIdMatch ? fideIdMatch[1] : username;
+              const platformPrefix = platform === "fide" ? "FIDE" : "PGN";
               return {
-                id: `FIDE:${platformId}:${crc32(g.moves)}`,
+                id: `${platformPrefix}:${platformId}:${crc32(g.moves)}`,
                 moves: g.moves,
                 playerColor: (playerIsWhite ? "white" : "black") as "white" | "black",
                 hasEvals: false,
