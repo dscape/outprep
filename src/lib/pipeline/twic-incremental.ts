@@ -45,7 +45,7 @@ export interface ParsedGame {
   pgn: string;
 }
 
-function extractHeaders(pgn: string): Record<string, string> {
+export function extractHeaders(pgn: string): Record<string, string> {
   const headers: Record<string, string> = {};
   const regex = /\[(\w+)\s+"([^"]*)"\]/g;
   let match;

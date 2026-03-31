@@ -18,7 +18,9 @@
     "fide-pipeline": "npm run --workspace=packages/fide-pipeline pipeline --",
     "twic-archive": "bash scripts/create-twic-archive.sh",
     "test": "vitest run",
-    "test:engine": "npm run --workspace=packages/engine test"
+    "test:engine": "npm run --workspace=packages/engine test",
+    "lichess-bulk": "tsx scripts/lichess-bulk-load.ts",
+    "backfill-fingerprints": "tsx scripts/backfill-fingerprints.ts"
   },
   "dependencies": {
     "@types/uuid": "^11.0.0",
