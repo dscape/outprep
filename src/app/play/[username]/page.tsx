@@ -10,6 +10,7 @@ import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import ChessBoard from "@/components/ChessBoard";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
 import { matchesPlayerName } from "@outprep/engine";
+import { parsePlayProfile } from "@/lib/parse-profile-response";
 
 interface BotData {
   errorProfile: ErrorProfile;
@@ -18,11 +19,7 @@ interface BotData {
   gameMoves: Array<{ moves: string; playerColor: "white" | "black"; result: "white" | "black" | "draw"; hasEvals: boolean }>;
 }
 
-/** Minimal profile info needed for the play page */
-interface PlayProfile {
-  username: string;
-  fideEstimate: { rating: number };
-}
+import type { PlayProfile } from "@/lib/parse-profile-response";
 
 export default function PlayPage() {
   const params = useParams();
@@ -91,25 +88,40 @@ export default function PlayPage() {
 
         // Only fetch profile API if not in sessionStorage
         if (!profileFromCache) {
+          let parsed: { username: string; fideEstimate: { rating: number } } | null = null;
           try {
             const platformQuery = platform === "chesscom" ? "?platform=chesscom" : "";
             const profileRes = await fetch(
               `/api/profile/${encodeURIComponent(username)}${platformQuery}`
             );
             if (profileRes.ok) {
-              const profileData = await profileRes.json();
-              setProfile(profileData);
-              setProfileReady(true);
-            } else {
-              // PGN user: no Lichess profile, use username as-is
-              setProfile({ username, fideEstimate: { rating: 0 } });
-              setProfileReady(true);
+              const text = await profileRes.text();
+              parsed = parsePlayProfile(text, username);
             }
           } catch {
-            // Network error — still try to proceed for PGN users
-            setProfile({ username, fideEstimate: { rating: 0 } });
-            setProfileReady(true);
+            // Network error — will try fide-estimate fallback below
           }
+
+          // Fallback: if profile API didn't yield a rating (NDJSON error, rate limit, etc.),
+          // fetch just the FIDE estimate from the lightweight endpoint
+          if (!parsed || !parsed.fideEstimate.rating) {
+            if (platform !== "pgn" && platform !== "fide") {
+              try {
+                const estRes = await fetch(
+                  `/api/fide-estimate?username=${encodeURIComponent(username)}${platform === "chesscom" ? "&platform=chesscom" : ""}`
+                );
+                if (estRes.ok) {
+                  const est = await estRes.json();
+                  parsed = { username: parsed?.username ?? username, fideEstimate: { rating: est.rating } };
+                }
+              } catch {
+                // Non-fatal — proceed without estimate
+              }
+            }
+          }
+
+          setProfile(parsed ?? { username, fideEstimate: { rating: 0 } });
+          setProfileReady(true);
         }
 
         // Await bot-data (user is picking color while this loads)
