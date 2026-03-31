@@ -3,20 +3,26 @@
 import { useEffect } from "react";
 
 /**
- * Registers the Stockfish Service Worker for persistent WASM caching,
- * and eagerly fetches stockfish assets into the browser cache as a fallback.
+ * Eagerly fetches Stockfish WASM assets into the browser HTTP cache.
  * Runs once and persists across client-side navigations since the root
  * layout never unmounts.
+ *
+ * Previously used a Service Worker for caching, but the SW's fetch
+ * interception caused navigation failures on mobile Safari.
  */
 export function StockfishPreloader() {
   useEffect(() => {
-    // Register Service Worker — it pre-caches stockfish assets on install
+    // Unregister any previously-installed service worker. The updated
+    // sw.js self-unregisters on activate, but this handles the case
+    // where the browser never re-fetches the SW script.
     if ("serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+      navigator.serviceWorker
+        .getRegistrations()
+        .then((regs) => regs.forEach((r) => r.unregister()))
+        .catch(() => {});
     }
 
-    // Fallback: eagerly fetch into browser HTTP cache (covers browsers
-    // where SW registration fails or hasn't activated yet)
+    // Eagerly fetch stockfish assets into the browser HTTP cache
     const id = setTimeout(() => {
       fetch("/stockfish.js").catch(() => {});
       fetch("/stockfish.wasm").catch(() => {});
