@@ -284,7 +284,7 @@ export default function PlayPage() {
               onClick={() => setPlayerColor("white")}
               className="group relative rounded-xl border border-zinc-700 bg-zinc-800/50 p-6 transition-all hover:border-green-500 hover:bg-zinc-800"
             >
-              <div className="text-5xl mb-2">&#9812;</div>
+              <div className="text-5xl mb-2">&#9818;</div>
               <span className="text-sm font-medium text-zinc-300 group-hover:text-white">
                 White
               </span>
@@ -293,7 +293,7 @@ export default function PlayPage() {
               onClick={() => setPlayerColor("black")}
               className="group relative rounded-xl border border-zinc-700 bg-zinc-800/50 p-6 transition-all hover:border-green-500 hover:bg-zinc-800"
             >
-              <div className="text-5xl mb-2">&#9818;</div>
+              <div className="text-5xl mb-2">&#9812;</div>
               <span className="text-sm font-medium text-zinc-300 group-hover:text-white">
                 Black
               </span>
