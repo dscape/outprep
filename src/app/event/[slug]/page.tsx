@@ -1,7 +1,7 @@
 import { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getEvent, formatPlayerName } from "@/lib/db";
+import { getEvent, getEventMeta, formatPlayerName } from "@/lib/db";
 import { TitleBadge } from "@/components/title-badge";
 import { CountryFlag } from "@/components/country-flag";
 
@@ -42,7 +42,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const event = await getEvent(slug);
+  const event = await getEventMeta(slug);
   if (!event) {
     return { title: "Event Not Found" };
   }

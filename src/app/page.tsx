@@ -208,6 +208,7 @@ export default async function Home() {
               <Link
                 key={e.slug}
                 href={`/event/${e.slug}`}
+                prefetch={true}
                 className="rounded-lg border border-zinc-800/50 bg-zinc-900/30 px-4 py-3 hover:bg-zinc-800/50 hover:border-zinc-700/50 transition-all group"
               >
                 <div className="text-sm text-zinc-300 group-hover:text-white transition-colors truncate">

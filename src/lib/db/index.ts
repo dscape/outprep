@@ -311,6 +311,33 @@ export interface EventDetail extends EventSummary {
 }
 
 /**
+ * Get event metadata only (no games/players). Fast single-row lookup
+ * used by generateMetadata so it doesn't block page rendering.
+ */
+export async function getEventMeta(slug: string): Promise<EventSummary | null> {
+  if (!HAS_POSTGRES) return null;
+  try {
+    const { rows } = await sql`
+      SELECT slug, name, site, date_start, date_end, game_count, avg_elo
+      FROM events WHERE slug = ${slug}
+    `;
+    if (rows.length === 0) return null;
+    const e = rows[0];
+    return {
+      slug: e.slug as string,
+      name: e.name as string,
+      site: (e.site as string) ?? null,
+      dateStart: e.date_start ? formatDateForGame(e.date_start as Date) : null,
+      dateEnd: e.date_end ? formatDateForGame(e.date_end as Date) : null,
+      gameCount: e.game_count as number,
+      avgElo: (e.avg_elo as number) ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Get an event by its slug with all games and participating players.
  */
 export async function getEvent(slug: string): Promise<EventDetail | null> {
