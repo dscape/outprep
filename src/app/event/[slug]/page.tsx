@@ -1,7 +1,7 @@
 import { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getEvent, getEventMeta, formatPlayerName } from "@/lib/db";
+import { getEvent, getEventMeta, getRecentEvents, formatPlayerName } from "@/lib/db";
 import { TitleBadge } from "@/components/title-badge";
 import { CountryFlag } from "@/components/country-flag";
 
@@ -9,7 +9,8 @@ export const revalidate = 604800; // 7 days
 export const dynamicParams = true;
 
 export async function generateStaticParams() {
-  return [];
+  const events = await getRecentEvents(20);
+  return events.map((e) => ({ slug: e.slug }));
 }
 
 function formatDate(date: string): string {

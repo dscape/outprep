@@ -6,6 +6,7 @@ import {
   getPlayer,
   getAliasTarget,
   getOnlineProfile,
+  getTopPlayers,
   formatPlayerName,
   generateEventSlug,
 } from "@/lib/db";
@@ -27,7 +28,8 @@ export const revalidate = 3600;
 export const dynamicParams = true;
 
 export async function generateStaticParams() {
-  return [];
+  const players = await getTopPlayers(10);
+  return players.map((p) => ({ slug: p.slug }));
 }
 
 function mapChessTitle(abbr: string | null): string | undefined {

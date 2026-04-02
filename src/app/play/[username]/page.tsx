@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { Suspense, useEffect, useState, useCallback, useMemo } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { v4 as uuidv4 } from "uuid";
@@ -47,6 +47,23 @@ function getStageLabels(platform: string): Record<LoadingStage, { title: string;
 }
 
 export default function PlayPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-screen items-center justify-center">
+          <div className="text-center">
+            <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-3" />
+            <p className="text-sm text-zinc-400">Loading game...</p>
+          </div>
+        </div>
+      }
+    >
+      <PlayPageInner />
+    </Suspense>
+  );
+}
+
+function PlayPageInner() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
