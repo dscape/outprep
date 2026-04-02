@@ -23,6 +23,17 @@ function formatDate(date: string): string {
   });
 }
 
+function mapChessTitle(abbr: string | null): string | undefined {
+  if (!abbr) return undefined;
+  const map: Record<string, string> = {
+    GM: "Chess Grandmaster", IM: "Chess International Master",
+    FM: "Chess FIDE Master", CM: "Chess Candidate Master",
+    WGM: "Chess Woman Grandmaster", WIM: "Chess Woman International Master",
+    WFM: "Chess Woman FIDE Master", WCM: "Chess Woman Candidate Master",
+  };
+  return map[abbr] ?? "Chess Player";
+}
+
 function resultLabel(result: string): { text: string; color: string } {
   switch (result) {
     case "1-0":
@@ -96,6 +107,10 @@ export default async function EventPage({
       ? formatDate(event.dateEnd)
       : null;
 
+  const endDatePast = event.dateEnd
+    ? new Date(event.dateEnd.replace(/\./g, "-")) < new Date()
+    : false;
+
   const jsonLd = {
     "@context": "https://schema.org",
     "@graph": [
@@ -103,10 +118,31 @@ export default async function EventPage({
         "@type": "SportsEvent",
         name: event.name,
         sport: "Chess",
+        url: `https://outprep.xyz/event/${slug}`,
+        eventStatus: endDatePast
+          ? "https://schema.org/EventCompleted"
+          : "https://schema.org/EventScheduled",
+        eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
         ...(event.dateStart ? { startDate: event.dateStart.replace(/\./g, "-") } : {}),
         ...(event.dateEnd ? { endDate: event.dateEnd.replace(/\./g, "-") } : {}),
-        ...(event.site ? { location: { "@type": "Place", name: event.site } } : {}),
+        ...(event.site ? {
+          location: {
+            "@type": "Place",
+            name: event.site,
+            address: event.site,
+          },
+        } : {}),
+        image: `https://outprep.xyz/event/${slug}/opengraph-image`,
         description: `Chess tournament with ${event.gameCount} games${event.avgElo ? `, average rating ${event.avgElo}` : ""}`,
+        ...(event.players.length > 0 ? {
+          performer: event.players.slice(0, 20).map((p) => ({
+            "@type": "Person",
+            name: formatPlayerName(p.name),
+            url: `https://outprep.xyz/player/${p.slug}`,
+            ...(mapChessTitle(p.title) ? { jobTitle: mapChessTitle(p.title) } : {}),
+          })),
+          numberOfAttendees: event.players.length,
+        } : {}),
       },
       {
         "@type": "BreadcrumbList",

@@ -31,6 +31,17 @@ function formatDate(date: string): string {
   });
 }
 
+function mapChessTitle(abbr: string | null): string | undefined {
+  if (!abbr) return undefined;
+  const map: Record<string, string> = {
+    GM: "Chess Grandmaster", IM: "Chess International Master",
+    FM: "Chess FIDE Master", CM: "Chess Candidate Master",
+    WGM: "Chess Woman Grandmaster", WIM: "Chess Woman International Master",
+    WFM: "Chess Woman FIDE Master", WCM: "Chess Woman Candidate Master",
+  };
+  return map[abbr] ?? "Chess Player";
+}
+
 function resultLabel(result: string): { text: string; color: string } {
   switch (result) {
     case "1-0":
@@ -164,8 +175,19 @@ export default async function GamePage({
         "@type": "SportsEvent",
         name: `${white} vs ${black} - ${game.event}${game.round ? ` Round ${game.round}` : ""}`,
         sport: "Chess",
+        url: `https://outprep.xyz/game/${slug}`,
+        eventStatus: "https://schema.org/EventCompleted",
+        eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
         startDate: game.date.replace(/\./g, "-"),
-        ...(game.site ? { location: { "@type": "Place", name: game.site } } : {}),
+        image: `https://outprep.xyz/api/og/game?slug=${encodeURIComponent(slug)}`,
+        ...(game.site ? { location: { "@type": "Place", name: game.site, address: game.site } } : {}),
+        ...(game.eventSlug ? {
+          superEvent: {
+            "@type": "SportsEvent",
+            name: game.event,
+            url: `https://outprep.xyz/event/${game.eventSlug}`,
+          },
+        } : {}),
         competitor: [
           {
             "@type": "Person",
@@ -173,6 +195,7 @@ export default async function GamePage({
             ...(game.whiteSlug
               ? { url: `https://outprep.xyz/player/${game.whiteSlug}` }
               : {}),
+            ...(mapChessTitle(game.whiteTitle) ? { jobTitle: mapChessTitle(game.whiteTitle) } : {}),
           },
           {
             "@type": "Person",
@@ -180,6 +203,7 @@ export default async function GamePage({
             ...(game.blackSlug
               ? { url: `https://outprep.xyz/player/${game.blackSlug}` }
               : {}),
+            ...(mapChessTitle(game.blackTitle) ? { jobTitle: mapChessTitle(game.blackTitle) } : {}),
           },
         ],
         description: `Chess game: ${game.opening ? `${game.opening} (${game.eco})` : game.eco ?? "Unknown opening"}. Result: ${game.result}`,

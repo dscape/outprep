@@ -30,6 +30,17 @@ export async function generateStaticParams() {
   return [];
 }
 
+function mapChessTitle(abbr: string | null): string | undefined {
+  if (!abbr) return undefined;
+  const map: Record<string, string> = {
+    GM: "Chess Grandmaster", IM: "Chess International Master",
+    FM: "Chess FIDE Master", CM: "Chess Candidate Master",
+    WGM: "Chess Woman Grandmaster", WIM: "Chess Woman International Master",
+    WFM: "Chess Woman FIDE Master", WCM: "Chess Woman Candidate Master",
+  };
+  return map[abbr] ?? "Chess Player";
+}
+
 function parseSlug(slug: string): { platform: "fide" | "lichess" | "chesscom" | "pgn"; username: string } {
   const decoded = decodeURIComponent(slug);
   const { platform, username } = parsePlatformUsername(decoded);
@@ -248,8 +259,25 @@ export default async function PlayerPage({
           fidePlayer.federation ? `Federation: ${fidePlayer.federation}` : null,
         ].filter(Boolean).join(", "),
         url: `https://outprep.xyz/player/${slug}`,
+        image: `https://outprep.xyz/player/${slug}/opengraph-image`,
         knowsAbout: "Chess",
-        ...(fidePlayer.federation ? { nationality: fidePlayer.federation } : {}),
+        ...(mapChessTitle(fidePlayer.title) ? { jobTitle: mapChessTitle(fidePlayer.title) } : {}),
+        hasOccupation: {
+          "@type": "Occupation",
+          name: "Chess Player",
+        },
+        ...(fidePlayer.federation ? {
+          nationality: fidePlayer.federation,
+          memberOf: {
+            "@type": "SportsOrganization",
+            name: `${fidePlayer.federation} Chess Federation`,
+          },
+        } : {}),
+        affiliation: {
+          "@type": "Organization",
+          name: "FIDE",
+          url: "https://www.fide.com",
+        },
         ...(fidePlayer.birthYear ? { birthDate: String(fidePlayer.birthYear) } : {}),
         ...(fidePlayer.fideId ? { sameAs: [`https://ratings.fide.com/profile/${fidePlayer.fideId}`] } : {}),
       },
