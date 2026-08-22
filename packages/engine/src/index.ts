@@ -34,6 +34,14 @@ export {
 
 // --- Utilities ---
 export { matchesPlayerName, crc32 } from "./player-name";
+export {
+  maiaMoveIndex,
+  mirrorMove,
+  preprocessMaiaPosition,
+  probabilitiesForLegalMoves,
+  sampleMaiaMove,
+} from "./maia-tensor";
+export type { MaiaInput, MaiaLegalMove } from "./maia-tensor";
 
 // --- Configuration ---
 export { DEFAULT_CONFIG, mergeConfig } from "./config";
@@ -53,6 +61,9 @@ export type {
   TrieMove,
   BotMoveResult,
   MoveSource,
+  MovePolicy,
+  MovePolicyResult,
+  PolicyCandidate,
   StyleMetrics,
 } from "./types";
 
@@ -64,6 +75,7 @@ import type {
   OpeningTrie,
   BotConfig,
   StyleMetrics,
+  MovePolicy,
 } from "./types";
 import { BotController } from "./bot-controller";
 
@@ -82,6 +94,8 @@ export function createBot(
     botColor: "white" | "black";
     config?: Partial<BotConfig>;
     styleMetrics?: StyleMetrics | null;
+    movePolicy?: MovePolicy | null;
+    onPolicyFailure?: (error: Error) => void;
   }
 ): BotController {
   return new BotController({ engine, ...options });

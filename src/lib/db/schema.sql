@@ -184,6 +184,7 @@ CREATE TABLE bot_data_cache (
   black_trie       JSONB NOT NULL,
   error_profile    JSONB NOT NULL,
   style_metrics    JSONB NOT NULL,
+  game_moves       JSONB,
   game_count       INTEGER NOT NULL,
   newest_game_ts   BIGINT,                 -- ms timestamp of newest game included
   updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()

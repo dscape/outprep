@@ -19,8 +19,9 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Workspace packages (linted separately or not at all)
     "packages/**",
-    // Vendored WASM binaries copied by postinstall
+    // Vendored WASM binaries copied by postinstall / ONNX Runtime
     "public/stockfish.*",
+    "public/ort/**",
   ]),
 ]);
 

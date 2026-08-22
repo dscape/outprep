@@ -5,7 +5,7 @@ import { Chessboard } from "react-chessboard";
 import { Chess, Square } from "chess.js";
 import { StockfishEngine } from "@/lib/stockfish-worker";
 import { WasmStockfishAdapter } from "@/lib/stockfish-adapter";
-import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics, CandidateMove } from "@outprep/engine";
+import type { ErrorProfile, OpeningTrie, BotMoveResult, StyleMetrics, CandidateMove, MoveSource } from "@outprep/engine";
 import { BotController, createBot, temperatureFromSkill, lookupTrie } from "@outprep/engine";
 import { LiveGameAnalyzer } from "@/lib/engine/live-analyzer";
 import { useDebugPanel } from "@/hooks/useDebugPanel";
@@ -13,11 +13,14 @@ import { useBookExplorer } from "@/hooks/useBookExplorer";
 import { buildDebugEntry, type DebugMoveEntry } from "@/lib/debug-reasoning";
 import DebugPanel from "@/components/DebugPanel";
 import BookExplorerPanel from "@/components/BookExplorerPanel";
+import { isMaiaEnabled, MaiaMovePolicy, type MaiaStatus } from "@/lib/maia/maia-policy";
+import { maiaRatingToEstimatedFide } from "@/lib/fide-estimator";
 
 interface ChessBoardProps {
   playerColor: "white" | "black";
   opponentUsername: string;
   fideEstimate: number;
+  maiaRating: number;
   errorProfile: ErrorProfile | null;
   /** White opening trie (positions where white moves) */
   whiteTrie: OpeningTrie | null;
@@ -46,6 +49,7 @@ export default function ChessBoard({
   playerColor,
   opponentUsername,
   fideEstimate,
+  maiaRating,
   errorProfile,
   whiteTrie,
   blackTrie,
@@ -56,10 +60,15 @@ export default function ChessBoard({
 }: ChessBoardProps) {
   const gameRef = useRef(new Chess());
   const [fen, setFen] = useState(gameRef.current.fen());
-  const [moveSource, setMoveSource] = useState<"book" | "engine" | null>(null);
+  const [moveSource, setMoveSource] = useState<MoveSource | null>(null);
+  const [maiaStatus, setMaiaStatus] = useState<MaiaStatus | { state: "disabled" }>(
+    isMaiaEnabled() ? { state: "loading" } : { state: "disabled" },
+  );
+  const [policyFallback, setPolicyFallback] = useState<string | null>(null);
   /** Whether the current position is still reachable from the opening trie */
   const [inBook, setInBook] = useState<boolean | null>(null);
   const [engineReady, setEngineReady] = useState(false);
+  const [engineError, setEngineError] = useState<string | null>(null);
   const [thinking, setThinking] = useState(false);
   const [lastMoveInfo, setLastMoveInfo] = useState<{
     phase: string;
@@ -81,11 +90,14 @@ export default function ChessBoard({
   const engineRef = useRef<StockfishEngine | null>(null);
   const botRef = useRef<BotController | null>(null);
   const analyzerRef = useRef<LiveGameAnalyzer | null>(null);
+  const policyRef = useRef<MaiaMovePolicy | null>(null);
   const gameEndedRef = useRef(false);
   const plyRef = useRef(0);
   const lastPlayerMoveSanRef = useRef<string | null>(null);
 
   const botColor = playerColor === "white" ? "black" : "white";
+  const maiaFideCalibration = maiaRatingToEstimatedFide(maiaRating);
+  const formattedMaiaFideCalibration = maiaFideCalibration.toLocaleString("en-US");
 
   const checkGameEnd = useCallback(
     async (chess: Chess) => {
@@ -131,77 +143,95 @@ export default function ChessBoard({
     [onGameEnd, playerColor],
   );
 
-  // Initialize Stockfish engine + BotController + LiveGameAnalyzer
+  // Initialize Stockfish for analysis/failure fallback, Maia for out-of-book
+  // play, and the live analyzer independently.
   useEffect(() => {
     const engine = new StockfishEngine();
-    engineRef.current = engine;
-
-    // Initialize live analyzer in parallel
     const analyzer = new LiveGameAnalyzer();
+    engineRef.current = engine;
     analyzerRef.current = analyzer;
 
-    Promise.all([
-      engine.init(),
-      analyzer.init(),
-    ])
-      .then(() => {
-        // Record starting position (ply 0) — always needed for analysis
-        analyzer.recordPosition(0, gameRef.current.fen());
-
-        // Pre-play opening moves if starting from a specific position
-        if (startingMoves && startingMoves.length > 0) {
-          const game = gameRef.current;
-          for (const uci of startingMoves) {
-            try {
-              const from = uci.substring(0, 2) as Square;
-              const to = uci.substring(2, 4) as Square;
-              const promotion =
-                uci.length > 4 ? (uci[4] as "q" | "r" | "b" | "n") : undefined;
-              const move = game.move({ from, to, promotion });
-              if (move) {
-                plyRef.current++;
-                analyzer.recordPosition(plyRef.current, game.fen());
-              } else {
-                break; // Invalid move — stop pre-playing
-              }
-            } catch {
-              break;
-            }
-          }
-          setFen(game.fen());
-        }
-
-        const adapter = new WasmStockfishAdapter(engine);
-        const botTrie = botColor === "white" ? whiteTrie : blackTrie;
-        const bot = createBot(adapter, {
-          elo: fideEstimate,
-          errorProfile,
-          openingTrie: botTrie,
-          botColor,
-          styleMetrics,
+    let policy: MaiaMovePolicy | null = null;
+    if (isMaiaEnabled()) {
+      try {
+        policy = new MaiaMovePolicy({
+          selfRating: maiaRating,
+          // We do not have a signed-in player's rating yet, so model a
+          // rating-matched opponent rather than omitting Maia's second input.
+          opponentRating: maiaRating,
+          onStatus: setMaiaStatus,
         });
-        botRef.current = bot;
-        setEngineReady(true);
-      })
-      .catch((err) => {
-        console.error("Failed to init engines:", err);
-        // Still try to use bot engine even if analyzer fails
-        engine.init().then(() => {
-          const adapter = new WasmStockfishAdapter(engine);
-          const botTrie = botColor === "white" ? whiteTrie : blackTrie;
-          const bot = createBot(adapter, {
-            elo: fideEstimate,
-            errorProfile,
-            openingTrie: botTrie,
-            botColor,
-            styleMetrics,
+        policyRef.current = policy;
+      } catch (cause) {
+        const message = cause instanceof Error ? cause.message : String(cause);
+        setMaiaStatus({ state: "error", message });
+        setPolicyFallback(`Maia unavailable: ${message}. Using Stockfish out of book.`);
+      }
+    }
+
+    async function initialize() {
+      const [engineResult, analyzerResult] = await Promise.allSettled([
+        engine.init(),
+        analyzer.init(),
+      ]);
+      if (engineResult.status === "rejected") throw engineResult.reason;
+
+      const analyzerReady = analyzerResult.status === "fulfilled";
+      if (!analyzerReady) {
+        console.warn("[practice] live analyzer unavailable", analyzerResult.reason);
+      } else {
+        analyzer.recordPosition(0, gameRef.current.fen());
+      }
+
+      if (startingMoves && startingMoves.length > 0) {
+        const game = gameRef.current;
+        for (const uci of startingMoves) {
+          try {
+            const from = uci.substring(0, 2) as Square;
+            const to = uci.substring(2, 4) as Square;
+            const promotion = uci.length > 4
+              ? (uci[4] as "q" | "r" | "b" | "n")
+              : undefined;
+            const move = game.move({ from, to, promotion });
+            if (!move) break;
+            plyRef.current++;
+            if (analyzerReady) analyzer.recordPosition(plyRef.current, game.fen());
+          } catch {
+            break;
+          }
+        }
+        setFen(game.fen());
+      }
+
+      const adapter = new WasmStockfishAdapter(engine);
+      const botTrie = botColor === "white" ? whiteTrie : blackTrie;
+      botRef.current = createBot(adapter, {
+        elo: fideEstimate,
+        errorProfile,
+        openingTrie: botTrie,
+        botColor,
+        styleMetrics,
+        movePolicy: policy,
+        onPolicyFailure: (error) => {
+          console.warn("[practice] Maia failed; Stockfish fallback active", {
+            opponentUsername,
+            error: error.message,
           });
-          botRef.current = bot;
-          setEngineReady(true);
-        }).catch(() => {});
+          setPolicyFallback(`Maia failed: ${error.message}. Using Stockfish for this move.`);
+        },
       });
+      setEngineReady(true);
+    }
+
+    void initialize().catch((cause) => {
+      const message = cause instanceof Error ? cause.message : String(cause);
+      console.error("Failed to initialize Stockfish:", cause);
+      setEngineError(message);
+    });
 
     return () => {
+      policy?.dispose();
+      policyRef.current = null;
       engine.quit();
       analyzer.quit();
     };
@@ -330,16 +360,14 @@ export default function ChessBoard({
         plyRef.current++;
         setFen(game.fen());
         setMoveSource(result.source);
-        // After bot moves, check if the resulting position (player's turn) is in book
-        {
-          const activeTrie = trieForFen(whiteTrie, blackTrie, game.fen());
-          if (activeTrie) {
-            const node = lookupTrie(activeTrie, game.fen());
-            setInBook(node !== null);
-          } else {
-            setInBook(result.source === "book");
-          }
+        if (result.fallbackReason) {
+          setPolicyFallback(`${result.fallbackReason}. Using Stockfish for this move.`);
+        } else if (result.source === "maia") {
+          setPolicyFallback(null);
         }
+        // The source belongs to the move just played; do not inspect the
+        // opposite side's trie after the turn changes.
+        setInBook(result.source === "book");
         setLastMoveInfo({ phase: result.phase, skill: result.dynamicSkill });
 
         // Record position for live analysis
@@ -634,7 +662,7 @@ export default function ChessBoard({
         )}
         {inBook === false && (
           <span className="rounded-full bg-zinc-700/50 border border-zinc-600/30 px-3 py-1 text-zinc-400">
-            Out of book
+            Out of book{moveSource === "maia" ? ` · Maia-3 · ≈${formattedMaiaFideCalibration} FIDE` : moveSource === "engine" ? " · Stockfish" : ""}
           </span>
         )}
         {thinking && (
@@ -643,10 +671,30 @@ export default function ChessBoard({
             Thinking...
           </span>
         )}
-        {!engineReady && (
+        {!engineReady && !engineError && (
           <span className="text-zinc-500">Loading engine...</span>
         )}
+        {maiaStatus.state === "loading" && (
+          <span className="text-zinc-500">
+            Loading Maia-3{maiaStatus.progress ? ` (${maiaStatus.progress}%)` : ""}...
+          </span>
+        )}
       </div>
+
+      {(policyFallback || engineError) && (
+        <div
+          role="status"
+          className={`max-w-xl rounded-md border px-3 py-2 text-xs ${
+            engineError
+              ? "border-red-500/30 bg-red-600/10 text-red-300"
+              : "border-amber-500/30 bg-amber-600/10 text-amber-300"
+          }`}
+        >
+          {engineError
+            ? `Chess engine failed to initialize: ${engineError}`
+            : policyFallback}
+        </div>
+      )}
 
       {/* Board */}
       <div className="w-full max-w-[min(90vw,560px)] aspect-square relative">
@@ -683,16 +731,26 @@ export default function ChessBoard({
       </div>
 
       {/* Game info */}
-      <div className="flex flex-col items-center gap-1">
-        <div className="flex items-center gap-4">
-          <div className="text-sm text-zinc-400">
-            ~{fideEstimate} FIDE
-            {lastMoveInfo && (
-              <span className="ml-2 text-zinc-600">
-                {lastMoveInfo.phase} / skill {lastMoveInfo.skill}
-              </span>
-            )}
-          </div>
+      <div className="flex flex-col items-center gap-2">
+        <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs">
+          <span className="text-zinc-400">
+            Profile <span className="tabular-nums">≈{fideEstimate.toLocaleString("en-US")}</span> FIDE
+          </span>
+          {maiaStatus.state !== "disabled" && maiaStatus.state !== "error" && (
+            <span
+              className="text-purple-400 tabular-nums"
+              title={`Approximate FIDE equivalent of Maia-3's ${maiaRating.toLocaleString("en-US")} Lichess rating input. Both sides are rating-matched; calibration is not a guaranteed playing strength.`}
+            >
+              Maia-3 out-of-book calibration ≈{formattedMaiaFideCalibration} FIDE
+            </span>
+          )}
+          {lastMoveInfo && (
+            <span className="text-zinc-600">
+              {lastMoveInfo.phase} / skill {lastMoveInfo.skill}
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-center gap-2">
           <button
             onClick={toggleDebug}
             className={`rounded-md border px-3 py-1.5 text-sm transition-colors flex items-center gap-1.5 ${

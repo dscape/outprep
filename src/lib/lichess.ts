@@ -38,6 +38,7 @@ export async function fetchLichessGames(
     `${LICHESS_API}/games/user/${username}?${params}`,
     {
       headers: { ...LICHESS_HEADERS, Accept: "application/x-ndjson" },
+      signal: AbortSignal.timeout(20_000),
     }
   );
 

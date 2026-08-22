@@ -150,6 +150,43 @@ export function buildDebugEntry(
     };
   }
 
+  if (result.source === "maia") {
+    const policyCandidates = result.policyCandidates || [];
+    const selectedRank = policyCandidates.findIndex((candidate) => candidate.uci === result.uci) + 1;
+    const distribution = policyCandidates
+      .slice(0, 8)
+      .map((candidate, index) =>
+        `  ${index + 1}. ${uciToSan(fen, candidate.uci) || candidate.uci} (${(candidate.probability * 100).toFixed(1)}%)${candidate.uci === result.uci ? " <<" : ""}`,
+      )
+      .join("\n");
+    let reasoning = `Maia-3 human move policy: ${moveSan}\nPhase: ${result.phase}`;
+    if (distribution) reasoning += `\nLegal-move probabilities:\n${distribution}`;
+    reasoning += `\nThink time: ${result.thinkTimeMs}ms`;
+
+    return {
+      ply,
+      result,
+      fen,
+      moveSan,
+      selectedRank: Math.max(1, selectedRank),
+      cpLoss: 0,
+      reasoning,
+      selectionProbabilities: policyCandidates.map((candidate) => candidate.probability),
+      temperature: 0,
+      candidateTypes: [],
+      stockfishEval,
+      stockfishBestMove,
+      stockfishBestMoveSan,
+      evalAfter,
+      trueCpLoss,
+      trueClassification,
+      playerMoveSan: playerMoveSan ?? null,
+      humanThinkTimeMs: null,
+      humanThinkTimeLabel: null,
+      humanDifficulty: null,
+    };
+  }
+
   const selectedUci = result.uci;
   const selectedIdx = candidates.findIndex((c) => c.uci === selectedUci);
   const selectedRank = selectedIdx >= 0 ? selectedIdx + 1 : 1;
@@ -244,6 +281,9 @@ export function classifyMove(entry: DebugMoveEntry): {
 } {
   if (entry.result.source === "book") {
     return { label: "BOOK", color: "green" };
+  }
+  if (entry.result.source === "maia" && !entry.trueClassification) {
+    return { label: "MAIA", color: "purple" };
   }
 
   // Use true classification from Stockfish when available

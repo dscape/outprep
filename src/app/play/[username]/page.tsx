@@ -5,10 +5,11 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { v4 as uuidv4 } from "uuid";
 import { MoveEval, AnalysisSummary } from "@/lib/types";
-import type { ErrorProfile } from "@outprep/engine";
+import type { ErrorProfile, OpeningTrie } from "@outprep/engine";
 import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
 import { buildBotDataFromPGN, type BotData } from "@/lib/build-bot-data-from-pgn";
+import { resolveMaiaRating } from "@/lib/fide-estimator";
 
 const ChessBoard = dynamic(() => import("@/components/ChessBoard"), {
   ssr: false,
@@ -25,10 +26,59 @@ const ChessBoard = dynamic(() => import("@/components/ChessBoard"), {
 /** Minimal profile info needed for the play page */
 interface PlayProfile {
   username: string;
-  fideEstimate: { rating: number };
+  fideEstimate: { rating: number; confidence?: number };
+  ratings?: { blitz?: number };
+  maiaRating?: number;
 }
 
 type LoadingStage = "profile" | "fetching" | "analyzing" | "building" | "ready";
+type BotDataState = "loading" | "ready" | "error";
+
+function hasBookPositions(trie: OpeningTrie | null | undefined): boolean {
+  return !!trie && Object.keys(trie).length > 0;
+}
+
+function isBotData(value: unknown): value is BotData {
+  if (!value || typeof value !== "object") return false;
+  const data = value as Partial<BotData>;
+  return (
+    !!data.whiteTrie &&
+    typeof data.whiteTrie === "object" &&
+    !!data.blackTrie &&
+    typeof data.blackTrie === "object" &&
+    !!data.errorProfile &&
+    !!data.styleMetrics &&
+    (hasBookPositions(data.whiteTrie) || hasBookPositions(data.blackTrie))
+  );
+}
+
+const botDataRequests = new Map<string, Promise<unknown>>();
+
+async function requestBotData(url: string): Promise<unknown> {
+  const existing = botDataRequests.get(url);
+  if (existing) return existing;
+
+  const request = (async () => {
+    let response = await fetch(url);
+    if (response.status === 429) {
+      const retryAfterSeconds = Number(response.headers.get("Retry-After") || 1);
+      const delay = Math.min(Math.max(retryAfterSeconds * 1000, 500), 5000);
+      await new Promise((resolve) => window.setTimeout(resolve, delay));
+      response = await fetch(url);
+    }
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({})) as { error?: string };
+      throw new Error(body.error || `Repertoire request failed (${response.status}).`);
+    }
+    return response.json();
+  })();
+
+  botDataRequests.set(url, request);
+  void request.finally(() => {
+    if (botDataRequests.get(url) === request) botDataRequests.delete(url);
+  }).catch(() => {});
+  return request;
+}
 
 function getStageLabels(platform: string): Record<LoadingStage, { title: string; detail: string }> {
   const platformDetail =
@@ -96,8 +146,9 @@ function PlayPageInner() {
     opponentWeaknessColor ? (opponentWeaknessColor === "white" ? "black" : "white") : null
   );
   const [profileReady, setProfileReady] = useState(cachedProfile?.ready ?? false);
-  const [botDataReady, setBotDataReady] = useState(false);
-  const [error, setError] = useState("");
+  const [botDataState, setBotDataState] = useState<BotDataState>("loading");
+  const [botDataError, setBotDataError] = useState("");
+  const [loadAttempt, setLoadAttempt] = useState(0);
   const [enhancedErrorProfile] = useState<ErrorProfile | null>(() => {
     // Load enhanced profile from sessionStorage (computed on scout page)
     try {
@@ -116,72 +167,107 @@ function PlayPageInner() {
   const STAGE_LABELS = useMemo(() => getStageLabels(platform), [platform]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
     const profileFromCache = !!cachedProfile;
 
     async function load() {
+      setBotData(null);
+      setBotDataError("");
+      setBotDataState("loading");
+
       try {
-        // Fetch profile-basic (fast JSON response, ~50ms) instead of full NDJSON profile
+        // Fetch the small profile response independently from the repertoire.
         if (!profileFromCache) {
           setLoadingStage("profile");
           try {
             const platformQuery = platform === "chesscom" ? "?platform=chesscom" : "";
             const profileRes = await fetch(
-              `/api/profile-basic/${encodeURIComponent(username)}${platformQuery}`
+              `/api/profile-basic/${encodeURIComponent(username)}${platformQuery}`,
+              { signal: controller.signal },
             );
             if (profileRes.ok) {
               const data = await profileRes.json();
+              const fideEstimate = data.fideEstimate || { rating: 0 };
               setProfile({
                 username: data.username,
-                fideEstimate: data.fideEstimate || { rating: 0 },
+                fideEstimate,
+                ratings: data.ratings,
+                maiaRating: resolveMaiaRating({
+                  platform,
+                  blitzRating: data.ratings?.blitz,
+                  fideEstimate: fideEstimate.rating,
+                }),
               });
-              setProfileReady(true);
             } else {
-              // PGN user: no online profile, use username as-is
-              setProfile({ username, fideEstimate: { rating: 0 } });
-              setProfileReady(true);
+              setProfile({
+                username,
+                fideEstimate: { rating: 0 },
+                maiaRating: resolveMaiaRating({ platform }),
+              });
             }
-          } catch {
-            // Network error — still try to proceed for PGN users
-            setProfile({ username, fideEstimate: { rating: 0 } });
+            setProfileReady(true);
+          } catch (profileError) {
+            if (profileError instanceof DOMException && profileError.name === "AbortError") return;
+            setProfile({
+              username,
+              fideEstimate: { rating: 0 },
+              maiaRating: resolveMaiaRating({ platform }),
+            });
             setProfileReady(true);
           }
         }
 
-        // PGN players: build bot data client-side, skip API entirely
         if (platform === "pgn") {
           setLoadingStage("building");
           const pgnBotData = buildBotDataFromPGN(username);
-          if (pgnBotData) setBotData(pgnBotData);
+          if (!pgnBotData || !isBotData(pgnBotData)) {
+            throw new Error("No usable games were found in this PGN repertoire.");
+          }
+          setBotData(pgnBotData);
           setLoadingStage("ready");
-          setBotDataReady(true);
+          setBotDataState("ready");
           return;
         }
 
-        // Online/FIDE players: fetch bot data from API (DB cache hit is instant, miss triggers full pipeline)
         setLoadingStage("fetching");
-        let query = speeds ? `?speeds=${encodeURIComponent(speeds)}` : "";
-        if (since) query += `${query ? "&" : "?"}since=${encodeURIComponent(since)}`;
-        if (platform === "chesscom") query += `${query ? "&" : "?"}platform=chesscom`;
-        if (platform === "fide") query += `${query ? "&" : "?"}platform=fide`;
-
-        const botRes = await fetch(
-          `/api/bot-data/${encodeURIComponent(username)}${query}`
-        );
-
-        if (botRes.ok) {
-          setLoadingStage("building");
-          const data: BotData = await botRes.json();
-          setBotData(data);
+        const query = new URLSearchParams({ purpose: "play" });
+        if (speeds) query.set("speeds", speeds);
+        if (since) query.set("since", since);
+        if (platform === "chesscom" || platform === "fide") {
+          query.set("platform", platform);
         }
+
+        const data = await requestBotData(
+          `/api/bot-data/${encodeURIComponent(username)}?${query}`,
+        );
+        if (cancelled) return;
+
+        setLoadingStage("building");
+        if (!isBotData(data)) {
+          throw new Error("No validated personalized opening repertoire is available for these filters.");
+        }
+        setBotData(data);
         setLoadingStage("ready");
-        setBotDataReady(true);
-      } catch {
-        setError("Failed to load game data.");
+        setBotDataState("ready");
+      } catch (loadError) {
+        if (cancelled || (loadError instanceof DOMException && loadError.name === "AbortError")) return;
+        setBotData(null);
+        setBotDataError(
+          loadError instanceof Error
+            ? loadError.message
+            : "Failed to load the personalized opening repertoire.",
+        );
+        setBotDataState("error");
       }
     }
 
-    load();
-  }, [username, speeds, cachedProfile, platform, since]);
+    void load();
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [username, speeds, cachedProfile, platform, since, loadAttempt]);
 
   // Load opening moves if ECO param is present (separate effect to avoid sync setState)
   useEffect(() => {
@@ -232,16 +318,24 @@ function PlayPageInner() {
   // Style metrics from server-side computation
   const styleMetrics = botData?.styleMetrics ?? null;
 
-  // Bot data label for display
-  const platformLabel = platform === "chesscom" ? "Chess.com" : platform === "fide" ? "FIDE OTB" : "Lichess";
-  const gameCountStr = gameCountParam ? ` ${gameCountParam}` : "";
-  const timeRangeStr = timeRangeLabelParam && timeRangeLabelParam !== "All time" ? ` in ${timeRangeLabelParam.toLowerCase()}` : "";
+  const platformLabel = platform === "chesscom"
+    ? "Chess.com"
+    : platform === "fide"
+      ? "FIDE OTB"
+      : platform === "pgn"
+        ? "uploaded PGN"
+        : "Lichess";
+  const displayedGameCount = botData?.gameCount ?? (gameCountParam ? Number(gameCountParam) : undefined);
+  const gameCountStr = displayedGameCount ? ` ${displayedGameCount}` : "";
+  const timeRangeStr = !botData?.degraded && timeRangeLabelParam && timeRangeLabelParam !== "All time"
+    ? ` in ${timeRangeLabelParam.toLowerCase()}`
+    : "";
+  const fallbackLabel = botData?.degraded ? " (all-time cached fallback)" : "";
   const botDataLabel = enhancedErrorProfile
-    ? `Bot enhanced with Stockfish analysis`
-    : `Opening book from${gameCountStr} ${platformLabel} games${timeRangeStr}`;
+    ? "Bot enhanced with Stockfish analysis"
+    : `Opening book from${gameCountStr} ${platformLabel} games${timeRangeStr}${fallbackLabel}`;
 
-  // Only block on profile — show color selection ASAP
-  if (!profileReady && !error) {
+  if (!profileReady || botDataState === "loading") {
     const stage = STAGE_LABELS[loadingStage];
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
@@ -254,24 +348,37 @@ function PlayPageInner() {
     );
   }
 
-  if (error) {
+  if (botDataState === "error") {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
-        <div className="text-center">
-          <h2 className="text-xl font-bold text-white mb-2">Error</h2>
-          <p className="text-zinc-400 mb-4">{error}</p>
-          <button
-            onClick={() => router.push("/")}
-            className="rounded-md bg-zinc-800 px-4 py-2 text-sm text-white hover:bg-zinc-700"
-          >
-            Back to search
-          </button>
+        <div className="max-w-md text-center">
+          <h2 className="text-xl font-bold text-white mb-2">Personalized practice unavailable</h2>
+          <p className="text-zinc-400 mb-2">{botDataError}</p>
+          <p className="text-xs text-zinc-600 mb-5">
+            The board is disabled rather than substituting a generic engine opponent.
+          </p>
+          <div className="flex justify-center gap-3">
+            <button
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+              className="rounded-md bg-green-600 px-4 py-2 text-sm font-medium text-white hover:bg-green-500"
+            >
+              Retry
+            </button>
+            <button
+              onClick={() => router.push(buildScoutUrl(platform, username))}
+              className="rounded-md bg-zinc-800 px-4 py-2 text-sm text-white hover:bg-zinc-700"
+            >
+              Back to player
+            </button>
+          </div>
         </div>
       </div>
     );
   }
 
-  // Color selection screen — shows immediately when profile is cached
+  const canPlayWhite = hasBookPositions(botData?.blackTrie);
+  const canPlayBlack = hasBookPositions(botData?.whiteTrie);
+
   if (!playerColor) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
@@ -299,21 +406,25 @@ function PlayPageInner() {
           <div className="flex gap-4 justify-center">
             <button
               onClick={() => setPlayerColor("white")}
-              className="group relative rounded-xl border border-zinc-700 bg-zinc-800/50 p-6 transition-all hover:border-green-500 hover:bg-zinc-800"
+              disabled={!canPlayWhite}
+              className="group relative rounded-xl border border-zinc-700 bg-zinc-800/50 p-6 transition-all enabled:hover:border-green-500 enabled:hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-35"
             >
               <div className="text-5xl mb-2">&#9818;</div>
-              <span className="text-sm font-medium text-zinc-300 group-hover:text-white">
+              <span className="text-sm font-medium text-zinc-300 group-enabled:group-hover:text-white">
                 White
               </span>
+              {!canPlayWhite && <span className="block text-[10px] text-zinc-500 mt-2">No black repertoire</span>}
             </button>
             <button
               onClick={() => setPlayerColor("black")}
-              className="group relative rounded-xl border border-zinc-700 bg-zinc-800/50 p-6 transition-all hover:border-green-500 hover:bg-zinc-800"
+              disabled={!canPlayBlack}
+              className="group relative rounded-xl border border-zinc-700 bg-zinc-800/50 p-6 transition-all enabled:hover:border-green-500 enabled:hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-35"
             >
               <div className="text-5xl mb-2">&#9812;</div>
-              <span className="text-sm font-medium text-zinc-300 group-hover:text-white">
+              <span className="text-sm font-medium text-zinc-300 group-enabled:group-hover:text-white">
                 Black
               </span>
+              {!canPlayBlack && <span className="block text-[10px] text-zinc-500 mt-2">No white repertoire</span>}
             </button>
           </div>
         </div>
@@ -321,32 +432,43 @@ function PlayPageInner() {
     );
   }
 
-  // Wait for bot data + opening before starting game
-  if (!botDataReady || loadingOpening) {
-    const stage = STAGE_LABELS[loadingStage];
+  if (
+    (playerColor === "white" && !canPlayWhite) ||
+    (playerColor === "black" && !canPlayBlack)
+  ) {
+    return (
+      <div className="flex min-h-screen items-center justify-center px-4">
+        <div className="max-w-md text-center">
+          <h2 className="text-xl font-bold text-white mb-2">No repertoire for this color</h2>
+          <p className="text-zinc-400 mb-5">
+            There are not enough games for {profile?.username} as the opposing color.
+          </p>
+          <button
+            onClick={() => setPlayerColor(null)}
+            className="rounded-md bg-zinc-800 px-4 py-2 text-sm text-white hover:bg-zinc-700"
+          >
+            Choose another color
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadingOpening) {
     return (
       <div className="flex min-h-screen items-center justify-center px-4">
         <div className="rounded-xl border border-zinc-700/50 bg-zinc-800/50 p-6 max-w-sm w-full">
           <div className="flex items-center gap-3">
             <div className="h-6 w-6 rounded-full border-2 border-green-500 border-t-transparent animate-spin flex-shrink-0" />
             <div>
-              <p className="text-sm text-zinc-300 font-medium">
-                {loadingOpening ? "Loading opening position..." : stage.title}
-              </p>
-              <p className="text-xs text-zinc-500 mt-0.5">
-                {loadingOpening
-                  ? `Preparing ${openingName || eco}`
-                  : stage.detail}
-              </p>
+              <p className="text-sm text-zinc-300 font-medium">Loading opening position...</p>
+              <p className="text-xs text-zinc-500 mt-0.5">Preparing {openingName || eco}</p>
             </div>
           </div>
         </div>
       </div>
     );
   }
-
-  // Bot color is opposite of player color
-  const botColor = playerColor === "white" ? "black" : "white";
 
   return (
     <div className="min-h-screen px-4 py-8">
@@ -374,6 +496,11 @@ function PlayPageInner() {
           playerColor={playerColor}
           opponentUsername={profile?.username || username}
           fideEstimate={profile?.fideEstimate?.rating || 1500}
+          maiaRating={profile?.maiaRating ?? resolveMaiaRating({
+            platform,
+            blitzRating: profile?.ratings?.blitz,
+            fideEstimate: profile?.fideEstimate?.rating,
+          })}
           errorProfile={activeErrorProfile}
           whiteTrie={botData?.whiteTrie || null}
           blackTrie={botData?.blackTrie || null}

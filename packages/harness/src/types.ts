@@ -9,6 +9,7 @@ import type {
   ErrorProfile,
   StyleMetrics,
   OpeningTrie,
+  MovePolicy,
 } from "@outprep/engine";
 import type { LichessGame } from "./lichess-types";
 import type { VersionInfo } from "./version";
@@ -43,6 +44,9 @@ export interface RunConfig {
    */
   phaseBalanced?: boolean;
 
+  /** Optional human move policy for held-out out-of-book benchmarks. */
+  movePolicy?: MovePolicy;
+
   /**
    * Pre-built player profiles to use instead of computing from dataset.games.
    * Enables proper train/test separation: build profiles from train games,
@@ -67,6 +71,7 @@ export interface PositionResult {
   actualSan: string;
   botUci: string;
   botSource: MoveSource;
+  policyFallback: boolean;
   isMatch: boolean;
   isInTopN: boolean;
   dynamicSkill: number;
@@ -89,6 +94,10 @@ export interface Metrics {
   matchRate: number;
   topNRate: number;
   bookCoverage: number;
+  outOfBookPositions: number;
+  outOfBookMatchRate: number;
+  maiaCoverage: number;
+  stockfishFallbacks: number;
   avgActualCPL: number;
   avgBotCPL: number;
   cplDelta: number;

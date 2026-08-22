@@ -272,6 +272,7 @@ export async function runAccuracyTest(
         botColor,
         config: configOverrides,
         styleMetrics,
+        movePolicy: runConfig.movePolicy,
       });
 
       const chess = new Chess();
@@ -375,6 +376,7 @@ export async function runAccuracyTest(
             actualSan,
             botUci: botResult.uci,
             botSource: botResult.source,
+            policyFallback: !!botResult.fallbackReason,
             isMatch: botResult.uci === actualUci,
             isInTopN,
             dynamicSkill: botResult.dynamicSkill,

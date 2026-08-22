@@ -19,6 +19,7 @@ const BADGE_STYLES: Record<string, string> = {
   yellow: "bg-yellow-600/20 border-yellow-500/30 text-yellow-400",
   zinc: "bg-zinc-700/50 border-zinc-600/30 text-zinc-400",
   blue: "bg-blue-600/20 border-blue-500/30 text-blue-400",
+  purple: "bg-purple-600/20 border-purple-500/30 text-purple-400",
 };
 
 function Badge({ label, color }: { label: string; color: string }) {
@@ -348,6 +349,8 @@ function LatestMoveCard({ entry }: { entry: DebugMoveEntry }) {
   const sourceBadge =
     entry.result.source === "book" ? (
       <Badge label="BOOK" color="green" />
+    ) : entry.result.source === "maia" ? (
+      <Badge label="MAIA-3" color="purple" />
     ) : (
       <Badge label="ENGINE" color="zinc" />
     );
@@ -378,7 +381,9 @@ function LatestMoveCard({ entry }: { entry: DebugMoveEntry }) {
       {/* Decision path */}
       <div className="text-[10px] text-zinc-500 space-y-0.5">
         <div>
-          Skill: {entry.result.dynamicSkill} | Temp: {entry.temperature.toFixed(2)} | Think: {Math.round(entry.result.thinkTimeMs)}ms
+          Skill: {entry.result.dynamicSkill}
+          {entry.result.source !== "maia" && ` | Temp: ${entry.temperature.toFixed(2)}`}
+          {` | Think: ${Math.round(entry.result.thinkTimeMs)}ms`}
         </div>
         {entry.selectedRank > 0 && entry.result.candidates && entry.result.candidates.length > 1 && (
           <div>

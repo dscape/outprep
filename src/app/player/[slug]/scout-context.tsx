@@ -25,6 +25,7 @@ export function ScoutProvider({
   const {
     filteredData,
     selectedSpeeds,
+    availableSpeeds,
     timeRange,
     isPGNMode,
     isChesscomMode,
@@ -41,6 +42,7 @@ export function ScoutProvider({
     username,
     filteredData,
     selectedSpeeds,
+    availableSpeeds,
     timeRange,
     isPGNMode,
     isChesscomMode,

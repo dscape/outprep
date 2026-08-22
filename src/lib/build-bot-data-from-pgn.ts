@@ -7,6 +7,10 @@ export interface BotData {
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
   styleMetrics: StyleMetrics;
+  gameCount?: number;
+  bookSource?: "memory" | "db-cache" | "db-filtered" | "provider" | "fide-db" | "all-time-fallback" | "pgn";
+  requestedScope?: "all-time" | "filtered";
+  degraded?: boolean;
 }
 
 /**
@@ -70,7 +74,15 @@ export function buildBotDataFromProfile(otb: OTBProfile, username: string): BotD
       sampleSize: 0,
     };
 
-    return { errorProfile, whiteTrie, blackTrie, styleMetrics };
+    return {
+      errorProfile,
+      whiteTrie,
+      blackTrie,
+      styleMetrics,
+      gameCount: gameRecords.length,
+      bookSource: "pgn",
+      requestedScope: "all-time",
+    };
   } catch {
     return null;
   }

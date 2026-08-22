@@ -115,9 +115,9 @@ test.describe("PGN upload → play flow", () => {
       const profile = {
         username: "TestBot",
         platform: "pgn",
-        totalGames: 1,
-        analyzedGames: 1,
-        style: { aggression: 50, tactical: 50, positional: 50, endgame: 50, sampleSize: 1 },
+        totalGames: 2,
+        analyzedGames: 2,
+        style: { aggression: 50, tactical: 50, positional: 50, endgame: 50, sampleSize: 2 },
         weaknesses: [],
         openings: { white: [], black: [] },
         prepTips: [],
@@ -125,11 +125,21 @@ test.describe("PGN upload → play flow", () => {
         games: [
           {
             white: "TestBot",
-            black: "Opponent",
+            black: "Opponent One",
             result: "1-0",
             date: "2024.01.15",
             event: "Test",
-            moves: "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7",
+            moves: "e4 e5 Nf3 Nc6 Bb5 a6 Ba4 Nf6 O-O Be7",
+            pgn: "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6",
+          },
+          {
+            white: "TestBot",
+            black: "Opponent Two",
+            result: "1/2-1/2",
+            date: "2024.01.16",
+            event: "Test",
+            moves: "e4 e5 Nf3 Nc6 Bc4 Bc5 d3 Nf6",
+            pgn: "1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5",
           },
         ],
       };

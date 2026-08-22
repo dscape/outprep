@@ -34,6 +34,9 @@ export function formatMetrics(m: Metrics): string {
   lines.push(`  Move match rate:      ${(m.matchRate * 100).toFixed(1)}%`);
   lines.push(`  Top-4 accuracy:       ${(m.topNRate * 100).toFixed(1)}%`);
   lines.push(`  Book coverage:        ${(m.bookCoverage * 100).toFixed(1)}%`);
+  lines.push(`  Out-of-book match:    ${(m.outOfBookMatchRate * 100).toFixed(1)}% (${m.outOfBookPositions} positions)`);
+  lines.push(`  Maia coverage:        ${(m.maiaCoverage * 100).toFixed(1)}%`);
+  lines.push(`  Stockfish fallbacks:  ${m.stockfishFallbacks}`);
   lines.push(`  Avg actual CPL:       ${safeFixed(m.avgActualCPL)}`);
   lines.push(`  Avg bot CPL:          ${safeFixed(m.avgBotCPL)}`);
   lines.push(`  CPL delta:            ${safeFixed(m.cplDelta)}`);

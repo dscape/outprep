@@ -18,6 +18,7 @@ import {
 } from "@/lib/profile-merge";
 import { analyzeOTBGames } from "@/lib/otb-analyzer";
 import { generatePrepTips } from "@/lib/profile-builder";
+import { resolveMaiaRating } from "@/lib/fide-estimator";
 
 interface UseScoutProfileOptions {
   platform: Platform;
@@ -303,14 +304,27 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
         `play-profile:${username}`,
         JSON.stringify(
           profile
-            ? { username: profile.username, fideEstimate: profile.fideEstimate }
-            : { username, fideEstimate: { rating: 0 } }
+            ? {
+                username: profile.username,
+                fideEstimate: profile.fideEstimate,
+                ratings: profile.ratings,
+                maiaRating: resolveMaiaRating({
+                  platform,
+                  blitzRating: profile.ratings?.blitz,
+                  fideEstimate: profile.fideEstimate?.rating,
+                }),
+              }
+            : {
+                username,
+                fideEstimate: { rating: 0 },
+                maiaRating: resolveMaiaRating({ platform }),
+              }
         )
       );
     } catch {
       // Storage full — non-fatal
     }
-  }, [profile, username, isPGNMode]);
+  }, [profile, username, isPGNMode, platform]);
 
 
   const toggleSpeed = useCallback((speed: string) => {

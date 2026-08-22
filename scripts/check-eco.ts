@@ -10,7 +10,7 @@ const profile = analyzeOTBGames(games, 'Carlsen, Magnus');
 // Check all bySpeed white openings for missing ECO
 for (const [speed, sp] of Object.entries(profile.bySpeed || {})) {
   const white = sp.openings?.white || [];
-  const noEco = white.filter((o: any) => !o.eco);
+  const noEco = white.filter((opening) => !opening.eco);
   if (noEco.length > 0) {
     console.log(`${speed}: ${noEco.length} missing ECO`);
     for (const o of noEco) {
@@ -20,7 +20,7 @@ for (const [speed, sp] of Object.entries(profile.bySpeed || {})) {
 }
 
 // Check top-level openings too
-const topNoEco = (profile.openings?.white || []).filter((o: any) => !o.eco);
+const topNoEco = (profile.openings?.white || []).filter((opening) => !opening.eco);
 if (topNoEco.length > 0) {
   console.log(`top-level: ${topNoEco.length} missing ECO`);
   for (const o of topNoEco) {

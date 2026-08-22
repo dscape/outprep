@@ -1,211 +1,385 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchLichessGames } from "@/lib/lichess";
 import { fetchChesscomGames } from "@/lib/chesscom";
-import type { OpeningTrie, ErrorProfile, GameRecord, StyleMetrics } from "@outprep/engine";
-import { buildOpeningTrie, buildErrorProfileFromEvals, analyzeStyleFromRecords } from "@outprep/engine";
-import { fromLichessGame, fromChesscomGame, normalizedToGameRecord, normalizedToGameEvalData } from "@/lib/normalized-game";
+import type {
+  OpeningTrie,
+  ErrorProfile,
+  GameRecord,
+  StyleMetrics,
+} from "@outprep/engine";
+import {
+  analyzeStyleFromRecords,
+  buildErrorProfileFromEvals,
+  buildOpeningTrie,
+  crc32,
+  matchesPlayerName,
+} from "@outprep/engine";
+import {
+  fromChesscomGame,
+  fromLichessGame,
+  normalizedToGameEvalData,
+  normalizedToGameRecord,
+} from "@/lib/normalized-game";
 import type { NormalizedGame } from "@/lib/normalized-game";
-import { getPlayer, getPlayerGamePgns, formatPlayerName, getBotDataCache, upsertBotDataCache } from "@/lib/db";
+import {
+  formatPlayerName,
+  getBotDataCache,
+  getPlayer,
+  getPlayerGamePgns,
+  upsertBotDataCache,
+} from "@/lib/db";
+import type { CachedBotGame } from "@/lib/db";
 import { parseAllPGNGames } from "@/lib/pgn-parser";
-import { matchesPlayerName, crc32 } from "@outprep/engine";
+import { isExcludedFideSlug } from "@/lib/player-exclusions";
 
-/**
- * Returns the bot data needed to play against an opponent:
- * - Error profile (per-phase mistake rates from evals)
- * - Opening tries (one per color, JSON move trie)
- * - Style metrics (for bot personality)
- */
-
-interface BotDataResponse {
+export interface BotDataResponse {
   errorProfile: ErrorProfile;
   whiteTrie: OpeningTrie;
   blackTrie: OpeningTrie;
   styleMetrics: StyleMetrics;
-  // gameMoves included when computed from scratch (used by stockfish upgrade on scout page)
-  // Omitted when served from DB cache (play page doesn't need them)
-  gameMoves?: Array<{ id: string; moves: string; playerColor: "white" | "black"; result: "white" | "black" | "draw"; hasEvals: boolean }>;
+  gameCount: number;
+  bookSource: "memory" | "db-cache" | "db-filtered" | "provider" | "fide-db" | "all-time-fallback";
+  requestedScope: "all-time" | "filtered";
+  degraded?: boolean;
+  gameMoves?: CachedBotGame[];
 }
 
-// L1: in-memory cache (survives within a single serverless invocation)
+type BotDataPurpose = "play" | "analysis";
+type DbBotData = NonNullable<Awaited<ReturnType<typeof getBotDataCache>>>;
+
 const cache = new Map<string, { data: BotDataResponse; expires: number }>();
 const TTL = 24 * 60 * 60 * 1000;
-
 const CACHE_HEADERS = {
   "Cache-Control": "public, s-maxage=3600, stale-while-revalidate=86400",
 };
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: Promise<{ username: string }> }
+  { params }: { params: Promise<{ username: string }> },
 ) {
   const { username } = await params;
-  const speedsParam = request.nextUrl.searchParams.get("speeds");
-  const speeds = speedsParam ? speedsParam.split(",").filter(Boolean) : [];
-  const sinceParam = request.nextUrl.searchParams.get("since");
-  const since = sinceParam ? parseInt(sinceParam) : undefined;
+  const speeds = normalizeSpeeds(request.nextUrl.searchParams.get("speeds"));
+  const since = parseSince(request.nextUrl.searchParams.get("since"));
   const platform = request.nextUrl.searchParams.get("platform") || "lichess";
+  const purpose: BotDataPurpose = request.nextUrl.searchParams.get("purpose") === "play"
+    ? "play"
+    : "analysis";
+  const requestedScope = speeds.length > 0 || since ? "filtered" : "all-time";
 
-  // For filtered requests (speed or time range), fall through to computation
-  // DB cache stores all-time, all-speeds data
-  const isFiltered = speeds.length > 0 || !!since;
-  const memoryCacheKey = `bot:${platform}:${username.toLowerCase()}:${speeds.length > 0 ? speeds.sort().join(",") : "all"}:${since || "all"}`;
+  if (platform === "fide" && isExcludedFideSlug(username)) {
+    return NextResponse.json({ error: "Player not found" }, { status: 404 });
+  }
+
+  const memoryCacheKey = [
+    "bot",
+    platform,
+    username.toLowerCase(),
+    speeds.join(",") || "all",
+    since || "all",
+    purpose,
+  ].join(":");
+
+  const memoryCached = cache.get(memoryCacheKey);
+  if (memoryCached && memoryCached.expires > Date.now()) {
+    return json({ ...memoryCached.data, bookSource: "memory" });
+  }
+
+  let dbCached: DbBotData | null = null;
 
   try {
-    // L1: in-memory cache check
-    const memoryCached = cache.get(memoryCacheKey);
-    if (memoryCached && memoryCached.expires > Date.now()) {
-      return NextResponse.json(memoryCached.data, { headers: CACHE_HEADERS });
-    }
-
-    // FIDE path: always compute from DB (no Lichess dependency)
     if (platform === "fide") {
-      const data = await buildFideBotData(username, since);
+      const data = await buildFideBotData(username, since, purpose);
       if (!data) {
         return NextResponse.json({ error: "No games found" }, { status: 404 });
       }
-      cache.set(memoryCacheKey, { data, expires: Date.now() + TTL });
-      return NextResponse.json(data, { headers: CACHE_HEADERS });
+      remember(memoryCacheKey, data);
+      return json(data);
     }
 
-    // L2: DB cache check (all-time, all-speeds only)
-    if (!isFiltered) {
-      const dbCached = await getBotDataCache(platform, username);
-      if (dbCached && dbCached.whiteTrie && dbCached.blackTrie) {
-        const data: BotDataResponse = {
-          whiteTrie: dbCached.whiteTrie as OpeningTrie,
-          blackTrie: dbCached.blackTrie as OpeningTrie,
-          errorProfile: dbCached.errorProfile as ErrorProfile,
-          styleMetrics: dbCached.styleMetrics as StyleMetrics,
-        };
-        cache.set(memoryCacheKey, { data, expires: Date.now() + TTL });
-        return NextResponse.json(data, { headers: CACHE_HEADERS });
-      }
+    dbCached = await getBotDataCache(platform, username);
+
+    if (
+      requestedScope === "all-time" &&
+      hasCachedBook(dbCached) &&
+      (purpose === "play" || !!dbCached.gameMoves?.length)
+    ) {
+      const data = fromDbCache(dbCached, purpose, "db-cache", requestedScope);
+      remember(memoryCacheKey, data);
+      return json(data);
     }
 
-    // Cache miss: build bot data from scratch (same pipeline as profile API)
-    const data = await buildOnlineBotData(platform, username, speeds, since);
-    cache.set(memoryCacheKey, { data, expires: Date.now() + TTL });
-    return NextResponse.json(data, { headers: CACHE_HEADERS });
+    if (requestedScope === "filtered" && dbCached?.gameMoves?.length) {
+      const filteredGames = filterCachedGames(dbCached.gameMoves, speeds, since);
+      const data = buildFromCachedGames(
+        filteredGames,
+        dbCached.errorProfile as ErrorProfile,
+        purpose,
+      );
+      remember(memoryCacheKey, data);
+      return json(data);
+    }
+
+    const data = await buildOnlineBotData(
+      platform,
+      username,
+      speeds,
+      since,
+      purpose,
+    );
+    remember(memoryCacheKey, data);
+    return json(data);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
+
+    // Personalized practice must never silently become a bookless engine game.
+    // A stale all-time repertoire remains safer and more truthful than null tries.
+    if (purpose === "play" && hasCachedBook(dbCached)) {
+      const fallback = fromDbCache(
+        dbCached,
+        purpose,
+        "all-time-fallback",
+        requestedScope,
+        true,
+      );
+      console.warn("[bot-data] provider failed; using cached repertoire", {
+        platform,
+        username,
+        requestedScope,
+        error: message,
+      });
+      remember(memoryCacheKey, fallback);
+      return json(fallback);
+    }
 
     if (message.includes("not found")) {
       return NextResponse.json({ error: message }, { status: 404 });
     }
     if (message.includes("Rate limited")) {
-      return NextResponse.json({ error: message }, { status: 429 });
+      return NextResponse.json(
+        { error: message },
+        { status: 429, headers: { "Retry-After": "60" } },
+      );
     }
 
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-/**
- * Build bot data for Lichess/Chess.com players.
- * Also persists to DB for future cache hits.
- */
+function json(data: BotDataResponse) {
+  return NextResponse.json(data, {
+    headers: {
+      ...CACHE_HEADERS,
+      "X-Outprep-Bot-Data-Source": data.bookSource,
+    },
+  });
+}
+
+function remember(key: string, data: BotDataResponse): void {
+  cache.set(key, { data, expires: Date.now() + TTL });
+}
+
+function normalizeSpeeds(value: string | null): string[] {
+  return value
+    ? [...new Set(value.split(",").map((speed) => speed.trim()).filter(Boolean))].sort()
+    : [];
+}
+
+function parseSince(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : undefined;
+}
+
+function hasCachedBook(data: DbBotData | null): data is DbBotData {
+  return !!data &&
+    isTrie(data.whiteTrie) &&
+    isTrie(data.blackTrie) &&
+    (Object.keys(data.whiteTrie).length > 0 || Object.keys(data.blackTrie).length > 0);
+}
+
+function isTrie(value: unknown): value is OpeningTrie {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function fromDbCache(
+  cached: DbBotData,
+  purpose: BotDataPurpose,
+  bookSource: BotDataResponse["bookSource"],
+  requestedScope: BotDataResponse["requestedScope"],
+  degraded = false,
+): BotDataResponse {
+  return {
+    whiteTrie: cached.whiteTrie as OpeningTrie,
+    blackTrie: cached.blackTrie as OpeningTrie,
+    errorProfile: cached.errorProfile as ErrorProfile,
+    styleMetrics: cached.styleMetrics as StyleMetrics,
+    gameCount: cached.gameCount,
+    bookSource,
+    requestedScope,
+    ...(degraded ? { degraded: true } : {}),
+    ...(purpose === "analysis" && cached.gameMoves
+      ? { gameMoves: cached.gameMoves }
+      : {}),
+  };
+}
+
+function filterCachedGames(
+  games: CachedBotGame[],
+  speeds: string[],
+  since: number | undefined,
+): CachedBotGame[] {
+  return games.filter((game) =>
+    (speeds.length === 0 || (!!game.speed && speeds.includes(game.speed))) &&
+    (!since || (game.createdAt ?? 0) >= since),
+  );
+}
+
+function buildFromCachedGames(
+  games: CachedBotGame[],
+  errorProfile: ErrorProfile,
+  purpose: BotDataPurpose,
+): BotDataResponse {
+  const records: GameRecord[] = games.map((game) => ({
+    moves: game.moves,
+    playerColor: game.playerColor,
+    result: game.result,
+  }));
+  return {
+    errorProfile,
+    whiteTrie: buildOpeningTrie(records, "white"),
+    blackTrie: buildOpeningTrie(records, "black"),
+    styleMetrics: analyzeStyleFromRecords(records),
+    gameCount: games.length,
+    bookSource: "db-filtered",
+    requestedScope: "filtered",
+    ...(purpose === "analysis" ? { gameMoves: games } : {}),
+  };
+}
+
 async function buildOnlineBotData(
   platform: string,
   username: string,
   speeds: string[],
   since: number | undefined,
+  purpose: BotDataPurpose,
 ): Promise<BotDataResponse> {
   let normalized: NormalizedGame[];
 
   if (platform === "chesscom") {
     const rawGames = await fetchChesscomGames(username, 2000, since);
-    normalized = rawGames.map((g) => fromChesscomGame(g, username));
+    normalized = rawGames.map((game) => fromChesscomGame(game, username));
     if (speeds.length > 0) {
-      normalized = normalized.filter((g) => g.speed && speeds.includes(g.speed));
+      normalized = normalized.filter((game) => game.speed && speeds.includes(game.speed));
     }
   } else {
     const rawGames = await fetchLichessGames(username, 2000);
-    let filtered = rawGames.filter((g) => g.variant === "standard");
+    let filtered = rawGames.filter((game) => game.variant === "standard");
     if (speeds.length > 0) {
-      filtered = filtered.filter((g) => speeds.includes(g.speed));
+      filtered = filtered.filter((game) => speeds.includes(game.speed));
     }
     if (since) {
-      filtered = filtered.filter((g) => (g.createdAt ?? 0) >= since);
+      filtered = filtered.filter((game) => (game.createdAt ?? 0) >= since);
     }
-    normalized = filtered.map((g) => fromLichessGame(g, username));
+    normalized = filtered.map((game) => fromLichessGame(game, username));
   }
 
   const evalData = normalized
     .map(normalizedToGameEvalData)
-    .filter((d): d is NonNullable<typeof d> => d !== null);
+    .filter((data): data is NonNullable<typeof data> => data !== null);
   const errorProfile = buildErrorProfileFromEvals(evalData);
   const gameRecords = normalized.map(normalizedToGameRecord);
   const whiteTrie = buildOpeningTrie(gameRecords, "white");
   const blackTrie = buildOpeningTrie(gameRecords, "black");
   const styleMetrics = analyzeStyleFromRecords(gameRecords);
+  const gameMoves = toCachedGameMoves(platform, username, normalized);
 
-  // Build gameMoves for stockfish upgrade (scout page uses these)
-  const platformPrefix = platform === "chesscom" ? "CHESSCOM" : "LICHESS";
-  const gameMoves = normalized
-    .filter((g) => g.moves)
-    .map((g) => ({
-      id: `${platformPrefix}:${username}:${g.id}`,
-      moves: g.moves,
-      playerColor: g.playerColor,
-      result: g.result || "draw" as const,
-      hasEvals: !!g.evals && g.evals.length > 0,
-    }));
-
-  // Persist all-time data to DB for future cache hits
   if (speeds.length === 0 && !since) {
     const newestTs = normalized.length > 0
-      ? Math.max(...normalized.map((g) => g.createdAt ?? 0))
+      ? Math.max(...normalized.map((game) => game.createdAt ?? 0))
       : null;
-    upsertBotDataCache(
-      platform, username, whiteTrie, blackTrie,
-      errorProfile, styleMetrics, normalized.length, newestTs,
-    ).catch(() => {});
+    void upsertBotDataCache(
+      platform,
+      username,
+      whiteTrie,
+      blackTrie,
+      errorProfile,
+      styleMetrics,
+      normalized.length,
+      newestTs,
+      gameMoves,
+    );
   }
 
-  return { errorProfile, whiteTrie, blackTrie, styleMetrics, gameMoves };
+  return {
+    errorProfile,
+    whiteTrie,
+    blackTrie,
+    styleMetrics,
+    gameCount: normalized.length,
+    bookSource: "provider",
+    requestedScope: speeds.length > 0 || since ? "filtered" : "all-time",
+    ...(purpose === "analysis" ? { gameMoves } : {}),
+  };
 }
 
-/**
- * Build bot data for FIDE players from database PGNs.
- */
+function toCachedGameMoves(
+  platform: string,
+  username: string,
+  games: NormalizedGame[],
+): CachedBotGame[] {
+  const prefix = platform === "chesscom" ? "CHESSCOM" : "LICHESS";
+  return games
+    .filter((game) => game.moves)
+    .map((game) => ({
+      id: `${prefix}:${username}:${game.id}`,
+      moves: game.moves,
+      playerColor: game.playerColor,
+      result: game.result ?? "draw",
+      hasEvals: !!game.evals?.length,
+      speed: game.speed,
+      createdAt: game.createdAt,
+    }));
+}
+
 async function buildFideBotData(
   username: string,
   since: number | undefined,
+  purpose: BotDataPurpose,
 ): Promise<BotDataResponse | null> {
   const player = await getPlayer(username);
+  if (!player) return null;
+
   const sinceDate = since ? new Date(since).toISOString().split("T")[0] : undefined;
   const pgns = await getPlayerGamePgns(username, sinceDate);
-  if (!pgns || pgns.length === 0) return null;
+  if (!pgns?.length) return null;
 
-  const playerName = player?.name || username;
-  const formattedName = formatPlayerName(playerName);
-  const allPgn = pgns.join("\n\n");
-  const otbGames = parseAllPGNGames(allPgn);
-
+  const formattedName = formatPlayerName(player.name);
+  const otbGames = parseAllPGNGames(pgns.join("\n\n"));
   const gameRecords: GameRecord[] = [];
-  for (const g of otbGames) {
-    if (!g.moves) continue;
-    const isWhite = matchesPlayerName(g.white, formattedName);
-    const isBlack = matchesPlayerName(g.black, formattedName);
-    const playerIsWhite = isWhite && !isBlack ? true
-      : isBlack && !isWhite ? false
-      : isWhite;
+
+  for (const game of otbGames) {
+    if (!game.moves) continue;
+    const isWhite = matchesPlayerName(game.white, formattedName);
+    const isBlack = matchesPlayerName(game.black, formattedName);
+    const playerIsWhite = isWhite && !isBlack ? true : isBlack && !isWhite ? false : isWhite;
     gameRecords.push({
-      moves: g.moves,
-      playerColor: (playerIsWhite ? "white" : "black") as "white" | "black",
-      result: g.result === "1-0" ? "white" as const
-        : g.result === "0-1" ? "black" as const
-        : "draw" as const,
+      moves: game.moves,
+      playerColor: playerIsWhite ? "white" : "black",
+      result: game.result === "1-0" ? "white" : game.result === "0-1" ? "black" : "draw",
     });
   }
 
-  const fidePlatformId = player?.fideId || username;
   const whiteTrie = buildOpeningTrie(gameRecords, "white");
   const blackTrie = buildOpeningTrie(gameRecords, "black");
   const styleMetrics = analyzeStyleFromRecords(gameRecords);
-
-  // Empty error profile for FIDE (no eval data from PGN)
-  const emptyPhase = { totalMoves: 0, mistakes: 0, blunders: 0, avgCPL: 0, errorRate: 0, blunderRate: 0 };
+  const emptyPhase = {
+    totalMoves: 0,
+    mistakes: 0,
+    blunders: 0,
+    avgCPL: 0,
+    errorRate: 0,
+    blunderRate: 0,
+  };
   const errorProfile: ErrorProfile = {
     opening: { ...emptyPhase },
     middlegame: { ...emptyPhase },
@@ -213,14 +387,22 @@ async function buildFideBotData(
     overall: { ...emptyPhase },
     gamesAnalyzed: 0,
   };
-
-  const gameMoves = gameRecords.map((g) => ({
-    id: `FIDE:${fidePlatformId}:${crc32(g.moves)}`,
-    moves: g.moves,
-    playerColor: g.playerColor,
-    result: g.result || ("draw" as const),
+  const gameMoves: CachedBotGame[] = gameRecords.map((game) => ({
+    id: `FIDE:${player.fideId}:${crc32(game.moves)}`,
+    moves: game.moves,
+    playerColor: game.playerColor,
+    result: game.result ?? "draw",
     hasEvals: false,
   }));
 
-  return { errorProfile, whiteTrie, blackTrie, styleMetrics, gameMoves };
+  return {
+    errorProfile,
+    whiteTrie,
+    blackTrie,
+    styleMetrics,
+    gameCount: gameRecords.length,
+    bookSource: "fide-db",
+    requestedScope: since ? "filtered" : "all-time",
+    ...(purpose === "analysis" ? { gameMoves } : {}),
+  };
 }

@@ -6,6 +6,7 @@ import { readFileSync, mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { NodeStockfishAdapter } from "../node-stockfish";
+import { NodeMaiaPolicy } from "../node-maia-policy";
 import { runAccuracyTest } from "../runner";
 import { formatMetrics, progressBar } from "../format";
 import { captureVersionInfo } from "../version";
@@ -22,6 +23,8 @@ interface RunOptions {
   label?: string;
   eloOverride?: string;
   maxPositions?: string;
+  maiaModel?: string;
+  maiaOpponentRating?: string;
 }
 
 export async function run(options: RunOptions) {
@@ -77,6 +80,18 @@ export async function run(options: RunOptions) {
   }
   if (configOverrides) {
     console.log(`  Config overrides: ${JSON.stringify(configOverrides)}`);
+  }
+
+  if (options.maiaModel) {
+    const selfRating = runConfig.eloOverride ?? dataset.estimatedElo;
+    console.log(`  Loading Maia-3 policy: ${options.maiaModel}`);
+    runConfig.movePolicy = await NodeMaiaPolicy.create({
+      modelPath: options.maiaModel,
+      selfRating,
+      opponentRating: options.maiaOpponentRating
+        ? parseInt(options.maiaOpponentRating)
+        : selfRating,
+    });
   }
 
   // Initialize Stockfish

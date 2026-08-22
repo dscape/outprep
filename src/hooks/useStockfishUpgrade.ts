@@ -28,6 +28,7 @@ interface UseStockfishUpgradeOptions {
   username: string;
   filteredData: FilteredData | null;
   selectedSpeeds: string[];
+  availableSpeeds: string[];
   timeRange: string;
   isPGNMode: boolean;
   isChesscomMode: boolean;
@@ -41,6 +42,7 @@ export function useStockfishUpgrade({
   username,
   filteredData,
   selectedSpeeds,
+  availableSpeeds,
   timeRange,
   isPGNMode,
   isChesscomMode,
@@ -174,14 +176,19 @@ export function useStockfishUpgrade({
           // Online: fetch from bot-data API
           const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
           const sinceVal = sinceMs ? Date.now() - sinceMs : undefined;
-          let query =
-            selectedSpeeds.length > 0
-              ? `?speeds=${encodeURIComponent(selectedSpeeds.join(","))}`
-              : "";
-          if (sinceVal) query += `${query ? "&" : "?"}since=${sinceVal}`;
-          if (isChesscomMode) query += `${query ? "&" : "?"}platform=chesscom`;
+          const allAvailableSpeedsSelected =
+            availableSpeeds.length > 0 &&
+            selectedSpeeds.length === availableSpeeds.length &&
+            availableSpeeds.every((speed) => selectedSpeeds.includes(speed));
+          const query = new URLSearchParams({ purpose: "analysis" });
+          if (selectedSpeeds.length > 0 && !allAvailableSpeedsSelected) {
+            query.set("speeds", selectedSpeeds.join(","));
+          }
+          if (sinceVal) query.set("since", String(sinceVal));
+          if (isChesscomMode) query.set("platform", "chesscom");
           const res = await fetch(
-            `/api/bot-data/${encodeURIComponent(username)}${query}`
+            `/api/bot-data/${encodeURIComponent(username)}?${query}`,
+            { signal: abort.signal },
           );
           if (!res.ok || abort.signal.aborted) {
             setIsUpgrading(false);
@@ -366,7 +373,7 @@ export function useStockfishUpgrade({
       }
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [username, platform, selectedSpeeds, timeRange, isPGNMode, localGames, localPlayerName, isChesscomMode, updateWeaknessesAndTips]
+    [username, platform, selectedSpeeds, availableSpeeds, timeRange, isPGNMode, localGames, localPlayerName, isChesscomMode, updateWeaknessesAndTips]
   );
 
   const handleCancelUpgrade = useCallback(() => {

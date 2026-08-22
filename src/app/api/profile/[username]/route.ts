@@ -6,6 +6,8 @@ import { estimateFIDE } from "@/lib/fide-estimator";
 import { fromLichessGame, fromChesscomGame, normalizedToGameRecord } from "@/lib/normalized-game";
 import type { LichessUser, LichessGame, ChesscomGame } from "@/lib/types";
 import { getOnlineProfile, upsertOnlineProfile, upsertBotDataCache } from "@/lib/db";
+import type { CachedBotGame } from "@/lib/db";
+import type { NormalizedGame } from "@/lib/normalized-game";
 import { buildOpeningTrie } from "@outprep/engine";
 
 // Simple in-memory cache
@@ -57,6 +59,7 @@ function persistBotData(
   styleMetrics: unknown,
   gameCount: number,
   newestGameTs: number | null,
+  gameMoves: CachedBotGame[],
 ) {
   const gameRecords = standardGames.filter(g => g.moves);
   const whiteTrie = buildOpeningTrie(gameRecords, "white");
@@ -64,7 +67,7 @@ function persistBotData(
   // Fire and forget — cache write failure shouldn't block the response
   upsertBotDataCache(
     platform, username, whiteTrie, blackTrie,
-    errorProfile, styleMetrics, gameCount, newestGameTs,
+    errorProfile, styleMetrics, gameCount, newestGameTs, gameMoves,
   ).catch(() => {});
 }
 
@@ -163,9 +166,29 @@ function handleLichess(
         "lichess", username, gameRecords,
         profile.errorProfile, profile.style,
         standardGames.length, newestTs,
+        buildCachedGameMoves("lichess", username, standardGames),
       );
     }
   });
+}
+
+function buildCachedGameMoves(
+  platform: "lichess" | "chesscom",
+  username: string,
+  games: NormalizedGame[],
+): CachedBotGame[] {
+  const prefix = platform === "chesscom" ? "CHESSCOM" : "LICHESS";
+  return games
+    .filter((game) => game.moves)
+    .map((game) => ({
+      id: `${prefix}:${username}:${game.id}`,
+      moves: game.moves,
+      playerColor: game.playerColor,
+      result: game.result ?? "draw",
+      hasEvals: !!game.evals?.length,
+      speed: game.speed,
+      createdAt: game.createdAt,
+    }));
 }
 
 function handleChesscom(
@@ -258,6 +281,7 @@ function handleChesscom(
         "chesscom", username, gameRecords,
         profile.errorProfile, profile.style,
         standardGames.length, newestTs,
+        buildCachedGameMoves("chesscom", username, standardGames),
       );
     }
   });

@@ -33,8 +33,8 @@ const TC_CONFIG: Record<string, { offset: number; weight: number }> = {
 
 const MIN_GAMES = 20;
 
-/** Convert a Lichess rating to estimated FIDE via table interpolation */
-function lichessToFide(lichessRating: number): number {
+/** Convert a Lichess rating to estimated FIDE via table interpolation. */
+export function lichessToFide(lichessRating: number): number {
   const table = CONVERSION_TABLE;
 
   // Clamp below minimum
@@ -59,6 +59,52 @@ function lichessToFide(lichessRating: number): number {
 
   // Fallback (should not reach here)
   return lichessRating;
+}
+
+/**
+ * Convert an estimated FIDE rating back to Maia-3's Lichess-blitz scale.
+ * This is deliberately named as a model calibration, not an official rating.
+ */
+export function fideToMaiaRating(fideRating: number): number {
+  const table = CONVERSION_TABLE;
+  if (!Number.isFinite(fideRating)) return 1500;
+  if (fideRating <= table[0].fide) return table[0].lichess;
+  if (fideRating >= table[table.length - 1].fide) return table[table.length - 1].lichess;
+
+  for (let i = 0; i < table.length - 1; i++) {
+    const lo = table[i];
+    const hi = table[i + 1];
+    if (fideRating >= lo.fide && fideRating <= hi.fide) {
+      const t = (fideRating - lo.fide) / (hi.fide - lo.fide);
+      return clampMaiaRating(Math.round(lo.lichess + t * (hi.lichess - lo.lichess)));
+    }
+  }
+
+  return clampMaiaRating(fideRating);
+}
+
+export function maiaRatingToEstimatedFide(maiaRating: number): number {
+  return lichessToFide(clampMaiaRating(maiaRating));
+}
+
+export function resolveMaiaRating(options: {
+  platform: string;
+  blitzRating?: number;
+  fideEstimate?: number;
+}): number {
+  if (
+    options.platform === "lichess" &&
+    options.blitzRating &&
+    Number.isFinite(options.blitzRating)
+  ) {
+    return clampMaiaRating(options.blitzRating);
+  }
+  return fideToMaiaRating(options.fideEstimate || 1500);
+}
+
+function clampMaiaRating(rating: number): number {
+  if (!Number.isFinite(rating)) return 1500;
+  return Math.max(600, Math.min(3000, Math.round(rating)));
 }
 
 export function estimateFIDE(user: LichessUser): FIDEEstimate {

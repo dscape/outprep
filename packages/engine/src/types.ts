@@ -133,9 +133,33 @@ export interface StyleMetrics {
   sampleSize: number;
 }
 
+/* ── Out-of-book move policy ──────────────────────────────── */
+
+export interface PolicyCandidate {
+  /** Legal move in UCI notation. */
+  uci: string;
+  /** Model probability after legal-move masking. */
+  probability: number;
+}
+
+export interface MovePolicyResult {
+  uci: string;
+  candidates?: PolicyCandidate[];
+}
+
+/**
+ * A move-distribution policy is intentionally separate from ChessEngine:
+ * policies return probabilities, not fabricated centipawn evaluations.
+ */
+export interface MovePolicy {
+  readonly id: "maia";
+  selectMove(fen: string): Promise<MovePolicyResult>;
+  dispose?(): void;
+}
+
 /* ── Bot Output ───────────────────────────────────────────── */
 
-export type MoveSource = "book" | "engine";
+export type MoveSource = "book" | "maia" | "engine";
 
 export interface BotMoveResult {
   uci: string;
@@ -144,8 +168,12 @@ export interface BotMoveResult {
   thinkTimeMs: number;
   phase: GamePhase;
   dynamicSkill: number;
-  /** MultiPV candidates from engine evaluation (absent for book moves). */
+  /** MultiPV candidates from engine evaluation (absent for book/Maia moves). */
   candidates?: CandidateMove[];
+  /** Probability-ranked candidates from a non-engine policy. */
+  policyCandidates?: PolicyCandidate[];
+  /** Present when the configured policy failed and Stockfish was used. */
+  fallbackReason?: string;
 }
 
 /* ── Bot Configuration ────────────────────────────────────── */

@@ -36,6 +36,8 @@ program
   .option("--label <label>", "Human-readable label for this run", "unnamed")
   .option("--elo-override <n>", "Override the player Elo for bot creation")
   .option("--max-positions <n>", "Cap number of positions to evaluate")
+  .option("--maia-model <path>", "Use a Maia-3 ONNX model for out-of-book moves")
+  .option("--maia-opponent-rating <n>", "Opponent rating input for Maia (defaults to player Elo)")
   .action(run);
 
 program

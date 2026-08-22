@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import type { Platform } from "@/lib/platform-utils";
 import { useScout } from "./scout-context";
 import { TIME_RANGES } from "@/lib/profile-merge";
+import { resolveMaiaRating } from "@/lib/fide-estimator";
 
 interface PracticeButtonProps {
   playerName: string;
@@ -24,24 +25,45 @@ function shortName(name: string): string {
 
 export default function PracticeButton({ playerName, slug, platform, fideRating }: PracticeButtonProps) {
   const router = useRouter();
-  const { selectedSpeeds, timeRange, filteredData, profile } = useScout();
+  const {
+    selectedSpeeds,
+    availableSpeeds,
+    timeRange,
+    filteredData,
+    profile,
+  } = useScout();
 
   const handleClick = () => {
-    // Pre-seed play-profile cache so the play page has the correct rating immediately
-    if (fideRating) {
-      try {
-        sessionStorage.setItem(
-          `play-profile:${slug}`,
-          JSON.stringify({ username: playerName, fideEstimate: { rating: fideRating, confidence: 100 } })
-        );
-      } catch {
-        // Storage full — non-fatal
-      }
+    const fideEstimate = fideRating ?? profile?.fideEstimate?.rating ?? 0;
+    const maiaRating = resolveMaiaRating({
+      platform,
+      blitzRating: profile?.ratings?.blitz,
+      fideEstimate,
+    });
+
+    try {
+      sessionStorage.setItem(
+        `play-profile:${slug}`,
+        JSON.stringify({
+          username: playerName,
+          fideEstimate: { rating: fideEstimate, confidence: fideRating ? 100 : profile?.fideEstimate?.confidence ?? 0 },
+          ratings: profile?.ratings,
+          maiaRating,
+        }),
+      );
+    } catch {
+      // Storage full — non-fatal
     }
 
     const prefix = platform === "chesscom" ? "chesscom:" : platform === "fide" ? "fide:" : platform === "pgn" ? "pgn:" : "";
     const params = new URLSearchParams();
-    if (selectedSpeeds.length > 0) params.set("speeds", selectedSpeeds.join(","));
+    const allAvailableSpeedsSelected =
+      availableSpeeds.length > 0 &&
+      selectedSpeeds.length === availableSpeeds.length &&
+      availableSpeeds.every((speed) => selectedSpeeds.includes(speed));
+    if (selectedSpeeds.length > 0 && !allAvailableSpeedsSelected) {
+      params.set("speeds", selectedSpeeds.join(","));
+    }
     if (timeRange !== "all") {
       const sinceMs = TIME_RANGES.find(t => t.key === timeRange)?.ms;
       if (sinceMs) params.set("since", String(Date.now() - sinceMs));

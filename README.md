@@ -2,7 +2,7 @@
 
 Scout any chess player, study their openings and weaknesses, then practice against a bot that plays like them.
 
-Enter a Lichess username or drop a PGN file, and outprep builds a profile of the player's repertoire, tendencies, and mistakes. Then it spawns a Stockfish-based bot tuned to mimic that player's style so you can practice before your next game.
+Enter a Lichess username or drop a PGN file, and outprep builds a profile of the player's repertoire, tendencies, and mistakes. Practice follows the player’s personal opening book, then uses Maia-3 for human-like out-of-book moves. Stockfish remains responsible for evaluation, analysis, and a disclosed failure fallback.
 
 ## Prerequisites
 
@@ -59,7 +59,7 @@ npm run fide-pipeline -- full --from 924 --to 1633
 2. **Analyze** their openings, weaknesses, and error patterns
 3. **Play** against a bot calibrated to their Elo, opening book, and mistake profile
 
-The bot uses Boltzmann move selection over Stockfish MultiPV lines, with per-phase skill adjustment and complexity-aware depth scaling. It's not a random move generator — it tries to make the same kinds of mistakes your opponent would.
+The personal opening trie is always first priority. Out of book, a browser Web Worker runs Maia-3 with legal-move masking and both players’ calibrated ratings. The board shows the model input as an approximate FIDE equivalent so its target is clear; this is a calibration, not a guaranteed playing strength. Stockfish evaluates the game in parallel and is used for play only when Maia is disabled or fails; that fallback is shown in the UI.
 
 ## Project structure
 
@@ -75,7 +75,7 @@ packages/
 
 ### `@outprep/engine`
 
-Reusable TypeScript library. Boltzmann-weighted move selection, opening trie, error profiling, phase detection, complexity-based depth adjustment, and move style biases. All behavior is driven by a single `BotConfig` object.
+Reusable TypeScript library. It defines the strict opening-trie → `MovePolicy` → `ChessEngine` ordering, Maia-3 preprocessing and legal-move masking, plus the existing error profiling, phase detection, Stockfish fallback, and move-style utilities.
 
 ### `@outprep/fide-pipeline`
 
@@ -93,18 +93,26 @@ npm run fide-pipeline -- seed-db
 
 # Quick smoke test (1 TWIC issue)
 npm run fide-pipeline -- smoke
+
+# Preview/apply configured player erasures
+npm run fide-pipeline -- purge-excluded
+npm run fide-pipeline -- purge-excluded --apply
 ```
 
 ### `@outprep/harness`
 
-CLI tool that replays real player games and measures how closely the bot mimics the player. Outputs match rate, top-4 rate, CPL delta, and book coverage.
+CLI tool that replays held-out player games and measures how closely the bot mimics the player. It reports book coverage, out-of-book match rate, Maia coverage, Stockfish fallback count, top-4 rate, and CPL delta.
 
 ```bash
 # Create a test dataset from a Lichess player
 npm run harness:create -- --username DrNykterstein --games 20
 
-# Run accuracy test
+# Run the existing engine accuracy test
 npm run harness:run -- --dataset datasets/DrNykterstein.json
+
+# Benchmark Maia-3 on out-of-book positions
+npm run harness:run -- --dataset datasets/DrNykterstein.json \
+  --maia-model public/models/maia3-simplified.onnx
 
 # Compare two result files side by side
 npm run harness:compare -- results/a.json results/b.json
@@ -148,7 +156,8 @@ Schema migrations are applied automatically by `npm run fide-pipeline -- seed-db
 - [Next.js](https://nextjs.org) 16 + React 19 + Tailwind CSS 4
 - [PostgreSQL](https://www.postgresql.org) 16 via [porsager/postgres](https://github.com/porsager/postgres)
 - [chess.js](https://github.com/jhlywa/chess.js) for move generation and validation
-- [Stockfish](https://stockfishchess.org) 18 WASM for evaluation
+- [Maia-3](https://github.com/CSSLab/maia3) via ONNX Runtime Web for out-of-book play
+- [Stockfish](https://stockfishchess.org) 18 WASM for evaluation, analysis, and failure fallback
 - [react-chessboard](https://github.com/Clariity/react-chessboard) for board UI
 - [Lichess API](https://lichess.org/api) for player data
 
@@ -156,9 +165,9 @@ Schema migrations are applied automatically by `npm run fide-pipeline -- seed-db
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Suggestions and bug reports are welcome on the [issue tracker](https://github.com/dscape/outprep/issues).
 
-## Public domain
+## Licensing
 
-This project is released into the public domain. See [UNLICENSE](UNLICENSE) for details. Do whatever you want with it.
+Outprep’s original code is released into the public domain under [UNLICENSE](UNLICENSE). Bundled third-party code and model weights retain their own licenses, including Maia-3 under AGPL-3.0, the referenced Maia frontend under GPL-3.0, and ONNX Runtime under MIT. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [`licenses/`](licenses/) before redistributing or operating a modified network service.
 
 ---
 

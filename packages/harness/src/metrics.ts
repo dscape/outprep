@@ -20,6 +20,10 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
       matchRate: 0,
       topNRate: 0,
       bookCoverage: 0,
+      outOfBookPositions: 0,
+      outOfBookMatchRate: 0,
+      maiaCoverage: 0,
+      stockfishFallbacks: 0,
       avgActualCPL: NaN,
       avgBotCPL: NaN,
       cplDelta: NaN,
@@ -34,6 +38,9 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
   const matches = positions.filter((p) => p.isMatch).length;
   const topN = positions.filter((p) => p.isInTopN).length;
   const bookPositions = positions.filter((p) => p.botSource === "book").length;
+  const outOfBook = positions.filter((p) => p.botSource !== "book");
+  const maiaPositions = positions.filter((p) => p.botSource === "maia").length;
+  const stockfishFallbacks = positions.filter((p) => p.policyFallback).length;
 
   // CPL computation (only for positions with eval data)
   const withActualCPL = positions.filter((p) => p.actualCPL !== undefined);
@@ -81,6 +88,12 @@ export function computeMetrics(positions: PositionResult[]): Metrics {
     matchRate: matches / total,
     topNRate: topN / total,
     bookCoverage: bookPositions / total,
+    outOfBookPositions: outOfBook.length,
+    outOfBookMatchRate: outOfBook.length > 0
+      ? outOfBook.filter((position) => position.isMatch).length / outOfBook.length
+      : 0,
+    maiaCoverage: maiaPositions / total,
+    stockfishFallbacks,
     avgActualCPL,
     avgBotCPL,
     cplDelta: (isNaN(avgBotCPL) || isNaN(avgActualCPL))

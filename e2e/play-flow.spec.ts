@@ -37,7 +37,7 @@ test.describe("Play flow: tournament → game → player → play → analysis",
       { timeout: 15_000 }
     );
     // Wait for at least some data to appear (ratings or game count)
-    await expect(page.getByText(/games analyzed|Classical|Rapid|Blitz/)).toBeVisible({ timeout: 15_000 });
+    await expect(page.getByText(/games analyzed|Classical|Rapid|Blitz/).first()).toBeVisible({ timeout: 15_000 });
 
     // 8. Click Play button
     const playBtn = page.locator("button", { hasText: /^Play / });
@@ -89,8 +89,8 @@ test.describe("Play flow: tournament → game → player → play → analysis",
       const profile = {
         username: "TestBot",
         platform: "pgn",
-        totalGames: 1,
-        analyzedGames: 1,
+        totalGames: 4,
+        analyzedGames: 4,
         style: { aggression: 50, tactical: 50, positional: 50, endgame: 50, sampleSize: 1 },
         weaknesses: [],
         openings: { white: [], black: [] },
@@ -99,11 +99,39 @@ test.describe("Play flow: tournament → game → player → play → analysis",
         games: [
           {
             white: "TestBot",
-            black: "Opponent",
+            black: "Opponent One",
             result: "1-0",
             date: "2024.01.15",
             event: "Test",
-            moves: "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6 4. Ba4 Nf6 5. O-O Be7",
+            moves: "e4 e5 Nf3 Nc6 Bb5 a6 Ba4 Nf6 O-O Be7",
+            pgn: "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6",
+          },
+          {
+            white: "TestBot",
+            black: "Opponent Two",
+            result: "1/2-1/2",
+            date: "2024.01.16",
+            event: "Test",
+            moves: "e4 e5 Nf3 Nc6 Bc4 Bc5 d3 Nf6",
+            pgn: "1. e4 e5 2. Nf3 Nc6 3. Bc4 Bc5",
+          },
+          {
+            white: "Opponent Three",
+            black: "TestBot",
+            result: "0-1",
+            date: "2024.01.17",
+            event: "Test",
+            moves: "d4 Nf6 c4 e6 Nc3 Bb4",
+            pgn: "1. d4 Nf6 2. c4 e6 3. Nc3 Bb4",
+          },
+          {
+            white: "Opponent Four",
+            black: "TestBot",
+            result: "1/2-1/2",
+            date: "2024.01.18",
+            event: "Test",
+            moves: "d4 Nf6 c4 e6 Nf3 d5",
+            pgn: "1. d4 Nf6 2. c4 e6 3. Nf3 d5",
           },
         ],
       };

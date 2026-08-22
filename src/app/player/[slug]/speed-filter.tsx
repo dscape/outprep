@@ -1,14 +1,11 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { useScout } from "./scout-context";
 
 export default function SpeedFilter() {
   const { profile, availableSpeeds, selectedSpeeds, toggleSpeed } = useScout();
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
 
-  if (!mounted || !profile || availableSpeeds.length < 1) return null;
+  if (!profile || availableSpeeds.length < 1) return null;
 
   return (
     <div className="flex items-center gap-2">

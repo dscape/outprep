@@ -15,6 +15,7 @@ const API = "https://api.chess.com/pub";
 async function chesscomFetch<T>(url: string): Promise<T> {
   const res = await fetch(url, {
     headers: { Accept: "application/json" },
+    signal: AbortSignal.timeout(20_000),
   });
   if (res.status === 404) throw new Error(`Player not found on Chess.com`);
   if (res.status === 429) throw new Error("Rate limited by Chess.com. Please try again in a minute.");
@@ -58,9 +59,7 @@ export async function fetchChesscomGames(
   for (let i = 0; i < reversed.length && games.length < max && !hitSinceCutoff; i += BATCH_SIZE) {
     const batch = reversed.slice(i, i + BATCH_SIZE);
     const results = await Promise.all(
-      batch.map((url) =>
-        chesscomFetch<{ games: ChesscomGame[] }>(url).catch(() => ({ games: [] as ChesscomGame[] })),
-      ),
+      batch.map((url) => chesscomFetch<{ games: ChesscomGame[] }>(url)),
     );
 
     for (const { games: monthGames } of results) {

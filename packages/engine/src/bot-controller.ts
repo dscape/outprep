@@ -7,6 +7,7 @@ import type {
   GamePhase,
   BotConfig,
   StyleMetrics,
+  MovePolicy,
 } from "./types";
 import { DEFAULT_CONFIG, mergeConfig } from "./config";
 import { detectPhase } from "./phase-detector";
@@ -50,6 +51,8 @@ export class BotController {
   private openingTrie: OpeningTrie | null;
   private styleMetrics: StyleMetrics | null;
   private botColor: "white" | "black";
+  private movePolicy: MovePolicy | null;
+  private onPolicyFailure: ((error: Error) => void) | null;
   private config: BotConfig;
 
   constructor(options: {
@@ -60,6 +63,8 @@ export class BotController {
     botColor: "white" | "black";
     config?: Partial<BotConfig>;
     styleMetrics?: StyleMetrics | null;
+    movePolicy?: MovePolicy | null;
+    onPolicyFailure?: (error: Error) => void;
   }) {
     this.config = mergeConfig(DEFAULT_CONFIG, options.config);
     this.engine = options.engine;
@@ -68,6 +73,8 @@ export class BotController {
     this.openingTrie = options.openingTrie;
     this.styleMetrics = options.styleMetrics ?? null;
     this.botColor = options.botColor;
+    this.movePolicy = options.movePolicy ?? null;
+    this.onPolicyFailure = options.onPolicyFailure ?? null;
   }
 
   /**
@@ -75,9 +82,9 @@ export class BotController {
    *
    * Logic:
    * 1. Look up FEN in opening trie → if found, sample weighted move, return as 'book'
-   * 2. If not in trie: detect phase, look up error profile for that phase
-   * 3. Calculate dynamic skill level
-   * 4. Run engine MultiPV
+   * 2. If not in trie: try the configured human move policy
+   * 3. If policy is unavailable: calculate dynamic skill level
+   * 4. Run Stockfish MultiPV as an explicit failure fallback
    * 5. Boltzmann-select from candidates
    * 6. Calculate think time
    * 7. Return move
@@ -109,10 +116,31 @@ export class BotController {
       ? dynamicSkillLevel(this.baseSkill, this.errorProfile, phase, this.config)
       : this.baseSkill;
 
-    // 4. Run engine MultiPV at FULL STRENGTH (Skill Level 20)
-    //    At low Skill Level, Stockfish WASM corrupts PV output → no valid candidates.
-    //    Instead, always get clean candidates at full strength and let the Boltzmann
-    //    temperature (based on dynamic skill) handle weakening.
+    let fallbackReason: string | undefined;
+    if (this.movePolicy) {
+      try {
+        const policyResult = await this.movePolicy.selectMove(fen);
+        if (!isValidUCI(policyResult.uci)) {
+          throw new Error(`Policy returned invalid move: ${policyResult.uci}`);
+        }
+        return {
+          uci: policyResult.uci,
+          source: this.movePolicy.id,
+          thinkTimeMs: this.computeEngineThinkTime(phase, []),
+          phase,
+          dynamicSkill: skill,
+          policyCandidates: policyResult.candidates,
+        };
+      } catch (cause) {
+        const error = cause instanceof Error ? cause : new Error(String(cause));
+        fallbackReason = `${this.movePolicy.id} failed: ${error.message}`;
+        this.onPolicyFailure?.(error);
+      }
+    }
+
+    // Run Stockfish MultiPV at full strength only when no policy is configured
+    // or the configured policy failed. Its centipawn API stays separate from the
+    // probability-only MovePolicy contract.
     const baseDepth = depthForSkill(skill, this.config);
     const depthAdj = complexityDepthAdjust(fen, this.config.complexityDepth);
     const depth = Math.max(this.config.complexityDepth.minDepth, baseDepth + depthAdj);
@@ -136,6 +164,7 @@ export class BotController {
         phase,
         dynamicSkill: skill,
         candidates: [fallback],
+        fallbackReason,
       };
     }
 
@@ -158,6 +187,7 @@ export class BotController {
       phase,
       dynamicSkill: skill,
       candidates: styledResults,
+      fallbackReason,
     };
   }
 

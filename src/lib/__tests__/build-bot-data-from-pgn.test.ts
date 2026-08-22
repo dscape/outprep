@@ -21,6 +21,7 @@ function makeProfile(overrides: Partial<OTBProfile> = {}): OTBProfile {
         date: "2024.01.15",
         event: "Test Tournament",
         moves: "e4 e5 Nf3 Nc6 Bb5 a6",
+        pgn: "1. e4 e5 2. Nf3 Nc6 3. Bb5 a6",
       },
       {
         white: "Opponent Two",
@@ -29,6 +30,7 @@ function makeProfile(overrides: Partial<OTBProfile> = {}): OTBProfile {
         date: "2024.01.16",
         event: "Test Tournament",
         moves: "d4 Nf6 c4 e6 Nc3 Bb4",
+        pgn: "1. d4 Nf6 2. c4 e6 3. Nc3 Bb4",
       },
     ],
     ...overrides,
@@ -107,6 +109,7 @@ describe("buildBotDataFromProfile", () => {
           date: "2024.01.15",
           event: "Test",
           moves: "",
+          pgn: "",
         },
       ],
     });
@@ -125,6 +128,7 @@ describe("buildBotDataFromProfile", () => {
           date: "2024.01.15",
           event: "Test",
           moves: "e4 e5 Nf3 Nc6",
+          pgn: "1. e4 e5 2. Nf3 Nc6",
         },
       ],
     });
@@ -144,6 +148,7 @@ describe("buildBotDataFromProfile", () => {
           date: "2024.01.15",
           event: "Test",
           moves: "d4 Nf6 c4 e6",
+          pgn: "1. d4 Nf6 2. c4 e6",
         },
       ],
     });
@@ -163,6 +168,7 @@ describe("buildBotDataFromProfile", () => {
           date: "2024.01.15",
           event: "Test",
           moves: "e4 e5 Nf3 Nc6",
+          pgn: "1. e4 e5 2. Nf3 Nc6",
         },
       ],
     });
