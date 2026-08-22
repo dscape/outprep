@@ -64,7 +64,10 @@ export async function generateMetadata({
   const slug = slugParts.join("/");
   const game = await getGame(slug);
   if (!game) {
-    return { title: "Game Not Found" };
+    return {
+      title: "Game Not Found",
+      robots: { index: false, follow: false },
+    };
   }
 
   const white = formatPlayerName(game.whiteName);
@@ -83,22 +86,26 @@ export async function generateMetadata({
   const title = `${white} vs ${black} - ${game.event} (${year})${openingTag}`;
   const description = `${wTitle}${white} (${game.whiteElo}) vs ${bTitle}${black} (${game.blackElo}) at ${game.event}${game.round ? `, Round ${game.round}` : ""}. ${game.opening ? `${game.opening}${game.variation ? `: ${game.variation}` : ""} (${game.eco}). ` : ""}${resultText}. Practice against either player on outprep.`;
 
+  const canonical = `https://outprep.xyz/game/${slug}`;
+  const image = "https://outprep.xyz/opengraph-image";
+
   return {
     title,
     description,
-    alternates: { canonical: `https://outprep.xyz/game/${slug}` },
+    robots: { index: false, follow: true },
+    alternates: { canonical },
     openGraph: {
       title: `${white} vs ${black} - ${game.event}`,
       description: `${wTitle}${game.whiteElo} vs ${bTitle}${game.blackElo} | ${resultText}${openingTag}`,
       type: "article",
-      url: `https://outprep.xyz/game/${slug}`,
+      url: canonical,
       siteName: "outprep",
       images: [
         {
-          url: `https://outprep.xyz/api/og/game?slug=${encodeURIComponent(slug)}`,
+          url: image,
           width: 1200,
           height: 630,
-          alt: `${white} vs ${black}`,
+          alt: "outprep",
         },
       ],
     },
@@ -106,7 +113,7 @@ export async function generateMetadata({
       card: "summary_large_image",
       title: `${white} vs ${black} - ${game.event}`,
       description: `${wTitle}${game.whiteElo} vs ${bTitle}${game.blackElo} | ${resultText}${openingTag}`,
-      images: [`https://outprep.xyz/api/og/game?slug=${encodeURIComponent(slug)}`],
+      images: [image],
     },
   };
 }
@@ -179,7 +186,7 @@ export default async function GamePage({
         eventStatus: "https://schema.org/EventCompleted",
         eventAttendanceMode: "https://schema.org/OfflineEventAttendanceMode",
         startDate: game.date.replace(/\./g, "-"),
-        image: `https://outprep.xyz/api/og/game?slug=${encodeURIComponent(slug)}`,
+        image: "https://outprep.xyz/opengraph-image",
         ...(game.site ? { location: { "@type": "Place", name: game.site, address: game.site } } : {}),
         ...(game.eventSlug ? {
           superEvent: {

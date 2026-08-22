@@ -9,6 +9,7 @@ import { writeSync, mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { extractHeaders } from "./fast-parser";
 import { slugify, parseNameParts, resolveOpeningName } from "./aggregate";
+import { hasExcludedFidePlayer } from "./exclusions";
 import type {
   TWICGameHeader,
   FIDEPlayer,
@@ -120,8 +121,8 @@ export function buildGameDetails(
   const details: GameDetail[] = [];
 
   for (const game of allGames) {
-    // Both players must have FIDE IDs
-    if (!game.whiteFideId || !game.blackFideId) continue;
+    // Both players must have FIDE IDs and be eligible for publication.
+    if (!game.whiteFideId || !game.blackFideId || hasExcludedFidePlayer(game)) continue;
 
     // At least one player must meet Elo threshold
     const wElo = game.whiteElo ?? 0;
@@ -238,7 +239,7 @@ export function buildGameAliasMap(
   const aliases: Record<string, string> = {};
 
   for (const game of allGames) {
-    if (!game.whiteFideId || !game.blackFideId) continue;
+    if (!game.whiteFideId || !game.blackFideId || hasExcludedFidePlayer(game)) continue;
     const wElo = game.whiteElo ?? 0;
     const bElo = game.blackElo ?? 0;
     if (wElo < minElo && bElo < minElo) continue;
@@ -546,7 +547,7 @@ export function processGameDetailsChunk(
   gameDetailsFd: number
 ): void {
   for (const game of games) {
-    if (!game.whiteFideId || !game.blackFideId) continue;
+    if (!game.whiteFideId || !game.blackFideId || hasExcludedFidePlayer(game)) continue;
 
     const wElo = game.whiteElo ?? 0;
     const bElo = game.blackElo ?? 0;

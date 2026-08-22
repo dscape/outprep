@@ -13,6 +13,13 @@
  */
 
 import { sql } from "./connection";
+import {
+  EXCLUDED_FIDE_IDS,
+  isExcludedFideId,
+  isExcludedFideSlug,
+} from "@/lib/player-exclusions";
+
+const excludedFideIds = [...EXCLUDED_FIDE_IDS];
 
 // Re-export types needed by consumers
 export type {
@@ -40,8 +47,12 @@ const HAS_POSTGRES = !!(
  * Single SELECT vs blob list() + fetch().
  */
 export async function getPlayer(slug: string): Promise<FIDEPlayer | null> {
-  if (!HAS_POSTGRES) return null;
-  const { rows } = await sql`SELECT * FROM players WHERE slug = ${slug}`;
+  if (!HAS_POSTGRES || isExcludedFideSlug(slug)) return null;
+  const { rows } = await sql`
+    SELECT * FROM players
+    WHERE slug = ${slug}
+      AND NOT (fide_id = ANY(${excludedFideIds}))
+  `;
   if (rows.length === 0) return null;
   return mapRowToPlayer(rows[0]);
 }
@@ -53,7 +64,11 @@ export async function getPlayer(slug: string): Promise<FIDEPlayer | null> {
 export async function getAliasTarget(slug: string): Promise<string | null> {
   if (!HAS_POSTGRES) return null;
   const { rows } = await sql`
-    SELECT canonical_slug FROM player_aliases WHERE alias_slug = ${slug}
+    SELECT a.canonical_slug
+    FROM player_aliases a
+    JOIN players p ON p.slug = a.canonical_slug
+    WHERE a.alias_slug = ${slug}
+      AND NOT (p.fide_id = ANY(${excludedFideIds}))
   `;
   return (rows[0]?.canonical_slug as string) ?? null;
 }
@@ -63,9 +78,13 @@ export async function getAliasTarget(slug: string): Promise<string | null> {
  * Uses the idx_players_fide_id index for efficient lookup.
  */
 export async function getPlayerByFideId(fideId: string): Promise<FIDEPlayer | null> {
-  if (!HAS_POSTGRES) return null;
+  if (!HAS_POSTGRES || isExcludedFideId(fideId)) return null;
   try {
-    const { rows } = await sql`SELECT * FROM players WHERE fide_id = ${fideId}`;
+    const { rows } = await sql`
+      SELECT * FROM players
+      WHERE fide_id = ${fideId}
+        AND NOT (fide_id = ANY(${excludedFideIds}))
+    `;
     if (rows.length === 0) return null;
     return mapRowToPlayer(rows[0]);
   } catch {
@@ -81,7 +100,12 @@ export async function getPlayerByFideId(fideId: string): Promise<FIDEPlayer | nu
  */
 export async function getGame(slug: string): Promise<(GameDetail & { eventSlug: string | null }) | null> {
   if (!HAS_POSTGRES) return null;
-  const { rows } = await sql`SELECT * FROM games WHERE slug = ${slug}`;
+  const { rows } = await sql`
+    SELECT * FROM games
+    WHERE slug = ${slug}
+      AND NOT (white_fide_id = ANY(${excludedFideIds}))
+      AND NOT (black_fide_id = ANY(${excludedFideIds}))
+  `;
   if (rows.length === 0) return null;
   return mapRowToGameDetail(rows[0]);
 }
@@ -93,7 +117,12 @@ export async function getGame(slug: string): Promise<(GameDetail & { eventSlug: 
 export async function getGameAliasTarget(slug: string): Promise<string | null> {
   if (!HAS_POSTGRES) return null;
   const { rows } = await sql`
-    SELECT canonical_slug FROM game_aliases WHERE legacy_slug = ${slug}
+    SELECT a.canonical_slug
+    FROM game_aliases a
+    JOIN games g ON g.slug = a.canonical_slug
+    WHERE a.legacy_slug = ${slug}
+      AND NOT (g.white_fide_id = ANY(${excludedFideIds}))
+      AND NOT (g.black_fide_id = ANY(${excludedFideIds}))
   `;
   return (rows[0]?.canonical_slug as string) ?? null;
 }
@@ -106,7 +135,10 @@ export async function getGameAliasTarget(slug: string): Promise<string | null> {
 export async function getPlayerCount(): Promise<number> {
   if (!HAS_POSTGRES) return 0;
   try {
-    const { rows } = await sql`SELECT COUNT(*)::int AS count FROM players`;
+    const { rows } = await sql`
+      SELECT COUNT(*)::int AS count FROM players
+      WHERE NOT (fide_id = ANY(${excludedFideIds}))
+    `;
     return rows[0].count as number;
   } catch {
     return 0; // Table may not exist yet
@@ -119,7 +151,11 @@ export async function getPlayerCount(): Promise<number> {
 export async function getGameCount(): Promise<number> {
   if (!HAS_POSTGRES) return 0;
   try {
-    const { rows } = await sql`SELECT COUNT(*)::int AS count FROM games`;
+    const { rows } = await sql`
+      SELECT COUNT(*)::int AS count FROM games
+      WHERE NOT (white_fide_id = ANY(${excludedFideIds}))
+        AND NOT (black_fide_id = ANY(${excludedFideIds}))
+    `;
     return rows[0].count as number;
   } catch {
     return 0; // Table may not exist yet
@@ -140,6 +176,7 @@ export async function getPlayerSlugsForSitemap(
     const { rows } = await sql`
       SELECT slug, fide_rating, updated_at
       FROM players
+      WHERE NOT (fide_id = ANY(${excludedFideIds}))
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -167,6 +204,8 @@ export async function getGameSlugsForSitemap(
     const { rows } = await sql`
       SELECT slug, avg_elo, date
       FROM games
+      WHERE NOT (white_fide_id = ANY(${excludedFideIds}))
+        AND NOT (black_fide_id = ANY(${excludedFideIds}))
       ORDER BY id
       LIMIT ${limit} OFFSET ${offset}
     `;
@@ -177,6 +216,31 @@ export async function getGameSlugsForSitemap(
     }));
   } catch {
     return []; // Table may not exist yet
+  }
+}
+
+/**
+ * Get a small, curated set of top player slugs for the public sitemap.
+ */
+export async function getTopPlayerSlugsForSitemap(
+  limit: number,
+): Promise<{ slug: string; fideRating: number; updatedAt: Date }[]> {
+  if (!HAS_POSTGRES) return [];
+  try {
+    const { rows } = await sql`
+      SELECT slug, fide_rating, updated_at
+      FROM players
+      WHERE NOT (fide_id = ANY(${excludedFideIds}))
+      ORDER BY fide_rating DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      slug: r.slug as string,
+      fideRating: r.fide_rating as number,
+      updatedAt: new Date(r.updated_at as string),
+    }));
+  } catch {
+    return [];
   }
 }
 
@@ -202,6 +266,7 @@ export async function getTopPlayers(
     const { rows } = await sql`
       SELECT slug, name, title, fide_rating, federation, game_count
       FROM players
+      WHERE NOT (fide_id = ANY(${excludedFideIds}))
       ORDER BY fide_rating DESC
       LIMIT ${limit}
     `;
@@ -248,12 +313,14 @@ export async function searchPlayers(
           SELECT slug, name, title, fide_rating, federation
           FROM players
           WHERE fide_id = ${trimmed}
+            AND NOT (fide_id = ANY(${excludedFideIds}))
           LIMIT ${limit}
         `
       : await sql`
           SELECT slug, name, title, fide_rating, federation
           FROM players
           WHERE name ILIKE ${`%${trimmed}%`}
+            AND NOT (fide_id = ANY(${excludedFideIds}))
           ORDER BY fide_rating DESC
           LIMIT ${limit}
         `;
@@ -318,8 +385,15 @@ export async function getEventMeta(slug: string): Promise<EventSummary | null> {
   if (!HAS_POSTGRES) return null;
   try {
     const { rows } = await sql`
-      SELECT slug, name, site, date_start, date_end, game_count, avg_elo
-      FROM events WHERE slug = ${slug}
+      SELECT e.slug, e.name, e.site, e.date_start, e.date_end, e.game_count, e.avg_elo
+      FROM events e
+      WHERE e.slug = ${slug}
+        AND EXISTS (
+          SELECT 1 FROM games g
+          WHERE g.event_slug = e.slug
+            AND NOT (g.white_fide_id = ANY(${excludedFideIds}))
+            AND NOT (g.black_fide_id = ANY(${excludedFideIds}))
+        )
     `;
     if (rows.length === 0) return null;
     const e = rows[0];
@@ -344,8 +418,15 @@ export async function getEvent(slug: string): Promise<EventDetail | null> {
   if (!HAS_POSTGRES) return null;
   try {
     const { rows: eventRows } = await sql`
-      SELECT slug, name, site, date_start, date_end, game_count, avg_elo
-      FROM events WHERE slug = ${slug}
+      SELECT e.slug, e.name, e.site, e.date_start, e.date_end, e.game_count, e.avg_elo
+      FROM events e
+      WHERE e.slug = ${slug}
+        AND EXISTS (
+          SELECT 1 FROM games g
+          WHERE g.event_slug = e.slug
+            AND NOT (g.white_fide_id = ANY(${excludedFideIds}))
+            AND NOT (g.black_fide_id = ANY(${excludedFideIds}))
+        )
     `;
     if (eventRows.length === 0) return null;
     const e = eventRows[0];
@@ -357,6 +438,8 @@ export async function getEvent(slug: string): Promise<EventDetail | null> {
              round, date, eco, opening, result
       FROM games
       WHERE event_slug = ${slug}
+        AND NOT (white_fide_id = ANY(${excludedFideIds}))
+        AND NOT (black_fide_id = ANY(${excludedFideIds}))
       ORDER BY date ASC, round ASC NULLS LAST
     `;
 
@@ -483,8 +566,14 @@ export async function getRecentEvents(
   try {
     const { rows } = await sql`
       SELECT slug, name, site, date_start, date_end, game_count, avg_elo
-      FROM events
+      FROM events e
       WHERE game_count >= 5
+        AND EXISTS (
+          SELECT 1 FROM games g
+          WHERE g.event_slug = e.slug
+            AND NOT (g.white_fide_id = ANY(${excludedFideIds}))
+            AND NOT (g.black_fide_id = ANY(${excludedFideIds}))
+        )
       ORDER BY date_end DESC NULLS LAST
       LIMIT ${limit}
     `;
@@ -508,7 +597,16 @@ export async function getRecentEvents(
 export async function getEventCount(): Promise<number> {
   if (!HAS_POSTGRES) return 0;
   try {
-    const { rows } = await sql`SELECT COUNT(*)::int AS count FROM events`;
+    const { rows } = await sql`
+      SELECT COUNT(*)::int AS count
+      FROM events e
+      WHERE EXISTS (
+        SELECT 1 FROM games g
+        WHERE g.event_slug = e.slug
+          AND NOT (g.white_fide_id = ANY(${excludedFideIds}))
+          AND NOT (g.black_fide_id = ANY(${excludedFideIds}))
+      )
+    `;
     return rows[0].count as number;
   } catch {
     return 0;
@@ -525,9 +623,15 @@ export async function getEventSlugsForSitemap(
   if (!HAS_POSTGRES) return [];
   try {
     const { rows } = await sql`
-      SELECT slug, game_count, updated_at
-      FROM events
-      ORDER BY id
+      SELECT e.slug, e.game_count, e.updated_at
+      FROM events e
+      WHERE EXISTS (
+        SELECT 1 FROM games g
+        WHERE g.event_slug = e.slug
+          AND NOT (g.white_fide_id = ANY(${excludedFideIds}))
+          AND NOT (g.black_fide_id = ANY(${excludedFideIds}))
+      )
+      ORDER BY e.id
       LIMIT ${limit} OFFSET ${offset}
     `;
     return rows.map((r) => ({
@@ -596,12 +700,17 @@ export async function getFideProfile(
   slug: string,
   month: string,
 ): Promise<FideProfileRow | null> {
-  if (!HAS_POSTGRES) return null;
+  if (!HAS_POSTGRES || isExcludedFideSlug(slug)) return null;
   try {
     const { rows } = await sql`
       SELECT profile_json, game_count, month
-      FROM fide_profiles
-      WHERE slug = ${slug} AND month = ${month}
+      FROM fide_profiles fp
+      WHERE fp.slug = ${slug} AND fp.month = ${month}
+        AND EXISTS (
+          SELECT 1 FROM players p
+          WHERE p.slug = fp.slug
+            AND NOT (p.fide_id = ANY(${excludedFideIds}))
+        )
     `;
     if (rows.length === 0) return null;
     const row = rows[0];
@@ -618,12 +727,17 @@ export async function getFideProfile(
 export async function getLatestFideProfile(
   slug: string,
 ): Promise<FideProfileRow | null> {
-  if (!HAS_POSTGRES) return null;
+  if (!HAS_POSTGRES || isExcludedFideSlug(slug)) return null;
   try {
     const { rows } = await sql`
       SELECT profile_json, game_count, month
-      FROM fide_profiles
-      WHERE slug = ${slug}
+      FROM fide_profiles fp
+      WHERE fp.slug = ${slug}
+        AND EXISTS (
+          SELECT 1 FROM players p
+          WHERE p.slug = fp.slug
+            AND NOT (p.fide_id = ANY(${excludedFideIds}))
+        )
       ORDER BY month DESC
       LIMIT 1
     `;
@@ -645,7 +759,7 @@ export async function upsertFideProfile(
   profile: unknown,
   gameCount: number,
 ): Promise<void> {
-  if (!HAS_POSTGRES) return;
+  if (!HAS_POSTGRES || isExcludedFideSlug(slug)) return;
   try {
     const profileStr = JSON.stringify(profile);
     await sql`
@@ -664,11 +778,22 @@ export async function upsertFideProfile(
 
 // ─── Bot data cache ────────────────────────────────────────────────────────
 
+export interface CachedBotGame {
+  id: string;
+  moves: string;
+  playerColor: "white" | "black";
+  result: "white" | "black" | "draw";
+  hasEvals: boolean;
+  speed?: string;
+  createdAt?: number;
+}
+
 interface BotDataCacheRow {
   whiteTrie: unknown;
   blackTrie: unknown;
   errorProfile: unknown;
   styleMetrics: unknown;
+  gameMoves: CachedBotGame[] | null;
   gameCount: number;
   newestGameTs: number | null;
   updatedAt: Date;
@@ -682,15 +807,40 @@ export async function getBotDataCache(
   platform: string,
   username: string,
 ): Promise<BotDataCacheRow | null> {
-  if (!HAS_POSTGRES) return null;
+  if (!HAS_POSTGRES || (platform === "fide" && isExcludedFideSlug(username))) return null;
   try {
     const u = username.toLowerCase();
-    const { rows } = await sql`
-      SELECT white_trie, black_trie, error_profile, style_metrics,
-             game_count, newest_game_ts, updated_at
-      FROM bot_data_cache
-      WHERE platform = ${platform} AND username = ${u}
-    `;
+    let rows: Record<string, unknown>[];
+    try {
+      ({ rows } = await sql`
+        SELECT white_trie, black_trie, error_profile, style_metrics, game_moves,
+               game_count, newest_game_ts, updated_at
+        FROM bot_data_cache bdc
+        WHERE platform = ${platform} AND username = ${u}
+          AND (
+            platform <> 'fide' OR EXISTS (
+              SELECT 1 FROM players p
+              WHERE LOWER(p.slug) = bdc.username
+                AND NOT (p.fide_id = ANY(${excludedFideIds}))
+            )
+          )
+      `);
+    } catch {
+      // Backward-compatible while the optional game_moves migration rolls out.
+      ({ rows } = await sql`
+        SELECT white_trie, black_trie, error_profile, style_metrics,
+               game_count, newest_game_ts, updated_at
+        FROM bot_data_cache bdc
+        WHERE platform = ${platform} AND username = ${u}
+          AND (
+            platform <> 'fide' OR EXISTS (
+              SELECT 1 FROM players p
+              WHERE LOWER(p.slug) = bdc.username
+                AND NOT (p.fide_id = ANY(${excludedFideIds}))
+            )
+          )
+      `);
+    }
     if (rows.length === 0) return null;
     const row = rows[0];
     return {
@@ -698,6 +848,7 @@ export async function getBotDataCache(
       blackTrie: jsonb(row.black_trie, null),
       errorProfile: jsonb(row.error_profile, null),
       styleMetrics: jsonb(row.style_metrics, null),
+      gameMoves: jsonb<CachedBotGame[] | null>(row.game_moves, null),
       gameCount: row.game_count as number,
       newestGameTs: row.newest_game_ts ? Number(row.newest_game_ts) : null,
       updatedAt: new Date(row.updated_at as string),
@@ -719,27 +870,47 @@ export async function upsertBotDataCache(
   styleMetrics: unknown,
   gameCount: number,
   newestGameTs: number | null,
+  gameMoves: CachedBotGame[] | null = null,
 ): Promise<void> {
-  if (!HAS_POSTGRES) return;
+  if (!HAS_POSTGRES || (platform === "fide" && isExcludedFideSlug(username))) return;
   try {
     const u = username.toLowerCase();
     const wt = JSON.stringify(whiteTrie);
     const bt = JSON.stringify(blackTrie);
     const ep = JSON.stringify(errorProfile);
     const sm = JSON.stringify(styleMetrics);
-    await sql`
-      INSERT INTO bot_data_cache (platform, username, white_trie, black_trie, error_profile, style_metrics, game_count, newest_game_ts, updated_at)
-      VALUES (${platform}, ${u}, ${wt}::jsonb, ${bt}::jsonb, ${ep}::jsonb, ${sm}::jsonb, ${gameCount}, ${newestGameTs}, NOW())
-      ON CONFLICT (platform, username)
-      DO UPDATE SET
-        white_trie = ${wt}::jsonb,
-        black_trie = ${bt}::jsonb,
-        error_profile = ${ep}::jsonb,
-        style_metrics = ${sm}::jsonb,
-        game_count = ${gameCount},
-        newest_game_ts = ${newestGameTs},
-        updated_at = NOW()
-    `;
+    const gm = gameMoves ? JSON.stringify(gameMoves) : null;
+    try {
+      await sql`
+        INSERT INTO bot_data_cache (platform, username, white_trie, black_trie, error_profile, style_metrics, game_moves, game_count, newest_game_ts, updated_at)
+        VALUES (${platform}, ${u}, ${wt}::jsonb, ${bt}::jsonb, ${ep}::jsonb, ${sm}::jsonb, ${gm}::jsonb, ${gameCount}, ${newestGameTs}, NOW())
+        ON CONFLICT (platform, username)
+        DO UPDATE SET
+          white_trie = ${wt}::jsonb,
+          black_trie = ${bt}::jsonb,
+          error_profile = ${ep}::jsonb,
+          style_metrics = ${sm}::jsonb,
+          game_moves = COALESCE(${gm}::jsonb, bot_data_cache.game_moves),
+          game_count = ${gameCount},
+          newest_game_ts = ${newestGameTs},
+          updated_at = NOW()
+      `;
+    } catch {
+      // Backward-compatible write before game_moves is migrated.
+      await sql`
+        INSERT INTO bot_data_cache (platform, username, white_trie, black_trie, error_profile, style_metrics, game_count, newest_game_ts, updated_at)
+        VALUES (${platform}, ${u}, ${wt}::jsonb, ${bt}::jsonb, ${ep}::jsonb, ${sm}::jsonb, ${gameCount}, ${newestGameTs}, NOW())
+        ON CONFLICT (platform, username)
+        DO UPDATE SET
+          white_trie = ${wt}::jsonb,
+          black_trie = ${bt}::jsonb,
+          error_profile = ${ep}::jsonb,
+          style_metrics = ${sm}::jsonb,
+          game_count = ${gameCount},
+          newest_game_ts = ${newestGameTs},
+          updated_at = NOW()
+      `;
+    }
   } catch {
     // Non-fatal: cache write failure shouldn't break the app
   }
@@ -833,7 +1004,12 @@ function mapRowToGameDetail(row: Record<string, unknown>): GameDetail & { eventS
 export async function getGamePgn(slug: string): Promise<string | null> {
   if (!HAS_POSTGRES) return null;
   try {
-    const { rows } = await sql`SELECT pgn FROM games WHERE slug = ${slug}`;
+    const { rows } = await sql`
+      SELECT pgn FROM games
+      WHERE slug = ${slug}
+        AND NOT (white_fide_id = ANY(${excludedFideIds}))
+        AND NOT (black_fide_id = ANY(${excludedFideIds}))
+    `;
     if (rows.length === 0) return null;
     return (rows[0].pgn as string) ?? null;
   } catch {
@@ -850,22 +1026,34 @@ export async function getPlayerGamePgns(
   /** Optional: only return games on or after this date (ISO string or Date) */
   since?: string | Date,
 ): Promise<string[] | null> {
-  if (!HAS_POSTGRES) return null;
+  if (!HAS_POSTGRES || isExcludedFideSlug(slug)) return null;
   try {
     let rows: { pgn: string }[];
     if (since) {
       const sinceDate = typeof since === "string" ? since : since.toISOString().split("T")[0];
       const result = await sql`
-        SELECT pgn FROM games WHERE white_slug = ${slug} AND pgn IS NOT NULL AND date >= ${sinceDate}::date
+        SELECT pgn FROM games
+        WHERE white_slug = ${slug} AND pgn IS NOT NULL AND date >= ${sinceDate}::date
+          AND NOT (white_fide_id = ANY(${excludedFideIds}))
+          AND NOT (black_fide_id = ANY(${excludedFideIds}))
         UNION ALL
-        SELECT pgn FROM games WHERE black_slug = ${slug} AND pgn IS NOT NULL AND date >= ${sinceDate}::date
+        SELECT pgn FROM games
+        WHERE black_slug = ${slug} AND pgn IS NOT NULL AND date >= ${sinceDate}::date
+          AND NOT (white_fide_id = ANY(${excludedFideIds}))
+          AND NOT (black_fide_id = ANY(${excludedFideIds}))
       `;
       rows = result.rows as { pgn: string }[];
     } else {
       const result = await sql`
-        SELECT pgn FROM games WHERE white_slug = ${slug} AND pgn IS NOT NULL
+        SELECT pgn FROM games
+        WHERE white_slug = ${slug} AND pgn IS NOT NULL
+          AND NOT (white_fide_id = ANY(${excludedFideIds}))
+          AND NOT (black_fide_id = ANY(${excludedFideIds}))
         UNION ALL
-        SELECT pgn FROM games WHERE black_slug = ${slug} AND pgn IS NOT NULL
+        SELECT pgn FROM games
+        WHERE black_slug = ${slug} AND pgn IS NOT NULL
+          AND NOT (white_fide_id = ANY(${excludedFideIds}))
+          AND NOT (black_fide_id = ANY(${excludedFideIds}))
       `;
       rows = result.rows as { pgn: string }[];
     }
@@ -899,7 +1087,11 @@ export async function getGameEvals(
   username: string,
   gameIds: string[],
 ): Promise<Map<string, unknown>> {
-  if (!HAS_POSTGRES || gameIds.length === 0) return new Map();
+  if (
+    !HAS_POSTGRES ||
+    gameIds.length === 0 ||
+    (platform === "fide" && isExcludedFideSlug(username))
+  ) return new Map();
   try {
     const { rows } = await sql`
       SELECT game_id, eval_data
@@ -907,6 +1099,13 @@ export async function getGameEvals(
       WHERE platform = ${platform}
         AND username = ${username.toLowerCase()}
         AND game_id = ANY(${gameIds})
+        AND (
+          ${platform} <> 'fide' OR EXISTS (
+            SELECT 1 FROM players p
+            WHERE LOWER(p.slug) = ${username.toLowerCase()}
+              AND NOT (p.fide_id = ANY(${excludedFideIds}))
+          )
+        )
     `;
     const result = new Map<string, unknown>();
     for (const row of rows) {
@@ -927,9 +1126,22 @@ export async function storeGameEvals(
   username: string,
   evals: Array<{ gameId: string; evalData: unknown; evalMode: string }>,
 ): Promise<void> {
-  if (!HAS_POSTGRES || evals.length === 0) return;
+  if (
+    !HAS_POSTGRES ||
+    evals.length === 0 ||
+    (platform === "fide" && isExcludedFideSlug(username))
+  ) return;
   try {
     const usernameLower = username.toLowerCase();
+    if (platform === "fide") {
+      const { rows } = await sql`
+        SELECT 1 FROM players
+        WHERE LOWER(slug) = ${usernameLower}
+          AND NOT (fide_id = ANY(${excludedFideIds}))
+        LIMIT 1
+      `;
+      if (rows.length === 0) return;
+    }
     // Insert in batches of 20 to avoid large queries
     for (let i = 0; i < evals.length; i += 20) {
       const batch = evals.slice(i, i + 20);

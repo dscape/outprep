@@ -5,6 +5,10 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: "/",
+      disallow: [
+        "/api/",
+        "/game/",
+      ],
     },
     sitemap: "https://outprep.xyz/sitemap-index.xml",
   };

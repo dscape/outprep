@@ -10,6 +10,7 @@
 
 import { sql } from "@/lib/db/connection";
 import { downloadAndExtractPgn } from "./pgn-extract";
+import { hasExcludedFideId } from "@/lib/player-exclusions";
 
 // We inline minimal logic to avoid importing from packages with heavy dependencies.
 
@@ -102,6 +103,10 @@ export function parseGames(pgnText: string): ParsedGame[] {
     const blackElo = parseElo(h["BlackElo"]);
     if (whiteElo === null && blackElo === null) continue;
 
+    const whiteFideId = parseFideId(h["WhiteFideId"]);
+    const blackFideId = parseFideId(h["BlackFideId"]);
+    if (hasExcludedFideId(whiteFideId, blackFideId)) continue;
+
     results.push({
       white,
       black,
@@ -109,8 +114,8 @@ export function parseGames(pgnText: string): ParsedGame[] {
       blackElo,
       whiteTitle: parseTitle(h["WhiteTitle"]),
       blackTitle: parseTitle(h["BlackTitle"]),
-      whiteFideId: parseFideId(h["WhiteFideId"]),
-      blackFideId: parseFideId(h["BlackFideId"]),
+      whiteFideId,
+      blackFideId,
       eco: h["ECO"] || null,
       opening: h["Opening"] || null,
       variation: h["Variation"] || null,
@@ -315,7 +320,11 @@ export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
     const allRows: GameRow[] = [];
 
     for (const game of games) {
-      if (!game.whiteFideId || !game.blackFideId) continue;
+      if (
+        !game.whiteFideId ||
+        !game.blackFideId ||
+        hasExcludedFideId(game.whiteFideId, game.blackFideId)
+      ) continue;
       if (!game.event || !game.date) continue;
 
       // Generate slug with collision handling

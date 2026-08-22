@@ -12,6 +12,7 @@ import type {
   PlayerIndexEntry,
 } from "./types";
 import { ECO_NAMES } from "./eco-names";
+import { hasExcludedFidePlayer, isExcludedFideId } from "./exclusions";
 
 /**
  * Normalize a player name for deduplication.
@@ -144,6 +145,8 @@ export function createAggregator() {
     /** Feed a batch of games (e.g., one PGN file's worth). */
     feed(games: TWICGameHeader[]): void {
       for (const game of games) {
+        if (hasExcludedFidePlayer(game)) continue;
+
         if (game.whiteElo !== null) {
           processPlayer(players, {
             name: game.white,
@@ -180,7 +183,10 @@ export function createAggregator() {
       const result: FIDEPlayer[] = [];
 
       const accumulators = Array.from(players.values()).filter(
-        (p) => p.games >= minGames && p.fideId !== null
+        (p) =>
+          p.games >= minGames &&
+          p.fideId !== null &&
+          !isExcludedFideId(p.fideId)
       );
 
       for (const acc of accumulators) {

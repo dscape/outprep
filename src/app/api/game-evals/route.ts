@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getGameEvals, storeGameEvals } from "@/lib/db";
+import { isExcludedFideSlug } from "@/lib/player-exclusions";
 
 /**
  * GET /api/game-evals?platform=fide&username=slug&gameIds=id1,id2,...
@@ -12,6 +13,9 @@ export async function GET(request: NextRequest) {
 
   if (!platform || !username || !gameIdsParam) {
     return NextResponse.json({ error: "Missing required params" }, { status: 400 });
+  }
+  if (platform === "fide" && isExcludedFideSlug(username)) {
+    return NextResponse.json({ error: "Player not found" }, { status: 404 });
   }
 
   const gameIds = gameIdsParam.split(",").filter(Boolean);
@@ -44,6 +48,9 @@ export async function POST(request: NextRequest) {
 
     if (!platform || !username || !Array.isArray(evals) || evals.length === 0) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
+    }
+    if (platform === "fide" && isExcludedFideSlug(username)) {
+      return NextResponse.json({ error: "Player not found" }, { status: 404 });
     }
 
     await storeGameEvals(platform, username, evals);

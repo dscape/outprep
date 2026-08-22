@@ -28,6 +28,8 @@ import {
   failPipelineRun,
 } from "./upload-pg";
 import { closeSql } from "./db";
+import { purgeExcludedPlayers } from "./excluded-player-purge";
+import { hasExcludedFidePlayer } from "./exclusions";
 import { loadFideData, enrichPlayers } from "./fide-enrichment";
 import {
   buildGameDetails,
@@ -160,6 +162,8 @@ function writePlayerGames(
   }
 
   for (const game of allGames) {
+    if (hasExcludedFidePlayer(game)) continue;
+
     // Match white player: prefer FIDE ID, fall back to name
     const whiteSlug = (game.whiteFideId && fideIdToSlug.get(game.whiteFideId))
       || nameToSlug.get(normalizePlayerName(game.white));
@@ -294,7 +298,9 @@ async function processTwoPass(
     process.stdout.write(`  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: reading...`);
     const pgn = readFileSync(file.path, "utf-8");
     const start = Date.now();
-    const games = parseHeaders(pgn, { skipRawPgn: true });
+    const games = parseHeaders(pgn, { skipRawPgn: true }).filter(
+      (game) => !hasExcludedFidePlayer(game),
+    );
     const ms = Date.now() - start;
     process.stdout.write(`\r  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: ${games.length} games (${ms}ms)\n`);
     aggregator.feed(games);
@@ -359,7 +365,9 @@ async function processTwoPass(
     const pct = Math.round(((fi + 1) / pgnFiles.length) * 100);
     process.stdout.write(`  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: reading...`);
     const pgn = readFileSync(file.path, "utf-8");
-    const games = parseHeaders(pgn); // WITH rawPgn
+    const games = parseHeaders(pgn).filter(
+      (game) => !hasExcludedFidePlayer(game),
+    ); // WITH rawPgn
     process.stdout.write(`\r  [${fi + 1}/${pgnFiles.length} ${pct}%] ${file.name}: processing ${games.length} games...\n`);
 
     // Batch JSONL appends for this file's games (one PGN file at a time in memory)
@@ -508,7 +516,9 @@ program
     // 2. Parse
     console.log("Step 2: Parse headers");
     const start = Date.now();
-    const games = parseHeaders(pgn);
+    const games = parseHeaders(pgn).filter(
+      (game) => !hasExcludedFidePlayer(game),
+    );
     const elapsed = ((Date.now() - start) / 1000).toFixed(1);
     console.log(`  Parsed: ${games.length} game headers in ${elapsed}s\n`);
 
@@ -791,6 +801,10 @@ program
       await ensureSchema();
     }
 
+    console.log("Purging configured player exclusions...");
+    const exclusionReport = await purgeExcludedPlayers(true);
+    console.log(`  ${exclusionReport.playerSlugs.length} players and ${exclusionReport.gameSlugs.length} games removed\n`);
+
     // Record pipeline run
     const runId = await recordPipelineRun("seed-db", new Date().toISOString());
 
@@ -962,6 +976,9 @@ program
     console.log("Ensuring schema...");
     await ensureSchema();
 
+    const exclusionReport = await purgeExcludedPlayers(true);
+    console.log(`  Exclusions: ${exclusionReport.playerSlugs.length} players and ${exclusionReport.gameSlugs.length} games removed\n`);
+
     const runId = await recordPipelineRun("full", `twic-${from}-${to}`);
 
     try {
@@ -1027,6 +1044,25 @@ program
     } finally {
       await closeSql();
     }
+  });
+
+program
+  .command("purge-excluded")
+  .description("Remove configured FIDE opt-outs and rebuild affected aggregates")
+  .option("--apply", "Apply the purge (default is a read-only dry run)")
+  .action(async (opts) => {
+    if (!process.env.DATABASE_URL) {
+      console.error("DATABASE_URL environment variable is required.");
+      process.exit(1);
+    }
+
+    await ensureSchema();
+    const report = await purgeExcludedPlayers(!!opts.apply);
+    console.log(JSON.stringify(report, null, 2));
+    if (!opts.apply) {
+      console.log("\nDry run only. Re-run with --apply to remove these records.");
+    }
+    await closeSql();
   });
 
 program.parseAsync().then(

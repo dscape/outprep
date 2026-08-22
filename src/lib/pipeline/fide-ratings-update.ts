@@ -18,6 +18,7 @@
 
 import { sql } from "@/lib/db/connection";
 import { downloadAndExtractFideRatings } from "./pgn-extract";
+import { isExcludedFideId } from "@/lib/player-exclusions";
 
 export interface FideRatingRecord {
   fideId: string;
@@ -47,7 +48,7 @@ export function parseFideText(
 
     const fideId = line.slice(0, 15).trim();
     if (!fideId || !/^\d+$/.test(fideId)) continue;
-    if (!filterIds.has(fideId)) continue;
+    if (isExcludedFideId(fideId) || !filterIds.has(fideId)) continue;
 
     const name = line.slice(15, 76).trim();
     const federation = line.slice(76, 79).trim();
@@ -107,7 +108,11 @@ export async function updateFideRatings(): Promise<{
 
   // 1. Get all FIDE IDs from our database
   const { rows: playerRows } = await sql`SELECT fide_id FROM players`;
-  const ourFideIds = new Set(playerRows.map((r) => r.fide_id as string));
+  const ourFideIds = new Set(
+    playerRows
+      .map((r) => r.fide_id as string)
+      .filter((fideId) => !isExcludedFideId(fideId)),
+  );
 
   if (ourFideIds.size === 0) {
     return {

@@ -10,6 +10,7 @@ import {
   upsertFideProfile,
 } from "@/lib/db";
 import type { PlayerRatings } from "@/lib/types";
+import { isExcludedFideSlug } from "@/lib/player-exclusions";
 
 const CACHE_HEADERS = {
   "Cache-Control": "public, max-age=86400, s-maxage=604800",
@@ -37,6 +38,10 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   const { slug } = await params;
+  if (isExcludedFideSlug(slug)) {
+    return Response.json({ error: "Player not found" }, { status: 404 });
+  }
+
   const month = currentMonth();
   const sinceParam = req.nextUrl.searchParams.get("since");
   const sinceMs = sinceParam ? parseInt(sinceParam) : undefined;

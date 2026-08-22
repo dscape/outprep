@@ -35,6 +35,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { generateSlug, generateAliases } from "./aggregate";
+import { isExcludedFideId } from "./exclusions";
 import type { FIDEPlayer } from "./types";
 
 /** Player record from the unified FIDE rating list (all 3 rating types). */
@@ -78,7 +79,12 @@ export function parseFideUnifiedList(
     if (lineNum > 0 && end > start) {
       const fideId = buf.toString("utf-8", start, start + 15).trim();
 
-      if (fideId && /^\d+$/.test(fideId) && (!filterIds || filterIds.has(fideId))) {
+      if (
+        fideId &&
+        /^\d+$/.test(fideId) &&
+        !isExcludedFideId(fideId) &&
+        (!filterIds || filterIds.has(fideId))
+      ) {
         const name = buf.toString("utf-8", start + 15, start + 76).trim();
         const federation = buf.toString("utf-8", start + 76, start + 79).trim();
         const title = buf.toString("utf-8", start + 84, start + 88).trim() || null;
@@ -178,6 +184,8 @@ export function enrichPlayers(
   let enriched = 0;
 
   for (const player of players) {
+    if (isExcludedFideId(player.fideId)) continue;
+
     const fide = fideData.get(player.fideId);
     if (!fide) continue;
 

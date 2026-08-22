@@ -17,6 +17,12 @@ import { join } from "node:path";
 import pLimit from "p-limit";
 
 import type { FIDEPlayer, GameDetail } from "./types";
+import {
+  EXCLUDED_FIDE_IDS,
+  hasExcludedFidePlayer,
+  isExcludedFideId,
+  slugContainsExcludedFideId,
+} from "./exclusions";
 
 /** Concurrency limit for batch DB operations (must stay within Neon pooler limits). */
 const DB_CONCURRENCY = 5;
@@ -48,13 +54,14 @@ export async function upsertPlayers(
   players: FIDEPlayer[],
   onProgress?: (count: number, total: number, inserted: number, updated: number) => void,
 ): Promise<{ total: number; inserted: number; updated: number }> {
+  const eligiblePlayers = players.filter((player) => !isExcludedFideId(player.fideId));
   const BATCH = 500;
   let count = 0;
   let inserted = 0;
   let updated = 0;
 
-  for (let i = 0; i < players.length; i += BATCH) {
-    const batch = players.slice(i, i + BATCH);
+  for (let i = 0; i < eligiblePlayers.length; i += BATCH) {
+    const batch = eligiblePlayers.slice(i, i + BATCH);
 
     const rows = batch.map((p) => ({
       slug: p.slug,
@@ -115,7 +122,7 @@ export async function upsertPlayers(
       else updated++;
     }
 
-    onProgress?.(count, players.length, inserted, updated);
+    onProgress?.(count, eligiblePlayers.length, inserted, updated);
   }
 
   return { total: count, inserted, updated };
@@ -129,13 +136,14 @@ export async function upsertPlayerAliases(
   players: FIDEPlayer[],
   onProgress?: (count: number, batchNum: number, totalBatches: number, batchAliases: number) => void,
 ): Promise<number> {
+  const eligiblePlayers = players.filter((player) => !isExcludedFideId(player.fideId));
   let count = 0;
   const BATCH = 500;
-  const totalBatches = Math.ceil(players.length / BATCH);
+  const totalBatches = Math.ceil(eligiblePlayers.length / BATCH);
 
-  for (let i = 0; i < players.length; i += BATCH) {
+  for (let i = 0; i < eligiblePlayers.length; i += BATCH) {
     const batchNum = Math.floor(i / BATCH) + 1;
-    const batch = players.slice(i, i + BATCH);
+    const batch = eligiblePlayers.slice(i, i + BATCH);
     const batchStart = Date.now();
 
     // Collect all aliases for this batch
@@ -209,7 +217,9 @@ export async function upsertGamesFromJsonl(
 
   for await (const line of rl) {
     if (!line.trim()) continue;
-    batch.push(JSON.parse(line) as GameDetail);
+    const game = JSON.parse(line) as GameDetail;
+    if (hasExcludedFidePlayer(game)) continue;
+    batch.push(game);
 
     if (batch.length >= BATCH) {
       const b = batch;
@@ -245,8 +255,11 @@ export async function upsertGamesFromJsonl(
 const MAX_ELO = 10_000;
 
 async function insertGameBatch(games: GameDetail[]): Promise<void> {
+  const eligibleGames = games.filter((game) => !hasExcludedFidePlayer(game));
+  if (eligibleGames.length === 0) return;
+
   // Sanitise ELO values — warn and zero out anything suspicious
-  for (const g of games) {
+  for (const g of eligibleGames) {
     if (g.whiteElo > MAX_ELO) {
       console.warn(`  ⚠ whiteElo ${g.whiteElo} out of range, setting to 0 — ${g.slug}`);
       g.whiteElo = 0;
@@ -258,7 +271,7 @@ async function insertGameBatch(games: GameDetail[]): Promise<void> {
   }
 
   // Insert game metadata + PGN into Postgres
-  const rows = games.map((g) => ({
+  const rows = eligibleGames.map((g) => ({
     slug: g.slug,
     white_name: g.whiteName,
     black_name: g.blackName,
@@ -336,7 +349,7 @@ export async function backfillPgnsFromJsonl(
   for await (const line of rl) {
     if (!line.trim()) continue;
     const game = JSON.parse(line) as GameDetail;
-    if (game.pgn) {
+    if (!hasExcludedFidePlayer(game) && game.pgn) {
       batch.push({ slug: game.slug, pgn: game.pgn });
     }
     scanned++;
@@ -404,7 +417,11 @@ export async function upsertGameAliases(
   const aliases: Record<string, string> = JSON.parse(raw);
 
   let count = 0;
-  const entries = Object.entries(aliases);
+  const entries = Object.entries(aliases).filter(
+    ([legacy, canonical]) =>
+      !slugContainsExcludedFideId(legacy) &&
+      !slugContainsExcludedFideId(canonical),
+  );
   const total = entries.length;
   const BATCH = 2000;
 
@@ -516,8 +533,8 @@ export async function populateEvents(
       slug: slugifyStr(e.name as string),
       name: e.name as string,
       site: (e.site as string) ?? null,
-      date_start: e.date_start,
-      date_end: e.date_end,
+      date_start: e.date_start as Date | string | null,
+      date_end: e.date_end as Date | string | null,
       game_count: e.game_count as number,
       avg_elo: (e.avg_elo as number) ?? null,
       updated_at: new Date(),
@@ -752,6 +769,14 @@ export async function ensureSchema(): Promise<void> {
     await sql`ALTER TABLE games ADD COLUMN event_slug TEXT`;
     await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
     console.log("  event_slug column added.");
+  }
+
+  const { rows: botCacheTable } = await sql`
+    SELECT 1 FROM information_schema.tables
+    WHERE table_schema = 'public' AND table_name = 'bot_data_cache'
+  `;
+  if (botCacheTable.length > 0) {
+    await sql`ALTER TABLE bot_data_cache ADD COLUMN IF NOT EXISTS game_moves JSONB`;
   }
 }
 
