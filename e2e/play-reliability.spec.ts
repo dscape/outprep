@@ -54,6 +54,23 @@ async function seedProfile(page: import("@playwright/test").Page, username: stri
 }
 
 test.describe("personalized repertoire loading", () => {
+  test("reports progress while game history is prepared", async ({ page }) => {
+    await page.route("**/api/bot-data/progress-user?**", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 3_500));
+      await route.fulfill({ status: 200, json: botData });
+    });
+    await seedProfile(page, "progress-user");
+
+    await page.goto("/play/progress-user?gameCount=972");
+
+    await expect(page.getByText("Loading game history...")).toBeVisible();
+    await expect(page.getByText("Fetching and processing about 972 Lichess games")).toBeVisible();
+    await expect(page.getByRole("progressbar", { name: "Practice loading progress" }))
+      .toHaveAttribute("aria-valuenow", "2");
+    await expect(page.getByText(/[1-9]\d*s elapsed/)).toBeVisible({ timeout: 3_000 });
+    await expect(page.getByText("Choose your color")).toBeVisible({ timeout: 10_000 });
+  });
+
   test("retries a rate limit and deduplicates the play request", async ({ page }) => {
     let attempts = 0;
     await page.route("**/api/bot-data/retry-user?**", async (route) => {

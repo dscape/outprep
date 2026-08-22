@@ -53,24 +53,42 @@ function isBotData(value: unknown): value is BotData {
 }
 
 const botDataRequests = new Map<string, Promise<unknown>>();
+const BOT_DATA_REQUEST_TIMEOUT_MS = 40_000;
+const PRACTICE_LOAD_TIMEOUT_MS = 45_000;
 
 async function requestBotData(url: string): Promise<unknown> {
   const existing = botDataRequests.get(url);
   if (existing) return existing;
 
   const request = (async () => {
-    let response = await fetch(url);
-    if (response.status === 429) {
-      const retryAfterSeconds = Number(response.headers.get("Retry-After") || 1);
-      const delay = Math.min(Math.max(retryAfterSeconds * 1000, 500), 5000);
-      await new Promise((resolve) => window.setTimeout(resolve, delay));
-      response = await fetch(url);
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, BOT_DATA_REQUEST_TIMEOUT_MS);
+
+    try {
+      let response = await fetch(url, { signal: controller.signal });
+      if (response.status === 429) {
+        const retryAfterSeconds = Number(response.headers.get("Retry-After") || 1);
+        const delay = Math.min(Math.max(retryAfterSeconds * 1000, 500), 5000);
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        response = await fetch(url, { signal: controller.signal });
+      }
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(body.error || `Repertoire request failed (${response.status}).`);
+      }
+      return response.json();
+    } catch (error) {
+      if (timedOut) {
+        throw new Error("Loading game history timed out after 40 seconds. Please retry.");
+      }
+      throw error;
+    } finally {
+      window.clearTimeout(timeout);
     }
-    if (!response.ok) {
-      const body = await response.json().catch(() => ({})) as { error?: string };
-      throw new Error(body.error || `Repertoire request failed (${response.status}).`);
-    }
-    return response.json();
   })();
 
   botDataRequests.set(url, request);
@@ -80,20 +98,97 @@ async function requestBotData(url: string): Promise<unknown> {
   return request;
 }
 
-function getStageLabels(platform: string): Record<LoadingStage, { title: string; detail: string }> {
+function getStageLabels(
+  platform: string,
+  expectedGameCount?: number,
+): Record<LoadingStage, { title: string; detail: string }> {
+  const expected = expectedGameCount
+    ? `about ${expectedGameCount.toLocaleString("en-US")}`
+    : "up to 2,000";
   const platformDetail =
-    platform === "chesscom" ? "Loading from Chess.com"
-    : platform === "fide" ? "Loading from database"
-    : platform === "pgn" ? "Building from uploaded games"
-    : "Loading from Lichess";
+    platform === "chesscom" ? `Fetching and processing ${expected} Chess.com games`
+    : platform === "fide" ? expectedGameCount
+      ? `Loading and processing about ${expectedGameCount.toLocaleString("en-US")} tournament games`
+      : "Loading and processing tournament games from the database"
+    : platform === "pgn" ? "Reading and processing the uploaded games"
+    : `Fetching and processing ${expected} Lichess games`;
 
   return {
     profile: { title: "Loading player data...", detail: "Fetching ratings and profile" },
-    fetching: { title: "Fetching game history...", detail: platformDetail },
+    fetching: { title: "Loading game history...", detail: platformDetail },
     analyzing: { title: "Analyzing games...", detail: "Computing error profile and play style" },
-    building: { title: "Building opening book...", detail: "Creating opening repertoire from game history" },
+    building: { title: "Validating opening repertoire...", detail: "Checking the personalized opening book" },
     ready: { title: "Ready", detail: "" },
   };
+}
+
+function PracticeLoadingProgress({
+  stage,
+  labels,
+}: {
+  stage: LoadingStage;
+  labels: Record<LoadingStage, { title: string; detail: string }>;
+}) {
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+
+  useEffect(() => {
+    const timer = window.setInterval(
+      () => setElapsedSeconds((seconds) => seconds + 1),
+      1000,
+    );
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const activeStep = stage === "profile" ? 0 : stage === "fetching" ? 1 : 2;
+  const current = labels[stage];
+
+  return (
+    <div className="flex min-h-screen items-center justify-center px-4">
+      <div className="w-full max-w-sm text-center">
+        <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
+        <div aria-live="polite">
+          <p className="text-sm text-zinc-300 font-medium">{current.title}</p>
+          <p className="text-xs text-zinc-500 mt-1 text-pretty">{current.detail}</p>
+        </div>
+
+        <div
+          className="mt-5 grid grid-cols-3 gap-1.5"
+          role="progressbar"
+          aria-label="Practice loading progress"
+          aria-valuemin={1}
+          aria-valuemax={3}
+          aria-valuenow={activeStep + 1}
+          aria-valuetext={`Step ${activeStep + 1} of 3`}
+        >
+          {[0, 1, 2].map((step) => (
+            <span
+              key={step}
+              className={`h-1 rounded-full ${
+                step < activeStep
+                  ? "bg-green-500"
+                  : step === activeStep
+                    ? "bg-green-500/70 animate-pulse"
+                    : "bg-zinc-800"
+              }`}
+            />
+          ))}
+        </div>
+
+        <div className="mt-2 flex items-center justify-between text-[11px] text-zinc-600 tabular-nums">
+          <span>Step {activeStep + 1} of 3</span>
+          <span>{elapsedSeconds}s elapsed</span>
+        </div>
+
+        <p className="mt-4 min-h-5 text-xs text-zinc-500 text-pretty">
+          {elapsedSeconds >= 25
+            ? "This is taking longer than usual. The request will stop automatically rather than hang."
+            : elapsedSeconds >= 10
+              ? "Still working — large histories can take longer on their first load."
+              : "This page updates as each step finishes."}
+        </p>
+      </div>
+    </div>
+  );
 }
 
 export default function PlayPage() {
@@ -123,6 +218,10 @@ function PlayPageInner() {
   const since = searchParams.get("since") || "";
   const eco = searchParams.get("eco") || "";
   const gameCountParam = searchParams.get("gameCount") || "";
+  const parsedGameCount = Number(gameCountParam);
+  const expectedGameCount = Number.isFinite(parsedGameCount) && parsedGameCount > 0
+    ? Math.round(parsedGameCount)
+    : undefined;
   const timeRangeLabelParam = searchParams.get("timeRangeLabel") || "";
   const openingName = searchParams.get("openingName") || "";
   const opponentWeaknessColor = searchParams.get("color") as "white" | "black" | null;
@@ -164,12 +263,26 @@ function PlayPageInner() {
   const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
   const [loadingOpening, setLoadingOpening] = useState(!!eco);
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("profile");
-  const STAGE_LABELS = useMemo(() => getStageLabels(platform), [platform]);
+  const STAGE_LABELS = useMemo(
+    () => getStageLabels(platform, expectedGameCount),
+    [platform, expectedGameCount],
+  );
 
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    let loadTimedOut = false;
     const profileFromCache = !!cachedProfile;
+    const loadTimeout = window.setTimeout(() => {
+      loadTimedOut = true;
+      controller.abort();
+      setBotData(null);
+      setBotDataError(
+        `Preparing personalized practice timed out after ${PRACTICE_LOAD_TIMEOUT_MS / 1000} seconds. Please retry.`,
+      );
+      setProfileReady(true);
+      setBotDataState("error");
+    }, PRACTICE_LOAD_TIMEOUT_MS);
 
     async function load() {
       setBotData(null);
@@ -241,7 +354,7 @@ function PlayPageInner() {
         const data = await requestBotData(
           `/api/bot-data/${encodeURIComponent(username)}?${query}`,
         );
-        if (cancelled) return;
+        if (cancelled || loadTimedOut) return;
 
         setLoadingStage("building");
         if (!isBotData(data)) {
@@ -251,7 +364,11 @@ function PlayPageInner() {
         setLoadingStage("ready");
         setBotDataState("ready");
       } catch (loadError) {
-        if (cancelled || (loadError instanceof DOMException && loadError.name === "AbortError")) return;
+        if (
+          cancelled ||
+          loadTimedOut ||
+          (loadError instanceof DOMException && loadError.name === "AbortError")
+        ) return;
         setBotData(null);
         setBotDataError(
           loadError instanceof Error
@@ -259,12 +376,15 @@ function PlayPageInner() {
             : "Failed to load the personalized opening repertoire.",
         );
         setBotDataState("error");
+      } finally {
+        window.clearTimeout(loadTimeout);
       }
     }
 
     void load();
     return () => {
       cancelled = true;
+      window.clearTimeout(loadTimeout);
       controller.abort();
     };
   }, [username, speeds, cachedProfile, platform, since, loadAttempt]);
@@ -336,15 +456,12 @@ function PlayPageInner() {
     : `Opening book from${gameCountStr} ${platformLabel} games${timeRangeStr}${fallbackLabel}`;
 
   if (!profileReady || botDataState === "loading") {
-    const stage = STAGE_LABELS[loadingStage];
     return (
-      <div className="flex min-h-screen items-center justify-center px-4">
-        <div className="text-center">
-          <div className="h-10 w-10 mx-auto rounded-full border-2 border-green-500 border-t-transparent animate-spin mb-4" />
-          <p className="text-sm text-zinc-300 font-medium">{stage.title}</p>
-          <p className="text-xs text-zinc-500 mt-1">{stage.detail}</p>
-        </div>
-      </div>
+      <PracticeLoadingProgress
+        key={`${username}:${speeds}:${since}:${loadAttempt}`}
+        stage={loadingStage}
+        labels={STAGE_LABELS}
+      />
     );
   }
 
