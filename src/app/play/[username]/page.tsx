@@ -417,6 +417,7 @@ function PlayPageInner() {
         pgn,
         result,
         playerColor,
+        openingName: openingName || undefined,
         opponentUsername: username,
         opponentDisplayName: profile?.username || username,
         opponentFideEstimate: profile?.fideEstimate?.rating,
@@ -430,7 +431,7 @@ function PlayPageInner() {
     );
 
     router.push(`/analysis/${gameId}`);
-  }, [playerColor, username, profile, platform, router]);
+  }, [playerColor, openingName, username, profile, platform, router]);
 
   // Use enhanced profile if available, otherwise fall back to bot-data profile
   const activeErrorProfile = enhancedErrorProfile || botData?.errorProfile || null;

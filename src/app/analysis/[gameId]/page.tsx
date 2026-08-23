@@ -19,6 +19,7 @@ interface StoredGame {
   pgn: string;
   result: string;
   playerColor: "white" | "black";
+  openingName?: string;
   opponentUsername: string;
   opponentDisplayName?: string;
   opponentFideEstimate?: number;
@@ -53,13 +54,11 @@ export default function AnalysisPage() {
       setGameData(gd); // Show board and context immediately
 
       try {
-        // Step 0: Fetch opponent profile + opening in parallel
+        // Step 0: Classify the opening locally and fetch the opponent profile.
         setStage("Fetching opponent data...");
 
-        const [profile, opening] = await Promise.all([
-          fetchProfile(gd.opponentUsername),
-          lookupOpening(gd.pgn),
-        ]);
+        const opening = lookupOpening(gd.pgn, gd.openingName);
+        const profile = await fetchProfile(gd.opponentUsername);
 
         let moves: MoveEval[];
         let summary: AnalysisSummary;
