@@ -1,11 +1,12 @@
 /**
- * Vercel Cron: Weekly TWIC update.
- * Schedule: Every Monday at 6am UTC (configured in vercel.json)
+ * Vercel Cron: Daily TWIC update.
+ * Schedule: Daily at 6am UTC (configured in vercel.json)
  *
- * Downloads new TWIC issues, parses PGN in memory, and upserts
- * games + player stats directly to Postgres.
+ * Downloads one new TWIC issue, then updates games, player stats,
+ * and tournament events directly in Postgres.
  */
 
+import { revalidatePath } from "next/cache";
 import { NextRequest } from "next/server";
 import {
   processIncrementalTwic,
@@ -24,9 +25,13 @@ export async function GET(request: NextRequest) {
   try {
     const lastIssue = await getLastProcessedIssue();
 
-    const result = await processIncrementalTwic(5);
+    // One issue per invocation keeps the full transaction within Vercel's limit.
+    const result = await processIncrementalTwic(1);
 
     const hasErrors = result.errors.length > 0;
+    if (!hasErrors && (result.issuesProcessed > 0 || result.gamesLinked > 0)) {
+      revalidatePath("/");
+    }
 
     // Ping healthchecks.io on success so we know the cron ran
     if (!hasErrors && process.env.HEALTHCHECKS_TWIC_URL) {

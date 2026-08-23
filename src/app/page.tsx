@@ -3,6 +3,8 @@ import SearchInput from "@/components/SearchInput";
 import PGNDropZone from "@/components/PGNDropZone";
 import { getTopPlayers, getRecentEvents, formatPlayerName } from "@/lib/db";
 
+export const revalidate = 3600;
+
 const FAMOUS_PLAYERS = [
   { name: "Carlsen", slug: "carlsen-magnus-1503014" },
   { name: "Firouzja", slug: "firouzja-alireza-12573981" },

@@ -65,6 +65,7 @@ CREATE TABLE games (
   white_federation TEXT,
   black_federation TEXT,
   event            TEXT NOT NULL,
+  event_slug       TEXT,
   site             TEXT,
   date             DATE NOT NULL,
   round            TEXT,
@@ -82,6 +83,8 @@ CREATE INDEX idx_games_date ON games (date DESC);
 CREATE INDEX idx_games_avg_elo ON games (avg_elo DESC);
 CREATE INDEX idx_games_white_fide_id ON games (white_fide_id);
 CREATE INDEX idx_games_black_fide_id ON games (black_fide_id);
+CREATE INDEX idx_games_event ON games (event);
+CREATE INDEX idx_games_event_slug ON games (event_slug);
 
 -- ─── Game aliases ────────────────────────────────────────────────────────────
 -- Replaces fide/game-aliases.json (394MB)

@@ -10,7 +10,7 @@ outprep uses SEO landing pages to attract chess players searching for preparatio
 2. Player and game data (names, ratings, openings, events) is extracted
 3. Processed data is seeded to PostgreSQL via `packages/fide-pipeline/src/upload-pg.ts` (CLI command: `seed-db`)
 4. FIDE official ratings are updated monthly via `/api/cron/fide-ratings` (automated on Vercel)
-5. TWIC updates run weekly via `/api/cron/twic-update` (automated on Vercel)
+5. TWIC updates poll daily via `/api/cron/twic-update`, processing one available issue per run (automated on Vercel)
 6. CLI usage: `npm run fide-pipeline -- --help`
 
 ## Indexed Pages
@@ -91,6 +91,8 @@ All player types use the same route with different slug formats:
 
 ### Homepage (`/`)
 
+- **Rendering:** ISR with hourly revalidation; successful TWIC updates also invalidate the page immediately.
+
 **Metadata:**
 - Title: `outprep - Practice Against Any Chess Player`
 - Template: `%s | outprep`
@@ -107,6 +109,7 @@ All player types use the same route with different slug formats:
 - Hero with search (FIDE, Lichess, Chess.com) + PGN upload
 - How It Works (Scout → Study → Practice)
 - Featured Players grid (top 12 by rating, links to player pages)
+- Recent Events grid (latest linked tournament data)
 - FAQ (4 questions with collapsible answers)
 
 ### Non-Indexed Pages

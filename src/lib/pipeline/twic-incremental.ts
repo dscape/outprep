@@ -1,30 +1,19 @@
 /**
  * Lightweight incremental TWIC processing for serverless execution.
  *
- * Downloads 1-3 new TWIC issues, parses in memory, upserts games and
- * updates player stats directly in Postgres. No disk I/O required.
+ * Downloads one new TWIC issue, parses it in memory, then updates games,
+ * player stats, and events directly in Postgres. No disk I/O required.
  *
- * This does NOT replace the full CLI pipeline — it supplements it for
- * weekly automated updates via Vercel cron.
+ * This does NOT replace the full CLI pipeline — it supplements it with
+ * daily, retryable updates via Vercel cron.
  */
 
-import { sql } from "@/lib/db/connection";
+import { sql, sqlTransaction } from "@/lib/db/connection";
+import { assignEventSlugs } from "@/lib/event-slug";
 import { downloadAndExtractPgn } from "./pgn-extract";
 import { hasExcludedFideId } from "@/lib/player-exclusions";
 
-// We inline minimal logic to avoid importing from packages with heavy dependencies.
-
-function generateEventSlug(eventName: string): string {
-  return eventName
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 120);
-}
+// We inline minimal game logic to avoid importing packages with heavy dependencies.
 
 export interface ParsedGame {
   white: string;
@@ -198,360 +187,549 @@ export async function getLastProcessedIssue(): Promise<number | null> {
  * Check if a TWIC issue exists by trying a HEAD request.
  */
 async function twicIssueExists(issue: number): Promise<boolean> {
-  try {
-    const res = await fetch(
-      `https://theweekinchess.com/zips/twic${issue}g.zip`,
-      { method: "HEAD" },
-    );
-    return res.ok;
-  } catch {
-    return false;
+  const response = await fetch(
+    `https://theweekinchess.com/zips/twic${issue}g.zip`,
+    { method: "HEAD" },
+  );
+
+  if (response.status === 404) return false;
+  if (!response.ok) {
+    throw new Error(`TWIC returned HTTP ${response.status}`);
   }
+  return true;
 }
 
 /**
  * Process new TWIC issues incrementally.
- * Downloads, parses, and upserts directly to Postgres.
+ * Each issue is only marked complete after games, player stats, and events sync.
  */
-export async function processIncrementalTwic(maxIssues: number = 3): Promise<{
-  issuesProcessed: number;
-  gamesUpserted: number;
-  playersUpdated: number;
-  errors: string[];
-}> {
+export async function processIncrementalTwic(
+  maxIssues: number = 1,
+): Promise<IncrementalTwicResult> {
   const lastIssue = await getLastProcessedIssue();
   if (lastIssue === null) {
     return {
       issuesProcessed: 0,
       gamesUpserted: 0,
       playersUpdated: 0,
+      eventsUpserted: 0,
+      gamesLinked: 0,
       errors: [
         "No previous TWIC issues found. Run the full pipeline first: npm run fide-pipeline -- full",
       ],
     };
   }
 
-  const errors: string[] = [];
-  let totalGamesUpserted = 0;
-  const updatedFideIds = new Set<string>();
-  let issuesProcessed = 0;
+  const result: IncrementalTwicResult = {
+    issuesProcessed: 0,
+    gamesUpserted: 0,
+    playersUpdated: 0,
+    eventsUpserted: 0,
+    gamesLinked: 0,
+    errors: [],
+  };
+  let issuesAttempted = 0;
 
-  // Try the next N issues
-  for (let i = 1; i <= maxIssues; i++) {
-    const issue = lastIssue + i;
-
-    // Check if issue exists before downloading
+  for (let offset = 1; offset <= Math.max(0, Math.floor(maxIssues)); offset++) {
+    const issue = lastIssue + offset;
     console.log(`[twic] Checking TWIC ${issue}...`);
-    const exists = await twicIssueExists(issue);
+
+    let exists: boolean;
+    try {
+      exists = await twicIssueExists(issue);
+    } catch (error) {
+      result.errors.push(`Failed to check TWIC ${issue}: ${errorMessage(error)}`);
+      break;
+    }
+
     if (!exists) {
       console.log(`[twic] TWIC ${issue} not found — stopping.`);
       break;
     }
 
-    // Download and extract PGN in memory
-    console.log(`[twic] Downloading TWIC ${issue}...`);
-    const t0 = Date.now();
-    const pgnText = await downloadAndExtractPgn(issue);
-    if (!pgnText) {
-      errors.push(`Failed to extract PGN from TWIC ${issue}`);
-      console.log(`[twic] Failed to extract TWIC ${issue}`);
-      continue;
-    }
-    console.log(`[twic] Downloaded TWIC ${issue} in ${Date.now() - t0}ms`);
+    issuesAttempted++;
+    const startedAt = Date.now();
 
-    // Parse games
-    console.log(`[twic] Parsing games...`);
-    const games = parseGames(pgnText);
-    console.log(`[twic] Parsed ${games.length} games from TWIC ${issue}`);
+    try {
+      await startTwicRun(issue);
+      const issueResult = await processTwicIssue(issue);
+      const eventResult = await syncUnlinkedEvents();
+      const durationMs = Date.now() - startedAt;
 
-    // Build a set of player FIDE IDs to slug mappings from our database
-    const fideIds = new Set<string>();
-    for (const g of games) {
-      if (g.whiteFideId) fideIds.add(g.whiteFideId);
-      if (g.blackFideId) fideIds.add(g.blackFideId);
-    }
-
-    // Look up existing players by FIDE ID
-    console.log(`[twic] Looking up ${fideIds.size} unique FIDE IDs...`);
-    const playerSlugs = new Map<string, string>();
-    if (fideIds.size > 0) {
-      const fideIdArray = Array.from(fideIds);
-      // Query in batches to avoid too-large IN clauses
-      for (let j = 0; j < fideIdArray.length; j += 500) {
-        const batch = fideIdArray.slice(j, j + 500);
-        const { rows } = await sql`
-          SELECT fide_id, slug FROM players WHERE fide_id = ANY(${batch})
-        `;
-        for (const row of rows) {
-          playerSlugs.set(row.fide_id as string, row.slug as string);
-        }
-      }
-    }
-    console.log(`[twic] Matched ${playerSlugs.size} players in DB`);
-
-    // Build all row values for this issue (one pass)
-    const BATCH_SIZE = 500;
-    let gamesInIssue = 0;
-    const seenSlugs = new Map<string, number>();
-
-    // Collect all valid rows first
-    type GameRow = {
-      slug: string;
-      white_name: string;
-      black_name: string;
-      white_slug: string | null;
-      black_slug: string | null;
-      white_fide_id: string;
-      black_fide_id: string;
-      white_elo: number;
-      black_elo: number;
-      white_title: string | null;
-      black_title: string | null;
-      event: string;
-      site: string | null;
-      date: string;
-      round: string | null;
-      eco: string | null;
-      opening: string | null;
-      variation: string | null;
-      result: string;
-      pgn: string;
-    };
-    const allRows: GameRow[] = [];
-
-    for (const game of games) {
-      if (
-        !game.whiteFideId ||
-        !game.blackFideId ||
-        hasExcludedFideId(game.whiteFideId, game.blackFideId)
-      ) continue;
-      if (!game.event || !game.date) continue;
-
-      // Generate slug with collision handling
-      let slug = generateGameSlug(game);
-      const count = (seenSlugs.get(slug) ?? 0) + 1;
-      seenSlugs.set(slug, count);
-      if (count > 1) slug = `${slug}-${count}`;
-
-      const whiteSlug =
-        playerSlugs.get(game.whiteFideId) ||
-        generatePlayerSlug(game.white, game.whiteFideId);
-      const blackSlug =
-        playerSlugs.get(game.blackFideId) ||
-        generatePlayerSlug(game.black, game.blackFideId);
-
-      // Convert date from "2024.01.15" to "2024-01-15" for SQL
-      const sqlDate = game.date.replace(/\./g, "-");
-
-      allRows.push({
-        slug,
-        white_name: game.white,
-        black_name: game.black,
-        white_slug: whiteSlug,
-        black_slug: blackSlug,
-        white_fide_id: game.whiteFideId,
-        black_fide_id: game.blackFideId,
-        white_elo: game.whiteElo ?? 0,
-        black_elo: game.blackElo ?? 0,
-        white_title: game.whiteTitle,
-        black_title: game.blackTitle,
-        event: game.event,
-        site: game.site,
-        date: sqlDate,
-        round: game.round,
-        eco: game.eco,
-        opening: game.opening,
-        variation: game.variation,
-        result: game.result,
-        pgn: game.pgn,
+      await completeTwicRun(issue, {
+        ...issueResult,
+        ...eventResult,
+        durationMs,
       });
 
-      updatedFideIds.add(game.whiteFideId);
-      updatedFideIds.add(game.blackFideId);
+      result.issuesProcessed++;
+      result.gamesUpserted += issueResult.gamesUpserted;
+      result.playersUpdated += issueResult.playersUpdated;
+      result.eventsUpserted += eventResult.eventsUpserted;
+      result.gamesLinked += eventResult.gamesLinked;
+
+      console.log(
+        `[twic] TWIC ${issue} complete in ${durationMs}ms — ` +
+          `${issueResult.gamesUpserted} games inserted, ${eventResult.gamesLinked} games linked`,
+      );
+    } catch (error) {
+      const message = errorMessage(error);
+      await failTwicRun(issue, message, Date.now() - startedAt);
+      result.errors.push(`TWIC ${issue} failed: ${message}`);
+      console.error(`[twic] TWIC ${issue} failed: ${message}`);
+      break;
     }
-
-    // Bulk-insert in batches of BATCH_SIZE — one round-trip per batch instead of per game
-    console.log(`[twic] Inserting ${allRows.length} games in batches of ${BATCH_SIZE}...`);
-    for (let j = 0; j < allRows.length; j += BATCH_SIZE) {
-      const batch = allRows.slice(j, j + BATCH_SIZE);
-      const batchNum = Math.floor(j / BATCH_SIZE) + 1;
-      const totalBatches = Math.ceil(allRows.length / BATCH_SIZE);
-      console.log(`[twic]   batch ${batchNum}/${totalBatches} (${batch.length} rows)...`);
-      const t1 = Date.now();
-      try {
-        await sql`
-          INSERT INTO games (
-            slug, white_name, black_name, white_slug, black_slug,
-            white_fide_id, black_fide_id, white_elo, black_elo,
-            white_title, black_title,
-            event, site, date, round, eco, opening, variation, result, pgn
-          )
-          SELECT
-            slug, white_name, black_name, white_slug, black_slug,
-            white_fide_id, black_fide_id, white_elo, black_elo,
-            white_title, black_title,
-            event, site, date::date, round, eco, opening, variation, result, pgn
-          FROM unnest(
-            ${batch.map((r) => r.slug)}::text[],
-            ${batch.map((r) => r.white_name)}::text[],
-            ${batch.map((r) => r.black_name)}::text[],
-            ${batch.map((r) => r.white_slug)}::text[],
-            ${batch.map((r) => r.black_slug)}::text[],
-            ${batch.map((r) => r.white_fide_id)}::text[],
-            ${batch.map((r) => r.black_fide_id)}::text[],
-            ${batch.map((r) => r.white_elo)}::int[],
-            ${batch.map((r) => r.black_elo)}::int[],
-            ${batch.map((r) => r.white_title)}::text[],
-            ${batch.map((r) => r.black_title)}::text[],
-            ${batch.map((r) => r.event)}::text[],
-            ${batch.map((r) => r.site)}::text[],
-            ${batch.map((r) => r.date)}::text[],
-            ${batch.map((r) => r.round)}::text[],
-            ${batch.map((r) => r.eco)}::text[],
-            ${batch.map((r) => r.opening)}::text[],
-            ${batch.map((r) => r.variation)}::text[],
-            ${batch.map((r) => r.result)}::text[],
-            ${batch.map((r) => r.pgn)}::text[]
-          ) AS t(
-            slug, white_name, black_name, white_slug, black_slug,
-            white_fide_id, black_fide_id, white_elo, black_elo,
-            white_title, black_title,
-            event, site, date, round, eco, opening, variation, result, pgn
-          )
-          ON CONFLICT (slug) DO NOTHING
-        `;
-        gamesInIssue += batch.length;
-        console.log(`[twic]   batch ${batchNum}/${totalBatches} done in ${Date.now() - t1}ms`);
-      } catch (e) {
-        errors.push(`Batch insert failed for issue ${issue} batch ${j}: ${String(e)}`);
-        console.log(`[twic]   batch ${batchNum} FAILED: ${String(e)}`);
-      }
-    }
-    console.log(`[twic] Inserted ${gamesInIssue} games for TWIC ${issue}`);
-
-    // Batch-update player stats in groups of 200 FIDE IDs per query
-    const fideIdArray = Array.from(updatedFideIds);
-    console.log(`[twic] Updating stats for ${fideIdArray.length} players...`);
-    for (let j = 0; j < fideIdArray.length; j += 200) {
-      const batch = fideIdArray.slice(j, j + 200);
-      try {
-        await sql`
-          UPDATE players p SET
-            game_count = sub.cnt,
-            last_seen  = GREATEST(p.last_seen, sub.max_date),
-            updated_at = NOW()
-          FROM (
-            SELECT fide_id, COUNT(*)::int AS cnt, MAX(date) AS max_date
-            FROM (
-              SELECT white_fide_id AS fide_id, date FROM games
-                WHERE white_fide_id = ANY(${batch})
-              UNION ALL
-              SELECT black_fide_id AS fide_id, date FROM games
-                WHERE black_fide_id = ANY(${batch})
-            ) g
-            GROUP BY fide_id
-          ) sub
-          WHERE p.fide_id = sub.fide_id
-        `;
-      } catch {
-        // Skip on error — stats are non-critical
-      }
-    }
-    console.log(`[twic] Player stats updated`);
-
-    // Record pipeline run for this issue
-    await sql`
-      INSERT INTO pipeline_runs (run_type, identifier, status, completed_at)
-      VALUES ('twic', ${String(issue)}, 'completed', NOW())
-      ON CONFLICT (run_type, identifier) DO UPDATE SET
-        status = 'completed',
-        completed_at = NOW()
-    `;
-    console.log(`[twic] TWIC ${issue} complete — ${gamesInIssue} games inserted`);
-
-    totalGamesUpserted += gamesInIssue;
-    issuesProcessed++;
   }
 
-  // Update events for newly inserted games
-  if (totalGamesUpserted > 0) {
-    console.log(`[twic] Updating events table...`);
+  // Keep event linkage self-healing even when no new TWIC issue is available.
+  if (issuesAttempted === 0 && result.errors.length === 0) {
     try {
-      // Ensure events table exists
-      await sql`
-        CREATE TABLE IF NOT EXISTS events (
-          id SERIAL PRIMARY KEY, slug TEXT NOT NULL UNIQUE, name TEXT NOT NULL,
-          site TEXT, date_start DATE, date_end DATE,
-          game_count INTEGER NOT NULL DEFAULT 0, avg_elo SMALLINT,
-          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-        )
-      `;
-
-      // Check if event_slug column exists
-      const { rows: colCheck } = await sql`
-        SELECT 1 FROM information_schema.columns
-        WHERE table_name = 'games' AND column_name = 'event_slug'
-      `;
-      if (colCheck.length === 0) {
-        await sql`ALTER TABLE games ADD COLUMN event_slug TEXT`;
-        await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
-      }
-
-      // Aggregate unlinked events in SQL, generate slugs in JS
-      const { rows: eventAggs } = await sql`
-        SELECT
-          event AS name,
-          MIN(site) AS site,
-          MIN(date) AS date_start,
-          MAX(date) AS date_end,
-          COUNT(*)::int AS game_count,
-          (AVG(avg_elo))::smallint AS avg_elo
-        FROM games
-        WHERE event IS NOT NULL AND event != '' AND event_slug IS NULL
-        GROUP BY event
-      `;
-
-      for (const e of eventAggs) {
-        const slug = generateEventSlug(e.name as string);
-        await sql`
-          INSERT INTO events (slug, name, site, date_start, date_end, game_count, avg_elo)
-          VALUES (${slug}, ${e.name}, ${e.site}, ${e.date_start}, ${e.date_end}, ${e.game_count}, ${e.avg_elo})
-          ON CONFLICT (slug) DO UPDATE SET
-            date_start = LEAST(events.date_start, EXCLUDED.date_start),
-            date_end = GREATEST(events.date_end, EXCLUDED.date_end),
-            game_count = (SELECT COUNT(*) FROM games WHERE event = events.name),
-            avg_elo = (SELECT (AVG(avg_elo))::smallint FROM games WHERE event = events.name),
-            updated_at = NOW()
-        `;
-      }
-
-      // Link unlinked games to their events
-      await sql`
-        UPDATE games g
-        SET event_slug = e.slug
-        FROM events e
-        WHERE g.event = e.name AND g.event_slug IS NULL
-      `;
-
-      // Repair any slugs that were previously generated by the old SQL formula
-      const { rows: allEvents } = await sql`SELECT id, slug, name FROM events`;
-      for (const ev of allEvents) {
-        const correctSlug = generateEventSlug(ev.name as string);
-        if (correctSlug !== ev.slug) {
-          await sql`UPDATE events SET slug = ${correctSlug}, updated_at = NOW() WHERE id = ${ev.id}`;
-          await sql`UPDATE games SET event_slug = ${correctSlug} WHERE event_slug = ${ev.slug as string}`;
-        }
-      }
-      console.log(`[twic] Events table updated`);
-    } catch (e) {
-      console.log(`[twic] Events update skipped: ${String(e)}`);
+      const eventResult = await syncUnlinkedEvents();
+      result.eventsUpserted += eventResult.eventsUpserted;
+      result.gamesLinked += eventResult.gamesLinked;
+    } catch (error) {
+      result.errors.push(`Event sync failed: ${errorMessage(error)}`);
     }
   }
 
-  return {
-    issuesProcessed,
-    gamesUpserted: totalGamesUpserted,
-    playersUpdated: updatedFideIds.size,
-    errors,
-  };
+  return result;
+}
+
+export interface IncrementalTwicResult {
+  issuesProcessed: number;
+  gamesUpserted: number;
+  playersUpdated: number;
+  eventsUpserted: number;
+  gamesLinked: number;
+  errors: string[];
+}
+
+export interface EventSyncResult {
+  eventsUpserted: number;
+  gamesLinked: number;
+}
+
+interface TwicIssueResult {
+  gamesUpserted: number;
+  playersUpdated: number;
+}
+
+interface GameRow {
+  slug: string;
+  white_name: string;
+  black_name: string;
+  white_slug: string;
+  black_slug: string;
+  white_fide_id: string;
+  black_fide_id: string;
+  white_elo: number;
+  black_elo: number;
+  white_title: string | null;
+  black_title: string | null;
+  event: string;
+  site: string | null;
+  date: string;
+  round: string | null;
+  eco: string | null;
+  opening: string | null;
+  variation: string | null;
+  result: string;
+  pgn: string;
+}
+
+interface EventAggregate {
+  name: string;
+  slug: string;
+  site: string | null;
+  dateStart: string;
+  dateEnd: string;
+  gameCount: number;
+  avgElo: number | null;
+}
+
+async function processTwicIssue(issue: number): Promise<TwicIssueResult> {
+  console.log(`[twic] Downloading TWIC ${issue}...`);
+  const downloadStartedAt = Date.now();
+  const pgnText = await downloadAndExtractPgn(issue);
+  if (!pgnText) {
+    throw new Error(`Failed to download or extract TWIC ${issue}`);
+  }
+  console.log(
+    `[twic] Downloaded TWIC ${issue} in ${Date.now() - downloadStartedAt}ms`,
+  );
+
+  const games = parseGames(pgnText);
+  if (games.length === 0) {
+    throw new Error(`TWIC ${issue} contained no usable games`);
+  }
+  console.log(`[twic] Parsed ${games.length} games from TWIC ${issue}`);
+
+  const fideIds = collectFideIds(games);
+  const playerSlugs = await getPlayerSlugs(fideIds);
+  const rows = buildGameRows(games, playerSlugs);
+  const gamesUpserted = await insertGames(rows);
+  const playersUpdated = await updatePlayerStats([...fideIds]);
+
+  return { gamesUpserted, playersUpdated };
+}
+
+function collectFideIds(games: ParsedGame[]): Set<string> {
+  const fideIds = new Set<string>();
+
+  for (const game of games) {
+    if (
+      !game.whiteFideId ||
+      !game.blackFideId ||
+      !game.event ||
+      !game.date ||
+      hasExcludedFideId(game.whiteFideId, game.blackFideId)
+    ) {
+      continue;
+    }
+
+    fideIds.add(game.whiteFideId);
+    fideIds.add(game.blackFideId);
+  }
+
+  return fideIds;
+}
+
+async function getPlayerSlugs(fideIds: Set<string>): Promise<Map<string, string>> {
+  if (fideIds.size === 0) return new Map();
+
+  console.log(`[twic] Looking up ${fideIds.size} unique FIDE IDs...`);
+  const { rows } = await sql`
+    SELECT fide_id, slug
+    FROM players
+    WHERE fide_id = ANY(${[...fideIds]})
+  `;
+
+  return new Map(
+    rows.map((row) => [row.fide_id as string, row.slug as string]),
+  );
+}
+
+function buildGameRows(
+  games: ParsedGame[],
+  playerSlugs: Map<string, string>,
+): GameRow[] {
+  const rows: GameRow[] = [];
+  const seenSlugs = new Map<string, number>();
+
+  for (const game of games) {
+    if (
+      !game.whiteFideId ||
+      !game.blackFideId ||
+      !game.event ||
+      !game.date ||
+      hasExcludedFideId(game.whiteFideId, game.blackFideId)
+    ) {
+      continue;
+    }
+
+    let slug = generateGameSlug(game);
+    const slugCount = (seenSlugs.get(slug) ?? 0) + 1;
+    seenSlugs.set(slug, slugCount);
+    if (slugCount > 1) slug = `${slug}-${slugCount}`;
+
+    rows.push({
+      slug,
+      white_name: game.white,
+      black_name: game.black,
+      white_slug:
+        playerSlugs.get(game.whiteFideId) ??
+        generatePlayerSlug(game.white, game.whiteFideId),
+      black_slug:
+        playerSlugs.get(game.blackFideId) ??
+        generatePlayerSlug(game.black, game.blackFideId),
+      white_fide_id: game.whiteFideId,
+      black_fide_id: game.blackFideId,
+      white_elo: game.whiteElo ?? 0,
+      black_elo: game.blackElo ?? 0,
+      white_title: game.whiteTitle,
+      black_title: game.blackTitle,
+      event: game.event,
+      site: game.site,
+      date: game.date.replace(/\./g, "-"),
+      round: game.round,
+      eco: game.eco,
+      opening: game.opening,
+      variation: game.variation,
+      result: game.result,
+      pgn: game.pgn,
+    });
+  }
+
+  return rows;
+}
+
+async function insertGames(rows: GameRow[]): Promise<number> {
+  const batchSize = 500;
+  let gamesInserted = 0;
+
+  console.log(`[twic] Inserting ${rows.length} games...`);
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    const batch = rows.slice(offset, offset + batchSize);
+    const batchNumber = Math.floor(offset / batchSize) + 1;
+    const totalBatches = Math.ceil(rows.length / batchSize);
+    const batchStartedAt = Date.now();
+
+    const { rows: countRows } = await sql`
+      WITH inserted AS (
+        INSERT INTO games (
+          slug, white_name, black_name, white_slug, black_slug,
+          white_fide_id, black_fide_id, white_elo, black_elo,
+          white_title, black_title,
+          event, site, date, round, eco, opening, variation, result, pgn
+        )
+        SELECT
+          slug, white_name, black_name, white_slug, black_slug,
+          white_fide_id, black_fide_id, white_elo, black_elo,
+          white_title, black_title,
+          event, site, date::date, round, eco, opening, variation, result, pgn
+        FROM unnest(
+          ${batch.map((row) => row.slug)}::text[],
+          ${batch.map((row) => row.white_name)}::text[],
+          ${batch.map((row) => row.black_name)}::text[],
+          ${batch.map((row) => row.white_slug)}::text[],
+          ${batch.map((row) => row.black_slug)}::text[],
+          ${batch.map((row) => row.white_fide_id)}::text[],
+          ${batch.map((row) => row.black_fide_id)}::text[],
+          ${batch.map((row) => row.white_elo)}::int[],
+          ${batch.map((row) => row.black_elo)}::int[],
+          ${batch.map((row) => row.white_title)}::text[],
+          ${batch.map((row) => row.black_title)}::text[],
+          ${batch.map((row) => row.event)}::text[],
+          ${batch.map((row) => row.site)}::text[],
+          ${batch.map((row) => row.date)}::text[],
+          ${batch.map((row) => row.round)}::text[],
+          ${batch.map((row) => row.eco)}::text[],
+          ${batch.map((row) => row.opening)}::text[],
+          ${batch.map((row) => row.variation)}::text[],
+          ${batch.map((row) => row.result)}::text[],
+          ${batch.map((row) => row.pgn)}::text[]
+        ) AS source(
+          slug, white_name, black_name, white_slug, black_slug,
+          white_fide_id, black_fide_id, white_elo, black_elo,
+          white_title, black_title,
+          event, site, date, round, eco, opening, variation, result, pgn
+        )
+        ON CONFLICT (slug) DO NOTHING
+        RETURNING 1
+      )
+      SELECT COUNT(*)::int AS count FROM inserted
+    `;
+
+    gamesInserted += Number(countRows[0]?.count ?? 0);
+    console.log(
+      `[twic]   batch ${batchNumber}/${totalBatches} completed in ` +
+        `${Date.now() - batchStartedAt}ms`,
+    );
+  }
+
+  return gamesInserted;
+}
+
+async function updatePlayerStats(fideIds: string[]): Promise<number> {
+  if (fideIds.length === 0) return 0;
+
+  console.log(`[twic] Updating stats for ${fideIds.length} players...`);
+  const { rows } = await sql`
+    WITH stats AS (
+      SELECT fide_id, COUNT(*)::int AS game_count, MAX(date) AS last_seen
+      FROM (
+        SELECT white_fide_id AS fide_id, date
+        FROM games
+        WHERE white_fide_id = ANY(${fideIds})
+        UNION ALL
+        SELECT black_fide_id AS fide_id, date
+        FROM games
+        WHERE black_fide_id = ANY(${fideIds})
+      ) player_games
+      GROUP BY fide_id
+    ), updated AS (
+      UPDATE players p
+      SET game_count = stats.game_count,
+          last_seen = GREATEST(p.last_seen, stats.last_seen),
+          updated_at = NOW()
+      FROM stats
+      WHERE p.fide_id = stats.fide_id
+      RETURNING 1
+    )
+    SELECT COUNT(*)::int AS count FROM updated
+  `;
+
+  return Number(rows[0]?.count ?? 0);
+}
+
+/** Aggregate and link every currently-unlinked event in two bulk writes. */
+export async function syncUnlinkedEvents(): Promise<EventSyncResult> {
+  console.log("[twic] Syncing unlinked events...");
+  const { rows: pendingRows } = await sql`
+    SELECT DISTINCT event
+    FROM games
+    WHERE event_slug IS NULL AND event != ''
+  `;
+
+  if (pendingRows.length === 0) {
+    console.log("[twic] Event linkage is already current");
+    return { eventsUpserted: 0, gamesLinked: 0 };
+  }
+
+  // Keep this separate from the pending-events query so Postgres uses
+  // idx_games_event instead of scanning the entire games table for a join.
+  const pendingNames = pendingRows.map((row) => row.event as string);
+  const { rows: aggregateRows } = await sql`
+    SELECT
+      event AS name,
+      MIN(site) AS site,
+      MIN(date) AS date_start,
+      MAX(date) AS date_end,
+      COUNT(*)::int AS game_count,
+      (AVG(avg_elo))::smallint AS avg_elo
+    FROM games
+    WHERE event = ANY(${pendingNames})
+    GROUP BY event
+  `;
+  const { rows: existingEvents } = await sql`SELECT name, slug FROM events`;
+  const slugs = assignEventSlugs(
+    aggregateRows.map((row) => row.name as string),
+    existingEvents.map((row) => ({
+      name: row.name as string,
+      slug: row.slug as string,
+    })),
+  );
+  const events = aggregateRows.map((row): EventAggregate => {
+    const name = row.name as string;
+    return {
+      name,
+      slug: slugs.get(name)!,
+      site: (row.site as string) ?? null,
+      dateStart: toSqlDate(row.date_start),
+      dateEnd: toSqlDate(row.date_end),
+      gameCount: Number(row.game_count),
+      avgElo: row.avg_elo == null ? null : Number(row.avg_elo),
+    };
+  });
+
+  const result = await sqlTransaction(async (tx) => {
+    const [upsertCount] = await tx`
+      WITH upserted AS (
+        INSERT INTO events (
+          slug, name, site, date_start, date_end, game_count, avg_elo, updated_at
+        )
+        SELECT
+          slug, name, site, date_start, date_end, game_count, avg_elo, NOW()
+        FROM unnest(
+          ${events.map((event) => event.slug)}::text[],
+          ${events.map((event) => event.name)}::text[],
+          ${events.map((event) => event.site)}::text[],
+          ${events.map((event) => event.dateStart)}::date[],
+          ${events.map((event) => event.dateEnd)}::date[],
+          ${events.map((event) => event.gameCount)}::int[],
+          ${events.map((event) => event.avgElo)}::smallint[]
+        ) AS source(
+          slug, name, site, date_start, date_end, game_count, avg_elo
+        )
+        ON CONFLICT (slug) DO UPDATE SET
+          name = EXCLUDED.name,
+          site = EXCLUDED.site,
+          date_start = EXCLUDED.date_start,
+          date_end = EXCLUDED.date_end,
+          game_count = EXCLUDED.game_count,
+          avg_elo = EXCLUDED.avg_elo,
+          updated_at = NOW()
+        RETURNING 1
+      )
+      SELECT COUNT(*)::int AS count FROM upserted
+    `;
+
+    const [linkCount] = await tx`
+      WITH linked AS (
+        UPDATE games
+        SET event_slug = source.slug
+        FROM unnest(
+          ${events.map((event) => event.name)}::text[],
+          ${events.map((event) => event.slug)}::text[]
+        ) AS source(name, slug)
+        WHERE games.event = source.name
+          AND games.event_slug IS DISTINCT FROM source.slug
+        RETURNING 1
+      )
+      SELECT COUNT(*)::int AS count FROM linked
+    `;
+
+    return {
+      eventsUpserted: Number(upsertCount?.count ?? 0),
+      gamesLinked: Number(linkCount?.count ?? 0),
+    };
+  });
+
+  console.log(
+    `[twic] Synced ${result.eventsUpserted} events and linked ${result.gamesLinked} games`,
+  );
+  return result;
+}
+
+async function startTwicRun(issue: number): Promise<void> {
+  await sql`
+    INSERT INTO pipeline_runs (
+      run_type, identifier, status, started_at, completed_at, metadata
+    )
+    VALUES ('twic', ${String(issue)}, 'running', NOW(), NULL, '{}'::jsonb)
+    ON CONFLICT (run_type, identifier) DO UPDATE SET
+      status = 'running',
+      started_at = NOW(),
+      completed_at = NULL,
+      metadata = '{}'::jsonb
+  `;
+}
+
+async function completeTwicRun(
+  issue: number,
+  metadata: Record<string, number>,
+): Promise<void> {
+  await sql`
+    UPDATE pipeline_runs
+    SET status = 'completed',
+        completed_at = NOW(),
+        metadata = ${JSON.stringify(metadata)}::jsonb
+    WHERE run_type = 'twic' AND identifier = ${String(issue)}
+  `;
+}
+
+async function failTwicRun(
+  issue: number,
+  error: string,
+  durationMs: number,
+): Promise<void> {
+  try {
+    await sql`
+      INSERT INTO pipeline_runs (
+        run_type, identifier, status, started_at, completed_at, metadata
+      )
+      VALUES (
+        'twic', ${String(issue)}, 'failed', NOW(), NOW(),
+        ${JSON.stringify({ error, durationMs })}::jsonb
+      )
+      ON CONFLICT (run_type, identifier) DO UPDATE SET
+        status = 'failed',
+        completed_at = NOW(),
+        metadata = ${JSON.stringify({ error, durationMs })}::jsonb
+    `;
+  } catch (recordError) {
+    console.error(
+      `[twic] Failed to record TWIC ${issue} failure: ${errorMessage(recordError)}`,
+    );
+  }
+}
+
+function toSqlDate(value: unknown): string {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === "string" && value.length >= 10) return value.slice(0, 10);
+  throw new Error(`Invalid event date: ${String(value)}`);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

@@ -32,6 +32,8 @@ import type {
   GameDetail,
 } from "../../../packages/fide-pipeline/src/types";
 
+export { generateEventSlug } from "@/lib/event-slug";
+
 /**
  * Whether Postgres is configured. When false (e.g. local dev without Docker,
  * or during build without DATABASE_URL), all queries return empty/null gracefully.
@@ -642,21 +644,6 @@ export async function getEventSlugsForSitemap(
   } catch {
     return [];
   }
-}
-
-/**
- * Generate a URL-safe slug from an event name.
- */
-export function generateEventSlug(eventName: string): string {
-  return eventName
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 120);
 }
 
 /**

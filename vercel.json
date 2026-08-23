@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/twic-update",
-      "schedule": "0 6 * * 1"
+      "schedule": "0 6 * * *"
     },
     {
       "path": "/api/cron/fide-ratings",

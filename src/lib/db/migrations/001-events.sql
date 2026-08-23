@@ -32,4 +32,5 @@ BEGIN
   END IF;
 END $$;
 
+CREATE INDEX IF NOT EXISTS idx_games_event ON games (event);
 CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug);

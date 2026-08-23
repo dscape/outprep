@@ -17,6 +17,7 @@ import { join } from "node:path";
 import pLimit from "p-limit";
 
 import type { FIDEPlayer, GameDetail } from "./types";
+import { assignEventSlugs } from "./event-slug";
 import {
   EXCLUDED_FIDE_IDS,
   hasExcludedFidePlayer,
@@ -456,21 +457,6 @@ export async function upsertGameAliases(
 // ─── Event population ───────────────────────────────────────────────────────
 
 /**
- * Slugify a string for URL use.
- */
-function slugifyStr(str: string): string {
-  return str
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, "")
-    .replace(/\s+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "")
-    .slice(0, 120);
-}
-
-/**
  * Populate the events table from existing games data.
  * Aggregates unique event names, computes stats, and sets event_slug on games.
  * Idempotent — safe to run multiple times.
@@ -524,13 +510,22 @@ export async function populateEvents(
     ORDER BY MAX(date) DESC
   `;
 
+  const { rows: existingEvents } = await sql`SELECT name, slug FROM events`;
+  const eventSlugs = assignEventSlugs(
+    eventAggs.map((event) => event.name as string),
+    existingEvents.map((event) => ({
+      name: event.name as string,
+      slug: event.slug as string,
+    })),
+  );
+
   let eventsCreated = 0;
   const BATCH = 200;
 
   for (let i = 0; i < eventAggs.length; i += BATCH) {
     const batch = eventAggs.slice(i, i + BATCH);
     const rows = batch.map((e) => ({
-      slug: slugifyStr(e.name as string),
+      slug: eventSlugs.get(e.name as string)!,
       name: e.name as string,
       site: (e.site as string) ?? null,
       date_start: e.date_start as Date | string | null,
@@ -767,9 +762,10 @@ export async function ensureSchema(): Promise<void> {
   if (eventSlugCol.length === 0) {
     console.log("  Adding event_slug column to games table...");
     await sql`ALTER TABLE games ADD COLUMN event_slug TEXT`;
-    await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
     console.log("  event_slug column added.");
   }
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_event ON games (event)`;
+  await sql`CREATE INDEX IF NOT EXISTS idx_games_event_slug ON games (event_slug)`;
 
   const { rows: botCacheTable } = await sql`
     SELECT 1 FROM information_schema.tables

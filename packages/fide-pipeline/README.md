@@ -100,24 +100,10 @@ Two cron jobs are configured in `vercel.json` to keep data fresh in production:
 
 | Cron job | Schedule | Route | What it does |
 |----------|----------|-------|-------------|
-| **TWIC update** | Every Monday at 6am UTC | `/api/cron/twic-update` | Checks for new TWIC issues since the last processed one and triggers an incremental pipeline |
+| **TWIC update** | Daily at 6am UTC | `/api/cron/twic-update` | Processes one available TWIC issue, updates player stats, and links tournament events |
 | **FIDE ratings** | 1st of each month at 6am UTC | `/api/cron/fide-ratings` | Downloads the latest FIDE rating list and updates player ratings in Postgres |
 
-Both routes use `maxDuration = 300` (5-minute timeout, requires Vercel Pro plan) and are authenticated via `CRON_SECRET` (set automatically by Vercel).
-
-> **Current status:** The cron routes are **stubs** — they query `pipeline_runs` to report the last processed issue/update, but don't yet run the actual pipeline. Until fully implemented, run updates manually:
->
-> ```bash
-> # Weekly: add new TWIC issue(s)
-> npm run fide-pipeline -- download --from <next> --to <next>
-> npm run fide-pipeline -- process --min-games 3
-> npm run fide-pipeline -- seed-db
->
-> # Monthly: update FIDE ratings
-> npm run fide-pipeline -- download-ratings --force
-> npm run fide-pipeline -- process --min-games 3
-> npm run fide-pipeline -- seed-db
-> ```
+Both routes use `maxDuration = 300` (5-minute timeout, requires Vercel Pro plan) and are authenticated via `CRON_SECRET` (set automatically by Vercel). The TWIC job processes one issue per invocation so failed or backlogged issues are retried on the next daily run without exceeding the function limit. It only marks an issue complete after games, player stats, and event linkage succeed.
 
 ## FIDE Enrichment
 
