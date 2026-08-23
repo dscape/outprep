@@ -3719,35 +3719,67 @@ export function classifyOpening(
 }
 
 /**
- * Get the characteristic move line for an ECO code.
- * Returns the shortest (most general) move sequence for the given ECO,
- * formatted with move numbers for readability.
+ * Return the shortest canonical SAN sequence for an opening family.
  *
- * @param eco  ECO code, e.g. "C44"
- * @param maxHalfMoves  Maximum number of half-moves to show (default: 10)
- * @returns  Formatted move string like "1.e4 e5 2.Nf3 Nc6 3.d4", or null if ECO not found
+ * Opening statistics are grouped by family, so a row labelled "French
+ * Defense" must start at 1.e4 e6 even when its most common ECO happens to be
+ * a deeper Classical code. Exact family entries take priority over equally
+ * short variation entries.
  */
-export function getEcoMoves(eco: string, maxHalfMoves = 10): string | null {
-  if (!eco) return null;
+export function getOpeningFamilyMoves(openingName: string): string[] {
+  const family = openingName.split(":", 1)[0]?.trim();
+  if (!family) return [];
 
-  // DB is sorted longest-first, so the last matching entry has the fewest moves
+  const familyEntries = getDB().filter(
+    (entry) => entry.name.split(":", 1)[0].trim() === family,
+  );
+  const shortestFamilyEntry = findShortestEntry(familyEntries);
+  const shortestExactEntry = findShortestEntry(
+    familyEntries.filter((entry) => entry.name === family),
+  );
+  const shortest =
+    shortestExactEntry &&
+    shortestExactEntry.moves.length === shortestFamilyEntry?.moves.length
+      ? shortestExactEntry
+      : shortestFamilyEntry;
+
+  return shortest ? [...shortest.moves] : [];
+}
+
+/** Return the shortest canonical SAN sequence for an ECO code. */
+export function getEcoStartingMoves(eco: string): string[] {
+  if (!eco) return [];
+  const shortest = findShortestEntry(
+    getDB().filter((entry) => entry.eco === eco),
+  );
+  return shortest ? [...shortest.moves] : [];
+}
+
+/** Get a numbered, human-readable line for an opening family. */
+export function getOpeningFamilyLine(
+  openingName: string,
+  maxHalfMoves = 10,
+): string | null {
+  return formatMoveLine(getOpeningFamilyMoves(openingName), maxHalfMoves);
+}
+
+function findShortestEntry(entries: ECOEntry[]): ECOEntry | null {
   let shortest: ECOEntry | null = null;
-  const db = getDB();
-  for (const entry of db) {
-    if (entry.eco !== eco) continue;
+  for (const entry of entries) {
     if (!shortest || entry.moves.length < shortest.moves.length) {
       shortest = entry;
     }
   }
+  return shortest;
+}
 
-  if (!shortest || shortest.moves.length === 0) return null;
+function formatMoveLine(moves: string[], maxHalfMoves: number): string | null {
+  if (moves.length === 0) return null;
 
-  const moves = shortest.moves;
   const truncated = moves.length > maxHalfMoves;
   const limited = truncated ? moves.slice(0, maxHalfMoves) : moves;
-
-  // Format with move numbers: "1.e4 e5 2.Nf3 Nc6 ..."
   let result = "";
+
   for (let i = 0; i < limited.length; i++) {
     const moveNum = Math.floor(i / 2) + 1;
     if (i % 2 === 0) {
@@ -3758,7 +3790,5 @@ export function getEcoMoves(eco: string, maxHalfMoves = 10): string | null {
     }
   }
 
-  if (truncated) result += " \u2026";
-
-  return result;
+  return truncated ? `${result} \u2026` : result;
 }

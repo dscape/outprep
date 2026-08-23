@@ -1,160 +1,41 @@
-/**
- * ECO code → opening move sequence lookup.
- * Uses the Lichess opening explorer API to find the standard moves
- * that lead to a given ECO code.
- */
+import { Chess } from "chess.js";
+import {
+  getEcoStartingMoves,
+  getOpeningFamilyMoves,
+} from "./eco-classifier";
 
 /**
- * Get the seed moves for an ECO code range.
- * ECO codes map to standard first-move families:
- * - A00-A39: Various non-e4/d4 openings (Nf3, g3, c4, etc.)
- * - A40-A99: 1. d4 (non-QGD)
- * - B00-B99: 1. e4 (non-1...e5)
- * - C00-C99: 1. e4 e5
- * - D00-D99: 1. d4 d5
- * - E00-E99: 1. d4 Nf6 2. c4
+ * Resolve the minimum move sequence needed to enter an opening family.
+ *
+ * The opening name is authoritative because repertoire rows are grouped by
+ * family. The ECO code is only a fallback for old/direct links that do not
+ * include an opening name.
  */
-function getSeedMoves(eco: string): string[] {
-  const letter = eco[0]?.toUpperCase() || "";
-  const num = parseInt(eco.substring(1)) || 0;
+export async function getOpeningMoves(
+  eco: string,
+  openingName?: string,
+): Promise<string[]> {
+  const familyMoves = openingName ? getOpeningFamilyMoves(openingName) : [];
+  const sanMoves = familyMoves.length > 0
+    ? familyMoves
+    : getEcoStartingMoves(eco);
 
-  if (letter === "A") {
-    if (num < 10) return ["g1f3"]; // Reti and English-like
-    if (num < 20) return ["c2c4"]; // English Opening
-    if (num < 40) return ["g1f3"]; // Various Nf3 systems
-    return ["d2d4"]; // A40+ = 1. d4 (Indian systems, etc.)
-  }
-  if (letter === "B") {
-    // B00: Uncommon King's Pawn, B01: Scandinavian, B02-B05: Alekhine,
-    // B06: Modern/Pirc, B07-B09: Pirc, B10-B19: Caro-Kann, B20-B99: Sicilian
-    if (num <= 1) return ["e2e4", "d7d5"];   // Scandinavian (1.e4 d5)
-    if (num <= 5) return ["e2e4", "g8f6"];   // Alekhine (1.e4 Nf6)
-    if (num <= 9) return ["e2e4", "d7d6"];   // Pirc/Modern (1.e4 d6)
-    if (num <= 19) return ["e2e4", "c7c6"];  // Caro-Kann (1.e4 c6)
-    return ["e2e4", "c7c5"];                 // Sicilian (1.e4 c5)
-  }
-  if (letter === "C") return ["e2e4", "e7e5"]; // Open games
-  if (letter === "D") return ["d2d4", "d7d5"]; // Queen's Gambit, Slav, etc.
-  if (letter === "E") return ["d2d4", "g8f6", "c2c4"]; // Indian defenses
-
-  return [];
+  return sanToUci(sanMoves);
 }
 
-/**
- * Look up the standard move sequence for an ECO code using the Lichess
- * opening explorer. Iteratively follows the most popular moves from the
- * seed position until the opening's ECO matches the target.
- *
- * @returns UCI moves array, or empty array if not found
- */
-export async function getOpeningMoves(eco: string): Promise<string[]> {
-  // Check sessionStorage cache first
-  try {
-    const cached = sessionStorage.getItem(`eco-moves:${eco}`);
-    if (cached) return JSON.parse(cached);
-  } catch {
-    // Ignore — SSR or storage unavailable
-  }
+function sanToUci(sanMoves: string[]): string[] {
+  const chess = new Chess();
+  const uciMoves: string[] = [];
 
   try {
-    const moves = getSeedMoves(eco);
-    if (moves.length === 0) return [];
-
-    // Check if the seed moves already match
-    const initial = await queryExplorer(moves);
-    if (initial?.opening?.eco === eco) {
-      cacheEcoMoves(eco, moves);
-      return moves;
+    for (const san of sanMoves) {
+      const move = chess.move(san);
+      if (!move) return [];
+      uciMoves.push(`${move.from}${move.to}${move.promotion ?? ""}`);
     }
-
-    // Iteratively follow the most popular moves
-    for (let depth = 0; depth < 12; depth++) {
-      const data = await queryExplorer(moves);
-      if (!data) break;
-
-      // Check if we've reached the target ECO
-      if (data.opening?.eco === eco) {
-        cacheEcoMoves(eco, moves);
-        return moves;
-      }
-
-      // Follow the most popular next move
-      if (!data.moves || data.moves.length === 0) break;
-
-      // Try each candidate move to see if it gets us to the target ECO
-      let found = false;
-      const targetNum = parseInt(eco.substring(1)) || 0;
-      let bestCandidate: { uci: string; distance: number } | null = null;
-
-      for (const candidate of data.moves.slice(0, 3)) {
-        const testMoves = [...moves, candidate.uci];
-        const testData = await queryExplorer(testMoves);
-        if (testData?.opening?.eco === eco) {
-          moves.push(candidate.uci);
-          cacheEcoMoves(eco, moves);
-          return moves;
-        }
-        // Track the candidate whose ECO is closest to the target
-        if (testData?.opening?.eco && testData.opening.eco[0] === eco[0]) {
-          const candidateNum = parseInt(testData.opening.eco.substring(1)) || 0;
-          const distance = Math.abs(candidateNum - targetNum);
-          if (!bestCandidate || distance < bestCandidate.distance) {
-            bestCandidate = { uci: candidate.uci, distance };
-          }
-        }
-      }
-
-      // Pick the candidate closest to the target ECO number
-      if (bestCandidate) {
-        moves.push(bestCandidate.uci);
-        found = true;
-      }
-
-      // If no candidate matched, follow the most popular move
-      if (!found) {
-        moves.push(data.moves[0].uci);
-      }
-    }
-
-    // Final check
-    const finalData = await queryExplorer(moves);
-    if (finalData?.opening?.eco === eco) {
-      cacheEcoMoves(eco, moves);
-      return moves;
-    }
-
-    // Return whatever moves we have — they're likely close to the target
-    cacheEcoMoves(eco, moves);
-    return moves;
   } catch {
     return [];
   }
-}
 
-/** Cache ECO → moves mapping in sessionStorage */
-function cacheEcoMoves(eco: string, moves: string[]): void {
-  try {
-    sessionStorage.setItem(`eco-moves:${eco}`, JSON.stringify(moves));
-  } catch {
-    // Storage full or SSR — non-fatal
-  }
-}
-
-interface ExplorerResponse {
-  opening?: { eco: string; name: string };
-  moves: Array<{ uci: string; san: string; white: number; draws: number; black: number }>;
-}
-
-async function queryExplorer(uciMoves: string[]): Promise<ExplorerResponse | null> {
-  try {
-    const play = uciMoves.join(",");
-    const url = `https://explorer.lichess.ovh/masters?play=${play}`;
-    const response = await fetch(url, {
-      signal: AbortSignal.timeout(5000),
-    });
-    if (!response.ok) return null;
-    return response.json();
-  } catch {
-    return null;
-  }
+  return uciMoves;
 }

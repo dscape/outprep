@@ -433,6 +433,7 @@ export function useScoutProfile({ platform, username }: UseScoutProfileOptions) 
     isChesscomMode,
     isFIDEMode,
     platform,
+    username,
     profileRef,
   };
 }

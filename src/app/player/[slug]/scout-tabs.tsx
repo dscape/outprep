@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import OpeningsTab from "@/components/OpeningsTab";
 import WeaknessesTab from "@/components/WeaknessesTab";
 import PrepTipsTab from "@/components/PrepTipsTab";
 import type { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import { fromFidePGN, normalizedToGameForDrilldown } from "@/lib/normalized-game";
+import { buildPracticeUrl } from "@/lib/practice-url";
 import { useScout } from "./scout-context";
 
 type Tab = "openings" | "weaknesses" | "prep";
@@ -25,6 +27,7 @@ export default function ScoutTabs({
   playerName,
   playerFideId,
 }: ScoutTabsProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<Tab>("openings");
 
   // FIDE game fetching (replaces fide-openings.tsx)
@@ -35,6 +38,8 @@ export default function ScoutTabs({
     filteredData,
     filteredPrepTips,
     selectedSpeeds,
+    availableSpeeds,
+    timeRange,
     displayName,
     isPGNMode,
     isFIDEMode,
@@ -48,6 +53,9 @@ export default function ScoutTabs({
     coverageByOpening,
     handleAnalyzeGame,
     partialData,
+    platform,
+    username,
+    profile,
   } = useScout();
 
   // Fetch FIDE games for opening drilldown
@@ -81,6 +89,33 @@ export default function ScoutTabs({
 
   // Use SSR openings path (FIDE with no client data yet) or client data path
   const useFidePath = isFIDEMode && !filteredData && ssrOpenings;
+
+  const handlePractice = useCallback((
+    opening: OpeningStats,
+    color: "white" | "black",
+  ) => {
+    router.push(buildPracticeUrl(platform, username, {
+      selectedSpeeds,
+      availableSpeeds,
+      timeRange,
+      gameCount: filteredData?.games ?? profile?.analyzedGames ?? partialData?.gameCount,
+      opening: {
+        eco: opening.eco,
+        name: opening.family ?? opening.name,
+        profiledPlayerColor: color,
+      },
+    }));
+  }, [
+    router,
+    platform,
+    username,
+    selectedSpeeds,
+    availableSpeeds,
+    timeRange,
+    filteredData?.games,
+    profile?.analyzedGames,
+    partialData?.gameCount,
+  ]);
 
   const tabs: [Tab, string][] = [
     ["openings", "Openings"],
@@ -120,6 +155,7 @@ export default function ScoutTabs({
                     onRequestGames={fetchFideGames}
                     loadingGames={fideLoading}
                     onAnalyzeGame={handleFideAnalyze}
+                    onPractice={handlePractice}
                   />
                 ) : (
                   <OpeningsTab
@@ -130,6 +166,7 @@ export default function ScoutTabs({
                     onRequestGames={isPGNMode ? undefined : fetchRawGames}
                     loadingGames={isPGNMode ? false : loadingDrilldownGames}
                     coverageByOpening={isPGNMode ? undefined : coverageByOpening}
+                    onPractice={handlePractice}
                   />
                 )
               )}

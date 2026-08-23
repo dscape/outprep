@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import { OpeningStats } from "@/lib/types";
 import type { GameForDrilldown } from "@/lib/game-helpers";
 import { getLichessTrainingUrl } from "@/lib/lichess-training";
-import { getEcoMoves } from "@/lib/analysis/eco-classifier";
+import { getOpeningFamilyLine } from "@/lib/analysis/eco-classifier";
 
 interface OpeningCoverage {
   analyzed: number;
@@ -19,6 +19,10 @@ interface OpeningsTabProps {
   onRequestGames?: () => void;
   loadingGames?: boolean;
   coverageByOpening?: Map<string, OpeningCoverage>;
+  onPractice: (
+    opening: OpeningStats,
+    color: "white" | "black",
+  ) => void;
 }
 
 function WDLBar({ win, draw, loss }: { win: number; draw: number; loss: number }) {
@@ -77,6 +81,7 @@ export default function OpeningsTab({
   onRequestGames,
   loadingGames,
   coverageByOpening,
+  onPractice,
 }: OpeningsTabProps) {
   const [color, setColor] = useState<"white" | "black">("white");
   const [expandedOpening, setExpandedOpening] = useState<string | null>(null);
@@ -132,7 +137,7 @@ export default function OpeningsTab({
   };
 
   // Column count for colSpan calculation
-  const colCount = (isClickable ? 1 : 0) + 5 + (hasCoverage ? 1 : 0);
+  const colCount = (isClickable ? 1 : 0) + 6 + (hasCoverage ? 1 : 0);
 
   return (
     <div>
@@ -183,6 +188,7 @@ export default function OpeningsTab({
                 {hasCoverage && (
                   <th className="pb-2 font-medium text-right" title="How many games have move-by-move engine analysis (detects mistakes and blunders)">Analyzed</th>
                 )}
+                <th className="pb-2 pl-3 font-medium text-center">Practice</th>
               </tr>
             </thead>
             <tbody>
@@ -204,6 +210,7 @@ export default function OpeningsTab({
                     onAnalyzeGame={onAnalyzeGame}
                     coverage={coverage}
                     hasCoverageColumn={hasCoverage}
+                    onPractice={() => onPractice(op, color)}
                     colCount={colCount}
                   />
                 );
@@ -226,6 +233,7 @@ function OpeningRow({
   onAnalyzeGame,
   coverage,
   hasCoverageColumn,
+  onPractice,
   colCount,
 }: {
   op: OpeningStats;
@@ -237,8 +245,13 @@ function OpeningRow({
   onAnalyzeGame?: (game: GameForDrilldown) => void;
   coverage?: OpeningCoverage;
   hasCoverageColumn: boolean;
+  onPractice: () => void;
   colCount: number;
 }) {
+  const familyName = op.family ?? op.name;
+  const puzzleUrl = getLichessTrainingUrl(familyName);
+  const moveLine = getOpeningFamilyLine(familyName);
+
   return (
     <>
       <tr
@@ -258,33 +271,12 @@ function OpeningRow({
         )}
         <td className="py-2 pr-4 font-mono text-green-400">{op.eco}</td>
         <td className="py-2 pr-4 max-w-[250px]">
-          <div className="truncate">
-            {op.name}
-            {(() => {
-              const url = getLichessTrainingUrl(op.family ?? op.name);
-              return url ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(e) => e.stopPropagation()}
-                  className="ml-1.5 inline-flex items-center text-zinc-500 hover:text-green-400 transition-colors"
-                  title="Practice puzzles on lichess.org"
-                >
-                  <svg className="inline h-3 w-3" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M3.5 3.5h5v5" />
-                    <path d="M8.5 3.5L3 9" />
-                  </svg>
-                </a>
-              ) : null;
-            })()}
-          </div>
-          {(() => {
-            const moves = getEcoMoves(op.eco);
-            return moves ? (
-              <span className="block text-xs text-zinc-500 font-mono truncate">{moves}</span>
-            ) : null;
-          })()}
+          <div className="truncate">{op.name}</div>
+          {moveLine && (
+            <span className="block text-xs text-zinc-500 font-mono truncate">
+              {moveLine}
+            </span>
+          )}
         </td>
         <td className="py-2 pr-4 text-right font-mono">{op.games}</td>
         <td className="py-2 pr-4 text-right font-mono">{op.pct}%</td>
@@ -303,6 +295,35 @@ function OpeningRow({
             {coverage ? <CoverageBadge coverage={coverage} /> : null}
           </td>
         )}
+        <td className="py-1 pl-3">
+          <div className="flex items-center justify-center gap-1">
+            {puzzleUrl && (
+              <a
+                href={puzzleUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(event) => event.stopPropagation()}
+                className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-zinc-700/60 bg-zinc-900/40 text-zinc-400 transition-[color,background-color,border-color,transform] hover:border-amber-500/40 hover:bg-amber-500/10 hover:text-amber-300 active:scale-[0.96]"
+                title={`Solve ${familyName} puzzles on Lichess`}
+                aria-label={`Solve ${familyName} puzzles on Lichess`}
+              >
+                <PuzzleIcon />
+              </a>
+            )}
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                onPractice();
+              }}
+              className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-green-600/40 bg-green-600/10 text-green-400 transition-[color,background-color,border-color,transform] hover:border-green-500/60 hover:bg-green-600/20 hover:text-green-300 active:scale-[0.96]"
+              title={`Play ${familyName} against the AI`}
+              aria-label={`Play ${familyName} against the AI`}
+            >
+              <BotPlayIcon />
+            </button>
+          </div>
+        </td>
       </tr>
 
       {isExpanded && (
@@ -371,5 +392,43 @@ function OpeningRow({
         </tr>
       )}
     </>
+  );
+}
+
+function PuzzleIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 3H5a2 2 0 0 0-2 2v4h2a2 2 0 1 1 0 4H3v6a2 2 0 0 0 2 2h4v-2a2 2 0 1 1 4 0v2h6a2 2 0 0 0 2-2v-6h-2a2 2 0 1 1 0-4h2V5a2 2 0 0 0-2-2h-6v2a2 2 0 1 1-4 0V3Z" />
+    </svg>
+  );
+}
+
+function BotPlayIcon() {
+  return (
+    <svg
+      className="h-5 w-5"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.75"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 4v4" />
+      <path d="M9 4h6" />
+      <rect x="4" y="8" width="16" height="12" rx="3" />
+      <path d="M8 13h.01M16 13h.01" />
+      <path d="m10 15 4 2-4 2Z" fill="currentColor" stroke="none" />
+    </svg>
   );
 }

@@ -6,7 +6,6 @@ import dynamic from "next/dynamic";
 import { v4 as uuidv4 } from "uuid";
 import { MoveEval, AnalysisSummary } from "@/lib/types";
 import type { ErrorProfile, OpeningTrie } from "@outprep/engine";
-import { getOpeningMoves } from "@/lib/analysis/eco-lookup";
 import { parsePlatformUsername, buildScoutUrl } from "@/lib/platform-utils";
 import { buildBotDataFromPGN, type BotData } from "@/lib/build-bot-data-from-pgn";
 import { resolveMaiaRating } from "@/lib/fide-estimator";
@@ -224,7 +223,7 @@ function PlayPageInner() {
     : undefined;
   const timeRangeLabelParam = searchParams.get("timeRangeLabel") || "";
   const openingName = searchParams.get("openingName") || "";
-  const opponentWeaknessColor = searchParams.get("color") as "white" | "black" | null;
+  const profiledPlayerColor = searchParams.get("color") as "white" | "black" | null;
 
   // Load cached profile from sessionStorage (stored by scout page) for instant display
   const cachedProfile = useMemo<{ profile: PlayProfile; ready: boolean } | null>(() => {
@@ -240,9 +239,9 @@ function PlayPageInner() {
 
   const [profile, setProfile] = useState<PlayProfile | null>(cachedProfile?.profile ?? null);
   const [botData, setBotData] = useState<BotData | null>(null);
-  // Auto-select color when practicing a weakness: play the opposite of the opponent's weak color
+  // Targeted opening practice keeps the profiled player on the row's color.
   const [playerColor, setPlayerColor] = useState<"white" | "black" | null>(
-    opponentWeaknessColor ? (opponentWeaknessColor === "white" ? "black" : "white") : null
+    profiledPlayerColor ? (profiledPlayerColor === "white" ? "black" : "white") : null
   );
   const [profileReady, setProfileReady] = useState(cachedProfile?.ready ?? false);
   const [botDataState, setBotDataState] = useState<BotDataState>("loading");
@@ -261,7 +260,7 @@ function PlayPageInner() {
     return null;
   });
   const [startingMoves, setStartingMoves] = useState<string[] | null>(null);
-  const [loadingOpening, setLoadingOpening] = useState(!!eco);
+  const [loadingOpening, setLoadingOpening] = useState(!!(eco || openingName));
   const [loadingStage, setLoadingStage] = useState<LoadingStage>("profile");
   const STAGE_LABELS = useMemo(
     () => getStageLabels(platform, expectedGameCount),
@@ -389,11 +388,12 @@ function PlayPageInner() {
     };
   }, [username, speeds, cachedProfile, platform, since, loadAttempt]);
 
-  // Load opening moves if ECO param is present (separate effect to avoid sync setState)
+  // Resolve the minimum family line separately from profile/repertoire loading.
   useEffect(() => {
-    if (!eco) return;
+    if (!eco && !openingName) return;
     let cancelled = false;
-    getOpeningMoves(eco)
+    import("@/lib/analysis/eco-lookup")
+      .then(({ getOpeningMoves }) => getOpeningMoves(eco, openingName))
       .then((moves) => {
         if (!cancelled) setStartingMoves(moves.length > 0 ? moves : null);
       })
@@ -402,7 +402,7 @@ function PlayPageInner() {
         if (!cancelled) setLoadingOpening(false);
       });
     return () => { cancelled = true; };
-  }, [eco]);
+  }, [eco, openingName]);
 
   const handleGameEnd = useCallback((
     pgn: string,
