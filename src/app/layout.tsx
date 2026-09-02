@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/react";
 import { SpeedInsights } from "@vercel/speed-insights/react";
+import { StockfishPreloader } from "@/components/StockfishPreloader";
 import { ChunkErrorHandler } from "@/components/ChunkErrorHandler";
 import "./globals.css";
 
@@ -64,6 +65,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} antialiased bg-zinc-950 text-zinc-100`}
       >
         {children}
+        <StockfishPreloader />
         <ChunkErrorHandler />
         <Analytics />
         <SpeedInsights />

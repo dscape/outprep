@@ -1,4 +1,5 @@
 import type { NextConfig } from "next";
+import { withBotId } from "botid/next/config";
 
 const nextConfig: NextConfig = {
   turbopack: {
@@ -9,4 +10,4 @@ const nextConfig: NextConfig = {
   // blocks Worker creation from static files in Turbopack dev.
 };
 
-export default nextConfig;
+export default withBotId(nextConfig);
